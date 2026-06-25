@@ -31,7 +31,12 @@ yarn-error.*
 *.pem
 
 # local env files
+.env
 .env*.local
+
+# local portable Java used by Android Studio/Gradle on this machine
+.jdk/
+jdk17.zip
 
 # typescript
 *.tsbuildinfo
