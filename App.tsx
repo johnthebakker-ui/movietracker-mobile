@@ -1,6 +1,8 @@
 import { StatusBar } from "expo-status-bar";
+import * as WebBrowser from "expo-web-browser";
+import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import type { Session } from "@supabase/supabase-js";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -17,12 +19,12 @@ import {
   TextInput,
   View
 } from "react-native";
-import { ActionSheet, AppHeader, BottomNav, DiscoverFiltersCard, Hero, PickerSheet, RecommendationFiltersCard, SectionTitle, TitleCard, styles as shared } from "./src/components";
+import { ActionSheet, AppHeader, BottomNav, DiscoverFiltersCard, Hero, PickerSheet, RecommendationFiltersCard, SectionTitle, TitleCard } from "./src/components";
 import { fetchDiscover, fetchRecommendations, refreshRecommendations, setNotInterested } from "./src/api";
 import { countries, genres, HAS_SUPABASE, ratingLabel, titleYear, tmdbImage } from "./src/config";
 import { supabase } from "./src/supabase";
 import { colors } from "./src/theme";
-import type { AppTab, DiscoverFilters, MediaKind, MediaSummary, RecommendationFilters } from "./src/types";
+import type { AppTab, DiscoverFilters, MediaSummary, RecommendationFilters } from "./src/types";
 
 const kindOptions = [
   { value: "all", label: "Movies & series" },
@@ -38,6 +40,7 @@ const discoverSortOptions = [
 
 export default function App() {
   const [tab, setTab] = useState<AppTab>("home");
+  const [discoverMode, setDiscoverMode] = useState<"discover" | "recommendations">("discover");
   const [session, setSession] = useState<Session | null>(null);
   const [selected, setSelected] = useState<MediaSummary | null>(null);
   const [menuItem, setMenuItem] = useState<MediaSummary | null>(null);
@@ -50,20 +53,37 @@ export default function App() {
   }, []);
 
   const openProfile = useCallback(() => setTab("profile"), []);
-  const closeDetail = useCallback(() => setSelected(null), []);
+  const openSearch = useCallback(() => {
+    setSelected(null);
+    setDiscoverMode("discover");
+    setTab("discover");
+  }, []);
 
   return (
     <SafeAreaView style={screen.root}>
       <StatusBar style="light" />
-      <AppHeader onProfile={openProfile} />
+      <AppHeader session={session} onProfile={openProfile} onSearch={openSearch} />
       {selected ? (
-        <TitleDetail item={selected} token={session?.access_token} onBack={closeDetail} />
+        <TitleDetail item={selected} token={session?.access_token} onBack={() => setSelected(null)} />
       ) : (
         <>
-          {tab === "home" ? <HomeScreen onOpen={setSelected} onMenu={setMenuItem} onForYou={() => setTab("discover")} /> : null}
-          {tab === "discover" ? <DiscoverHub token={session?.access_token} onOpen={setSelected} onMenu={setMenuItem} /> : null}
+          {tab === "home" ? (
+            <HomeScreen
+              onOpen={setSelected}
+              onMenu={setMenuItem}
+              onViewAll={() => {
+                setDiscoverMode("discover");
+                setTab("discover");
+              }}
+              onForYou={() => {
+                setDiscoverMode("recommendations");
+                setTab("discover");
+              }}
+            />
+          ) : null}
+          {tab === "discover" ? <DiscoverHub mode={discoverMode} onMode={setDiscoverMode} token={session?.access_token} onOpen={setSelected} onMenu={setMenuItem} /> : null}
           {tab === "calendar" ? <CalendarScreen /> : null}
-          {tab === "library" ? <LibraryScreen signedIn={Boolean(session)} /> : null}
+          {tab === "library" ? <LibraryScreen signedIn={Boolean(session)} onDiscover={() => { setDiscoverMode("discover"); setTab("discover"); }} /> : null}
           {tab === "profile" ? <ProfileScreen session={session} /> : null}
         </>
       )}
@@ -84,12 +104,19 @@ export default function App() {
           ]);
         }}
       />
-      <BottomNav tab={tab} onTab={next => { setSelected(null); setTab(next); }} />
+      <BottomNav
+        tab={tab}
+        onTab={next => {
+          setSelected(null);
+          if (next === "discover") setDiscoverMode("discover");
+          setTab(next);
+        }}
+      />
     </SafeAreaView>
   );
 }
 
-function HomeScreen({ onOpen, onMenu, onForYou }: { onOpen: (item: MediaSummary) => void; onMenu: (item: MediaSummary) => void; onForYou: () => void }) {
+function HomeScreen({ onOpen, onMenu, onViewAll, onForYou }: { onOpen: (item: MediaSummary) => void; onMenu: (item: MediaSummary) => void; onViewAll: () => void; onForYou: () => void }) {
   const [items, setItems] = useState<MediaSummary[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -110,19 +137,21 @@ function HomeScreen({ onOpen, onMenu, onForYou }: { onOpen: (item: MediaSummary)
   return (
     <ScrollView contentContainerStyle={screen.contentWithNav} refreshControl={<RefreshControl tintColor={colors.accent} refreshing={loading} onRefresh={load} />}>
       <Hero item={items[0] ?? null} onOpen={onOpen} />
-      <SectionTitle kicker="Everyone is watching" title="Trending now" action="View all →" />
-      <Pressable onPress={onForYou} style={screen.forYouPill}><Text style={screen.forYouText}>✧ For you</Text></Pressable>
+      <SectionTitle kicker="Everyone is watching" title="Trending now" action="View all →" onAction={onViewAll} />
+      <Pressable onPress={onForYou} style={screen.forYouPill}>
+        <Ionicons name="sparkles-outline" size={20} color={colors.text} />
+        <Text style={screen.forYouText}>For you</Text>
+      </Pressable>
       <CardGrid items={items.slice(1)} onOpen={onOpen} onMenu={onMenu} />
     </ScrollView>
   );
 }
 
-function DiscoverHub({ token, onOpen, onMenu }: { token?: string; onOpen: (item: MediaSummary) => void; onMenu: (item: MediaSummary) => void }) {
-  const [mode, setMode] = useState<"discover" | "recommendations">("discover");
+function DiscoverHub({ mode, onMode, token, onOpen, onMenu }: { mode: "discover" | "recommendations"; onMode: (mode: "discover" | "recommendations") => void; token?: string; onOpen: (item: MediaSummary) => void; onMenu: (item: MediaSummary) => void }) {
   return mode === "discover" ? (
-    <DiscoverScreen onOpen={onOpen} onMenu={onMenu} onForYou={() => setMode("recommendations")} />
+    <DiscoverScreen onOpen={onOpen} onMenu={onMenu} onForYou={() => onMode("recommendations")} />
   ) : (
-    <RecommendationsScreen token={token} onOpen={onOpen} onMenu={onMenu} onDiscover={() => setMode("discover")} />
+    <RecommendationsScreen token={token} onOpen={onOpen} onMenu={onMenu} onDiscover={() => onMode("discover")} />
   );
 }
 
@@ -165,7 +194,10 @@ function DiscoverScreen({ onOpen, onMenu, onForYou }: { onOpen: (item: MediaSumm
             <View style={screen.pageIntro}>
               <Text style={screen.kicker}>FIND YOUR NEXT OBSESSION</Text>
               <Text style={screen.bigTitle}>Discover</Text>
-              <Pressable onPress={onForYou} style={screen.forYouPill}><Text style={screen.forYouText}>✧ For you</Text></Pressable>
+              <Pressable onPress={onForYou} style={screen.forYouPill}>
+                <Ionicons name="sparkles-outline" size={20} color={colors.text} />
+                <Text style={screen.forYouText}>For you</Text>
+              </Pressable>
             </View>
             <DiscoverFiltersCard filters={filters} onChange={setFilters} onSelect={setField} />
           </>
@@ -239,14 +271,20 @@ function RecommendationsScreen({ token, onOpen, onMenu, onDiscover }: { token?: 
         ListHeaderComponent={
           <>
             <View style={screen.recoHeader}>
-              <View>
+              <View style={screen.recoTitleWrap}>
                 <Text style={screen.kicker}>CALCULATED FROM YOUR ACTUAL TASTE</Text>
                 <Text style={screen.bigTitle}>For you</Text>
               </View>
-              <Pressable onPress={refresh} style={screen.refreshPill}><Text style={screen.refreshText}>↻ Refresh picks</Text></Pressable>
+              <Pressable onPress={refresh} style={screen.refreshPill}>
+                <Ionicons name="refresh" size={22} color={colors.text} />
+                <Text style={screen.refreshText}>Refresh picks</Text>
+              </Pressable>
             </View>
             <Text style={screen.lede}>Personal picks shaped by your ratings, favorites, watch history and Trakt activity.</Text>
-            <Pressable onPress={onDiscover} style={screen.forYouPill}><Text style={screen.forYouText}>← Discover</Text></Pressable>
+            <Pressable onPress={onDiscover} style={screen.forYouPill}>
+              <Ionicons name="compass-outline" size={20} color={colors.text} />
+              <Text style={screen.forYouText}>Discover</Text>
+            </Pressable>
             <RecommendationFiltersCard filters={filters} onChange={setFilters} onSelect={setField} onRefresh={refresh} />
             {!token ? <AuthNotice /> : null}
           </>
@@ -271,8 +309,8 @@ function RecommendationsScreen({ token, onOpen, onMenu, onDiscover }: { token?: 
 function AuthNotice() {
   return (
     <View style={screen.notice}>
-      <Text style={screen.noticeTitle}>Sign in for real recommendations</Text>
-      <Text style={screen.noticeText}>The native app uses the same Supabase account as the website. Add your keys in `.env`, sign in, and your personal feed unlocks.</Text>
+      <Text style={screen.noticeTitle}>Sign in for the real account experience</Text>
+      <Text style={screen.noticeText}>The native app uses the same Supabase account as the website. Google and email login are both available here.</Text>
     </View>
   );
 }
@@ -294,30 +332,42 @@ function CalendarScreen() {
         <Text style={screen.lede}>Upcoming and watched episode blocks will appear here from the website sync once the mobile app has the calendar endpoint enabled.</Text>
       </View>
       <View style={screen.emptyPanel}>
-        <Text style={screen.emptyIcon}>▣</Text>
+        <Ionicons name="calendar-outline" size={42} color={colors.accent} />
         <Text style={screen.emptyTitle}>Your calendar is ready</Text>
-        <Text style={screen.emptyText}>This screen is native and styled now. The next backend endpoint can feed it the exact same show schedule you see on the website.</Text>
+        <Text style={screen.emptyText}>This is the native shell for the same upcoming/watched calendar you use on the website.</Text>
       </View>
     </ScrollView>
   );
 }
 
-function LibraryScreen({ signedIn }: { signedIn: boolean }) {
+function LibraryScreen({ signedIn, onDiscover }: { signedIn: boolean; onDiscover: () => void }) {
+  const tiles: Array<{ label: string; icon: keyof typeof Ionicons.glyphMap }> = [
+    { label: "Watchlist", icon: "bookmark-outline" },
+    { label: "Watching", icon: "eye-outline" },
+    { label: "Completed", icon: "checkmark-done-outline" },
+    { label: "Favorites", icon: "heart-outline" },
+    { label: "Lists", icon: "list-outline" },
+    { label: "History", icon: "time-outline" }
+  ];
+
   return (
     <ScrollView contentContainerStyle={screen.contentWithNav}>
       <View style={screen.pageIntro}>
         <Text style={screen.kicker}>YOUR SCREEN LIFE</Text>
         <Text style={screen.bigTitle}>Library</Text>
-        <Text style={screen.lede}>Watchlist, current watching, completed titles, favorites and lists will live here with the same card system.</Text>
+        <Text style={screen.lede}>Your watchlist, current watching, completed titles, favorites and lists belong here.</Text>
       </View>
       <View style={screen.libraryGrid}>
-        {["Watchlist", "Watching", "Completed", "Favorites", "Lists", "History"].map(label => (
-          <View key={label} style={screen.libraryTile}>
-            <Text style={screen.libraryIcon}>▥</Text>
-            <Text style={screen.libraryText}>{label}</Text>
+        {tiles.map(tile => (
+          <View key={tile.label} style={screen.libraryTile}>
+            <Ionicons name={tile.icon} size={32} color={colors.accent} />
+            <Text style={screen.libraryText}>{tile.label}</Text>
           </View>
         ))}
       </View>
+      <Pressable onPress={onDiscover} style={screen.primaryWide}>
+        <Text style={screen.primaryWideText}>Browse titles</Text>
+      </Pressable>
       {!signedIn ? <AuthNotice /> : null}
     </ScrollView>
   );
@@ -355,16 +405,56 @@ function ProfileScreen({ session }: { session: Session | null }) {
     }
   }, [email, password]);
 
+  const signInWithGoogle = useCallback(async () => {
+    if (!supabase) return Alert.alert("Missing Supabase config", "Create `mobile-app/.env` from `.env.example` first.");
+    setBusy(true);
+    try {
+      const redirectTo = "movietracker://auth/callback";
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: { redirectTo, skipBrowserRedirect: true }
+      });
+      if (error) throw error;
+      if (!data.url) throw new Error("Supabase did not return a Google login URL.");
+
+      const result = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
+      if (result.type !== "success") return;
+
+      const parsed = new URL(result.url.replace("#", "?"));
+      const accessToken = parsed.searchParams.get("access_token");
+      const refreshToken = parsed.searchParams.get("refresh_token");
+      const code = parsed.searchParams.get("code");
+
+      if (accessToken && refreshToken) {
+        const { error: sessionError } = await supabase.auth.setSession({ access_token: accessToken, refresh_token: refreshToken });
+        if (sessionError) throw sessionError;
+      } else if (code) {
+        const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
+        if (exchangeError) throw exchangeError;
+      } else {
+        throw new Error("Google login returned without a session.");
+      }
+    } catch (error) {
+      Alert.alert("Google sign-in failed", error instanceof Error ? error.message : "Could not sign in with Google.");
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
   if (session) {
     const display = session.user.email || "MovieTracker member";
+    const avatarUrl = (session.user.user_metadata?.avatar_url || session.user.user_metadata?.picture) as string | undefined;
+
     return (
       <ScrollView contentContainerStyle={screen.contentWithNav}>
         <View style={screen.profileHero}>
-          <View style={screen.profileAvatar}><Text style={screen.profileAvatarText}>{display.charAt(0).toUpperCase()}</Text></View>
+          <View style={screen.profileAvatar}>
+            {avatarUrl ? <Image source={{ uri: avatarUrl }} style={screen.profileAvatarImage} /> : <Ionicons name="person" size={42} color={colors.text} />}
+          </View>
           <Text style={screen.kicker}>SIGNED IN</Text>
           <Text style={screen.bigTitle} numberOfLines={2}>{display.split("@")[0]}</Text>
           <Text style={screen.lede}>{display}</Text>
-          <Pressable onPress={() => supabase?.auth.signOut()} style={screen.primaryWide}><Text style={screen.primaryWideText}>Sign out</Text></Pressable>
+          <Pressable onPress={() => supabase?.auth.signOut()} style={screen.secondaryWide}><Text style={screen.secondaryWideText}>Sign out</Text></Pressable>
         </View>
       </ScrollView>
     );
@@ -376,13 +466,17 @@ function ProfileScreen({ session }: { session: Session | null }) {
         <View style={screen.pageIntro}>
           <Text style={screen.kicker}>REAL MOVIETRACKER ACCOUNT</Text>
           <Text style={screen.bigTitle}>Sign in</Text>
-          <Text style={screen.lede}>Use the same email/password account you use on the website. Google login can be added after the Expo redirect URI is registered in Supabase.</Text>
+          <Text style={screen.lede}>Use the same account you use on the website.</Text>
         </View>
         <View style={screen.formPanel}>
           {!HAS_SUPABASE ? <Text style={screen.warning}>Missing `.env`: add your Supabase URL and anon key before signing in.</Text> : null}
+          <Pressable disabled={busy} onPress={signInWithGoogle} style={screen.googleWide}>
+            <Text style={screen.googleWideText}>Continue with Google</Text>
+          </Pressable>
+          <Text style={screen.orText}>or sign in with email</Text>
           <TextInput autoCapitalize="none" keyboardType="email-address" value={email} onChangeText={setEmail} placeholder="Email" placeholderTextColor="#747b7e" style={screen.input} />
           <TextInput secureTextEntry value={password} onChangeText={setPassword} placeholder="Password" placeholderTextColor="#747b7e" style={screen.input} />
-          <Pressable disabled={busy} onPress={signIn} style={screen.primaryWide}><Text style={screen.primaryWideText}>{busy ? "Signing in…" : "Sign in"}</Text></Pressable>
+          <Pressable disabled={busy} onPress={signIn} style={screen.primaryWide}><Text style={screen.primaryWideText}>{busy ? "Signing in..." : "Sign in"}</Text></Pressable>
           <Pressable disabled={busy} onPress={signUp} style={screen.secondaryWide}><Text style={screen.secondaryWideText}>Create account</Text></Pressable>
         </View>
       </ScrollView>
@@ -393,6 +487,7 @@ function ProfileScreen({ session }: { session: Session | null }) {
 function TitleDetail({ item, token, onBack }: { item: MediaSummary; token?: string; onBack: () => void }) {
   const backdrop = tmdbImage(item.backdropPath || item.posterPath, "w780");
   const poster = tmdbImage(item.posterPath, "w500");
+
   return (
     <ScrollView contentContainerStyle={screen.contentWithNav}>
       <View style={screen.detailHero}>
@@ -413,9 +508,9 @@ function TitleDetail({ item, token, onBack }: { item: MediaSummary; token?: stri
         {["Plan", "Watching", "Watched", "Paused", "Dropped"].map(status => <View key={status} style={screen.statusPill}><Text style={screen.statusText}>{status}</Text></View>)}
       </View>
       <View style={screen.actionGrid}>
-        <DetailAction label="Favorite" />
-        <DetailAction label="Mark watched" />
-        <DetailAction label="Add to list" />
+        <DetailAction icon="heart-outline" label="Favorite" />
+        <DetailAction icon="calendar-outline" label="Mark watched" />
+        <DetailAction icon="list-outline" label="Add to list" />
         <Pressable
           style={screen.detailDanger}
           onPress={() => {
@@ -426,6 +521,7 @@ function TitleDetail({ item, token, onBack }: { item: MediaSummary; token?: stri
             ]);
           }}
         >
+          <Ionicons name="ban-outline" size={20} color={colors.danger} />
           <Text style={screen.detailDangerText}>Not interested</Text>
         </Pressable>
       </View>
@@ -438,8 +534,13 @@ function TitleDetail({ item, token, onBack }: { item: MediaSummary; token?: stri
   );
 }
 
-function DetailAction({ label }: { label: string }) {
-  return <Pressable style={screen.detailAction}><Text style={screen.detailActionText}>{label}</Text></Pressable>;
+function DetailAction({ icon, label }: { icon: keyof typeof Ionicons.glyphMap; label: string }) {
+  return (
+    <Pressable style={screen.detailAction}>
+      <Ionicons name={icon} size={20} color={colors.text} />
+      <Text style={screen.detailActionText}>{label}</Text>
+    </Pressable>
+  );
 }
 
 function Fact({ label, value }: { label: string; value: string }) {
@@ -458,31 +559,33 @@ const screen = StyleSheet.create({
   metaLine: { color: colors.text, fontWeight: "800", marginTop: 8 },
   grid: { flexDirection: "row", flexWrap: "wrap", paddingHorizontal: 8 },
   loader: { paddingVertical: 24 },
-  forYouPill: { alignSelf: "flex-start", marginHorizontal: 18, marginTop: 18, borderWidth: 1, borderColor: colors.line, borderRadius: 24, paddingHorizontal: 18, paddingVertical: 13, backgroundColor: colors.panel },
+  forYouPill: { alignSelf: "flex-start", marginHorizontal: 18, marginTop: 18, borderWidth: 1, borderColor: colors.line, borderRadius: 24, paddingHorizontal: 18, paddingVertical: 13, backgroundColor: colors.panel, flexDirection: "row", alignItems: "center", gap: 8 },
   forYouText: { color: colors.text, fontWeight: "900", fontSize: 16 },
   recoHeader: { paddingHorizontal: 18, paddingTop: 42, flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 14 },
-  refreshPill: { borderWidth: 1, borderColor: colors.line, borderRadius: 22, paddingHorizontal: 14, paddingVertical: 12, maxWidth: 130 },
-  refreshText: { color: colors.text, fontWeight: "900", textAlign: "center" },
+  recoTitleWrap: { flex: 1 },
+  refreshPill: { borderWidth: 1, borderColor: colors.line, borderRadius: 22, paddingHorizontal: 14, paddingVertical: 12, maxWidth: 132, flexDirection: "row", alignItems: "center", gap: 8 },
+  refreshText: { color: colors.text, fontWeight: "900", textAlign: "center", flex: 1 },
   notice: { marginHorizontal: 18, marginTop: 18, borderRadius: 22, padding: 18, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel },
   noticeTitle: { color: colors.text, fontWeight: "900", fontSize: 18 },
   noticeText: { color: colors.muted, marginTop: 8, lineHeight: 22 },
   emptyPanel: { margin: 18, minHeight: 260, borderRadius: 28, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel, alignItems: "center", justifyContent: "center", padding: 26 },
-  emptyIcon: { color: colors.accent, fontSize: 42 },
   emptyTitle: { color: colors.text, fontWeight: "900", fontSize: 24, marginTop: 16 },
   emptyText: { color: colors.muted, textAlign: "center", marginTop: 10, lineHeight: 22 },
   libraryGrid: { flexDirection: "row", flexWrap: "wrap", gap: 12, paddingHorizontal: 18, marginTop: 22 },
-  libraryTile: { width: "48%", minHeight: 130, borderRadius: 24, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.line, padding: 18, justifyContent: "space-between" },
-  libraryIcon: { color: colors.accent, fontSize: 30 },
+  libraryTile: { width: "48%", minHeight: 132, borderRadius: 26, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.line, padding: 18, justifyContent: "space-between" },
   libraryText: { color: colors.text, fontWeight: "900", fontSize: 18 },
   profileHero: { margin: 18, minHeight: 420, borderRadius: 30, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.line, padding: 24, justifyContent: "center" },
-  profileAvatar: { width: 96, height: 96, borderRadius: 48, backgroundColor: colors.accent, justifyContent: "center", alignItems: "center", marginBottom: 24 },
-  profileAvatarText: { color: colors.text, fontSize: 40, fontWeight: "900" },
+  profileAvatar: { width: 96, height: 96, borderRadius: 48, backgroundColor: colors.accent, justifyContent: "center", alignItems: "center", marginBottom: 24, overflow: "hidden" },
+  profileAvatarImage: { width: "100%", height: "100%" },
   formPanel: { margin: 18, borderRadius: 26, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel, padding: 18 },
   warning: { color: colors.accent, fontWeight: "800", marginBottom: 12, lineHeight: 22 },
   input: { height: 58, borderRadius: 18, borderWidth: 1, borderColor: colors.line, color: colors.text, backgroundColor: colors.panel2, fontSize: 17, paddingHorizontal: 16, marginBottom: 12 },
-  primaryWide: { height: 58, borderRadius: 22, backgroundColor: colors.accent, alignItems: "center", justifyContent: "center", marginTop: 10 },
+  primaryWide: { height: 58, borderRadius: 22, backgroundColor: colors.accent, alignItems: "center", justifyContent: "center", marginTop: 10, marginHorizontal: 18 },
   primaryWideText: { color: colors.text, fontSize: 18, fontWeight: "900" },
-  secondaryWide: { height: 58, borderRadius: 22, borderWidth: 1, borderColor: colors.line, alignItems: "center", justifyContent: "center", marginTop: 10 },
+  googleWide: { height: 58, borderRadius: 22, backgroundColor: "#f6f2eb", alignItems: "center", justifyContent: "center", marginBottom: 12 },
+  googleWideText: { color: "#101415", fontSize: 18, fontWeight: "900" },
+  orText: { color: colors.muted, textAlign: "center", marginBottom: 12, fontWeight: "800" },
+  secondaryWide: { height: 58, borderRadius: 22, borderWidth: 1, borderColor: colors.line, alignItems: "center", justifyContent: "center", marginTop: 10, marginHorizontal: 18 },
   secondaryWideText: { color: colors.text, fontSize: 18, fontWeight: "900" },
   detailHero: { height: 520, overflow: "hidden", justifyContent: "flex-end", backgroundColor: colors.panel },
   detailShade: { ...StyleSheet.absoluteFill, backgroundColor: "rgba(0,0,0,0.55)" },
@@ -497,9 +600,9 @@ const screen = StyleSheet.create({
   statusPill: { padding: 10, borderRadius: 14 },
   statusText: { color: colors.text, fontWeight: "900" },
   actionGrid: { flexDirection: "row", flexWrap: "wrap", padding: 18, gap: 10 },
-  detailAction: { flexGrow: 1, minWidth: "45%", borderRadius: 18, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.line, padding: 16, alignItems: "center" },
+  detailAction: { flexGrow: 1, minWidth: "45%", borderRadius: 18, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.line, padding: 16, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 8 },
   detailActionText: { color: colors.text, fontWeight: "900" },
-  detailDanger: { flexGrow: 1, minWidth: "45%", borderRadius: 18, backgroundColor: "rgba(255,77,77,0.1)", borderWidth: 1, borderColor: "rgba(255,77,77,0.35)", padding: 16, alignItems: "center" },
+  detailDanger: { flexGrow: 1, minWidth: "45%", borderRadius: 18, backgroundColor: "rgba(255,77,77,0.1)", borderWidth: 1, borderColor: "rgba(255,77,77,0.35)", padding: 16, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 8 },
   detailDangerText: { color: colors.danger, fontWeight: "900" },
   factGrid: { borderTopWidth: 1, borderColor: colors.line, margin: 18 },
   fact: { paddingVertical: 18, borderBottomWidth: 1, borderColor: colors.line },
