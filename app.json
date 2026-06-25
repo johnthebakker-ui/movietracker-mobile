@@ -11,8 +11,9 @@
       "supportsTablet": true
     },
     "android": {
+      "package": "com.johnthebakker.movietracker",
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#060808",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
