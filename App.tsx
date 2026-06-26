@@ -2,7 +2,7 @@ import { StatusBar } from "expo-status-bar";
 import * as WebBrowser from "expo-web-browser";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import type { Session } from "@supabase/supabase-js";
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -21,7 +21,7 @@ import {
 } from "react-native";
 import { ActionSheet, AppHeader, BottomNav, DiscoverFiltersCard, Hero, PickerSheet, RecommendationFiltersCard, SectionTitle, TitleCard } from "./src/components";
 import { fetchDiscover, fetchRecommendations, refreshRecommendations, setNotInterested } from "./src/api";
-import { countries, genres, HAS_SUPABASE, ratingLabel, titleYear, tmdbImage } from "./src/config";
+import { countries, excludeGenreOptions, genres, HAS_SUPABASE, ratingLabel, titleYear, tmdbImage } from "./src/config";
 import { supabase } from "./src/supabase";
 import { colors } from "./src/theme";
 import type { AppTab, DiscoverFilters, MediaSummary, RecommendationFilters } from "./src/types";
@@ -38,19 +38,72 @@ const discoverSortOptions = [
   { value: "newest", label: "Newest releases" }
 ];
 
+WebBrowser.maybeCompleteAuthSession();
+
 export default function App() {
   const [tab, setTab] = useState<AppTab>("home");
   const [discoverMode, setDiscoverMode] = useState<"discover" | "recommendations">("discover");
   const [session, setSession] = useState<Session | null>(null);
   const [selected, setSelected] = useState<MediaSummary | null>(null);
   const [menuItem, setMenuItem] = useState<MediaSummary | null>(null);
+  const [mfa, setMfa] = useState<{ required: boolean; factorId?: string; challengeId?: string; code: string; error?: string }>({ required: false, code: "" });
+  const [mfaBusy, setMfaBusy] = useState(false);
+  const checkingMfa = useRef(false);
+
+  const acceptSession = useCallback(async (nextSession: Session | null) => {
+    setSession(nextSession);
+    if (!supabase || !nextSession) {
+      setMfa({ required: false, code: "" });
+      return;
+    }
+    if (checkingMfa.current) return;
+    checkingMfa.current = true;
+    try {
+      const [{ data: aal }, { data: factors }] = await Promise.all([
+        supabase.auth.mfa.getAuthenticatorAssuranceLevel(),
+        supabase.auth.mfa.listFactors()
+      ]);
+      const verifiedTotp = (factors?.totp ?? []).find((factor: any) => factor.status === "verified");
+      if (verifiedTotp && aal?.currentLevel !== "aal2") {
+        const { data, error } = await supabase.auth.mfa.challenge({ factorId: verifiedTotp.id });
+        if (error) throw error;
+        setMfa({ required: true, factorId: verifiedTotp.id, challengeId: data.id, code: "" });
+      } else {
+        setMfa({ required: false, code: "" });
+      }
+    } catch (error) {
+      setMfa({ required: true, code: "", error: error instanceof Error ? error.message : "Could not start the authenticator challenge." });
+    } finally {
+      checkingMfa.current = false;
+    }
+  }, []);
 
   useEffect(() => {
     if (!supabase) return;
-    supabase.auth.getSession().then(({ data }) => setSession(data.session));
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => setSession(nextSession));
+    supabase.auth.getSession().then(({ data }) => acceptSession(data.session));
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => acceptSession(nextSession));
     return () => listener.subscription.unsubscribe();
-  }, []);
+  }, [acceptSession]);
+
+  const verifyMfa = useCallback(async () => {
+    if (!supabase || !mfa.factorId || !mfa.challengeId) return;
+    const code = mfa.code.replace(/\D/g, "");
+    if (code.length !== 6) {
+      setMfa(current => ({ ...current, error: "Enter the 6-digit code from your authenticator app." }));
+      return;
+    }
+    setMfaBusy(true);
+    try {
+      const { error } = await supabase.auth.mfa.verify({ factorId: mfa.factorId, challengeId: mfa.challengeId, code });
+      if (error) throw error;
+      const { data: current } = await supabase.auth.getSession();
+      await acceptSession(current.session ?? session);
+    } catch (error) {
+      setMfa(current => ({ ...current, error: error instanceof Error ? error.message : "That code did not work." }));
+    } finally {
+      setMfaBusy(false);
+    }
+  }, [acceptSession, mfa.challengeId, mfa.code, mfa.factorId, session]);
 
   const openProfile = useCallback(() => setTab("profile"), []);
   const openSearch = useCallback(() => {
@@ -61,9 +114,18 @@ export default function App() {
 
   return (
     <SafeAreaView style={screen.root}>
-      <StatusBar style="light" />
+      <StatusBar style="light" hidden />
       <AppHeader session={session} onProfile={openProfile} onSearch={openSearch} />
-      {selected ? (
+      {mfa.required ? (
+        <MfaScreen
+          code={mfa.code}
+          error={mfa.error}
+          busy={mfaBusy}
+          onCode={code => setMfa(current => ({ ...current, code: code.replace(/\D/g, "").slice(0, 6), error: undefined }))}
+          onVerify={verifyMfa}
+          onSignOut={() => supabase?.auth.signOut()}
+        />
+      ) : selected ? (
         <TitleDetail item={selected} token={session?.access_token} onBack={() => setSelected(null)} />
       ) : (
         <>
@@ -116,15 +178,42 @@ export default function App() {
   );
 }
 
+function MfaScreen({ code, error, busy, onCode, onVerify, onSignOut }: { code: string; error?: string; busy: boolean; onCode: (code: string) => void; onVerify: () => void; onSignOut: () => void }) {
+  return (
+    <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={screen.flex}>
+      <ScrollView contentContainerStyle={screen.contentWithNav}>
+        <View style={screen.mfaPanel}>
+          <View style={screen.mfaIcon}><Ionicons name="shield-checkmark-outline" size={34} color={colors.accent} /></View>
+          <Text style={screen.kicker}>AUTHENTICATOR REQUIRED</Text>
+          <Text style={screen.bigTitle}>Two-factor check</Text>
+          <Text style={screen.lede}>This account has authenticator protection enabled. Enter the 6-digit code before using MovieTracker.</Text>
+          <TextInput value={code} onChangeText={onCode} keyboardType="number-pad" maxLength={6} placeholder="123456" placeholderTextColor="#747b7e" style={screen.mfaInput} />
+          {error ? <Text style={screen.warning}>{error}</Text> : null}
+          <Pressable disabled={busy} onPress={onVerify} style={screen.primaryWide}><Text style={screen.primaryWideText}>{busy ? "Checking..." : "Verify code"}</Text></Pressable>
+          <Pressable disabled={busy} onPress={onSignOut} style={screen.secondaryWide}><Text style={screen.secondaryWideText}>Sign out</Text></Pressable>
+        </View>
+      </ScrollView>
+    </KeyboardAvoidingView>
+  );
+}
+
 function HomeScreen({ onOpen, onMenu, onViewAll, onForYou }: { onOpen: (item: MediaSummary) => void; onMenu: (item: MediaSummary) => void; onViewAll: () => void; onForYou: () => void }) {
-  const [items, setItems] = useState<MediaSummary[]>([]);
+  const [trending, setTrending] = useState<MediaSummary[]>([]);
+  const [films, setFilms] = useState<MediaSummary[]>([]);
+  const [shows, setShows] = useState<MediaSummary[]>([]);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await fetchDiscover({ kind: "all", genre: "", country: "", year: "", sort: "popularity" });
-      setItems(data.items);
+      const [trendingData, filmData, showData] = await Promise.all([
+        fetchDiscover({ kind: "all", genre: "", country: "", year: "", sort: "popularity", excludeGenres: [] }),
+        fetchDiscover({ kind: "movie", genre: "", country: "", year: "", sort: "newest", excludeGenres: [] }),
+        fetchDiscover({ kind: "show", genre: "", country: "", year: "", sort: "newest", excludeGenres: [] })
+      ]);
+      setTrending(trendingData.items);
+      setFilms(filmData.items);
+      setShows(showData.items);
     } catch (error) {
       Alert.alert("Catalog unavailable", error instanceof Error ? error.message : "Could not load MovieTracker.");
     } finally {
@@ -136,13 +225,17 @@ function HomeScreen({ onOpen, onMenu, onViewAll, onForYou }: { onOpen: (item: Me
 
   return (
     <ScrollView contentContainerStyle={screen.contentWithNav} refreshControl={<RefreshControl tintColor={colors.accent} refreshing={loading} onRefresh={load} />}>
-      <Hero item={items[0] ?? null} onOpen={onOpen} />
+      <Hero item={trending[0] ?? null} onOpen={onOpen} />
       <SectionTitle kicker="Everyone is watching" title="Trending now" action="View all →" onAction={onViewAll} />
       <Pressable onPress={onForYou} style={screen.forYouPill}>
         <Ionicons name="sparkles-outline" size={20} color={colors.text} />
         <Text style={screen.forYouText}>For you</Text>
       </Pressable>
-      <CardGrid items={items.slice(1)} onOpen={onOpen} onMenu={onMenu} />
+      <CardGrid items={trending.slice(1, 7)} onOpen={onOpen} onMenu={onMenu} />
+      <SectionTitle kicker="Fresh arrivals" title="New & upcoming films" action="Browse →" onAction={onViewAll} />
+      <CardGrid items={films.slice(0, 6)} onOpen={onOpen} onMenu={onMenu} />
+      <SectionTitle kicker="Episode radar" title="Series premieres" action="Browse →" onAction={onViewAll} />
+      <CardGrid items={shows.slice(0, 6)} onOpen={onOpen} onMenu={onMenu} />
     </ScrollView>
   );
 }
@@ -156,15 +249,15 @@ function DiscoverHub({ mode, onMode, token, onOpen, onMenu }: { mode: "discover"
 }
 
 function DiscoverScreen({ onOpen, onMenu, onForYou }: { onOpen: (item: MediaSummary) => void; onMenu: (item: MediaSummary) => void; onForYou: () => void }) {
-  const [filters, setFilters] = useState<DiscoverFilters>({ kind: "all", genre: "", country: "", year: "", sort: "popularity" });
-  const [field, setField] = useState<"kind" | "genre" | "country" | "sort" | null>(null);
+  const [filters, setFilters] = useState<DiscoverFilters>({ kind: "all", genre: "", country: "", year: "", sort: "popularity", excludeGenres: [] });
+  const [field, setField] = useState<"kind" | "genre" | "country" | "sort" | "excludeGenres" | null>(null);
   const [items, setItems] = useState<MediaSummary[]>([]);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(false);
 
-  const options = field === "kind" ? kindOptions : field === "genre" ? genres : field === "country" ? countries : discoverSortOptions;
-  const selected = field === "kind" ? filters.kind : field === "genre" ? filters.genre : field === "country" ? filters.country : filters.sort;
+  const options = field === "kind" ? kindOptions : field === "genre" ? genres : field === "country" ? countries : field === "excludeGenres" ? excludeGenreOptions : discoverSortOptions;
+  const selected = field === "kind" ? filters.kind : field === "genre" ? filters.genre : field === "country" ? filters.country : field === "excludeGenres" ? "" : filters.sort;
 
   const load = useCallback(async (nextPage = 1, replace = true) => {
     setLoading(true);
@@ -213,21 +306,24 @@ function DiscoverScreen({ onOpen, onMenu, onForYou }: { onOpen: (item: MediaSumm
         options={options}
         value={selected || ""}
         onClose={() => setField(null)}
-        onPick={value => setFilters(previous => ({ ...previous, [field || "kind"]: value }))}
+        multiValues={field === "excludeGenres" ? filters.excludeGenres : undefined}
+        onPick={value => setFilters(previous => field === "excludeGenres"
+          ? { ...previous, excludeGenres: previous.excludeGenres.includes(value) ? previous.excludeGenres.filter(item => item !== value) : [...previous.excludeGenres, value] }
+          : { ...previous, [field || "kind"]: value })}
       />
     </View>
   );
 }
 
 function RecommendationsScreen({ token, onOpen, onMenu, onDiscover }: { token?: string; onOpen: (item: MediaSummary) => void; onMenu: (item: MediaSummary) => void; onDiscover: () => void }) {
-  const [filters, setFilters] = useState<RecommendationFilters>({ kind: "all", genre: "", country: "", year: "", hideWatched: true, hideListed: true });
-  const [field, setField] = useState<"kind" | "genre" | "country" | null>(null);
+  const [filters, setFilters] = useState<RecommendationFilters>({ kind: "all", genre: "", country: "", year: "", hideWatched: true, hideListed: true, excludeGenres: [] });
+  const [field, setField] = useState<"kind" | "genre" | "country" | "excludeGenres" | null>(null);
   const [items, setItems] = useState<MediaSummary[]>([]);
   const [cursor, setCursor] = useState<number | null>(0);
   const [loading, setLoading] = useState(false);
 
-  const options = field === "kind" ? kindOptions : field === "country" ? countries : genres;
-  const selected = field === "kind" ? filters.kind : field === "country" ? filters.country : filters.genre;
+  const options = field === "kind" ? kindOptions : field === "country" ? countries : field === "excludeGenres" ? excludeGenreOptions : genres;
+  const selected = field === "kind" ? filters.kind : field === "country" ? filters.country : field === "excludeGenres" ? "" : filters.genre;
 
   const load = useCallback(async (nextCursor = 0, replace = true) => {
     if (!token) return;
@@ -300,7 +396,10 @@ function RecommendationsScreen({ token, onOpen, onMenu, onDiscover }: { token?: 
         options={options}
         value={selected || ""}
         onClose={() => setField(null)}
-        onPick={value => setFilters(previous => ({ ...previous, [field || "kind"]: value }))}
+        multiValues={field === "excludeGenres" ? filters.excludeGenres : undefined}
+        onPick={value => setFilters(previous => field === "excludeGenres"
+          ? { ...previous, excludeGenres: previous.excludeGenres.includes(value) ? previous.excludeGenres.filter(item => item !== value) : [...previous.excludeGenres, value] }
+          : { ...previous, [field || "kind"]: value })}
       />
     </View>
   );
@@ -577,6 +676,9 @@ const screen = StyleSheet.create({
   profileHero: { margin: 18, minHeight: 420, borderRadius: 30, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.line, padding: 24, justifyContent: "center" },
   profileAvatar: { width: 96, height: 96, borderRadius: 48, backgroundColor: colors.accent, justifyContent: "center", alignItems: "center", marginBottom: 24, overflow: "hidden" },
   profileAvatarImage: { width: "100%", height: "100%" },
+  mfaPanel: { margin: 18, borderRadius: 30, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.line, padding: 22, minHeight: 520, justifyContent: "center" },
+  mfaIcon: { width: 74, height: 74, borderRadius: 37, backgroundColor: colors.accentSoft, alignItems: "center", justifyContent: "center", marginBottom: 18 },
+  mfaInput: { height: 64, borderRadius: 20, borderWidth: 1, borderColor: colors.line, color: colors.text, backgroundColor: colors.panel2, fontSize: 28, letterSpacing: 10, fontWeight: "900", textAlign: "center", marginHorizontal: 18, marginTop: 18 },
   formPanel: { margin: 18, borderRadius: 26, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel, padding: 18 },
   warning: { color: colors.accent, fontWeight: "800", marginBottom: 12, lineHeight: 22 },
   input: { height: 58, borderRadius: 18, borderWidth: 1, borderColor: colors.line, color: colors.text, backgroundColor: colors.panel2, fontSize: 17, paddingHorizontal: 16, marginBottom: 12 },

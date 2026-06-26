@@ -4,7 +4,7 @@ import type { Session } from "@supabase/supabase-js";
 import React from "react";
 import { ActivityIndicator, Image, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { colors, shadow } from "./theme";
-import { countries, genres, ratingLabel, titleYear, tmdbImage } from "./config";
+import { countries, excludeGenreOptions, genres, ratingLabel, titleYear, tmdbImage } from "./config";
 import type { AppTab, DiscoverFilters, MediaSummary, RecommendationFilters } from "./types";
 
 const tabIcons: Record<AppTab, keyof typeof Ionicons.glyphMap> = {
@@ -157,7 +157,11 @@ export function FilterButton({ icon, label, value, onPress }: { icon: keyof type
   );
 }
 
-export function DiscoverFiltersCard({ filters, onChange, onSelect }: { filters: DiscoverFilters; onChange: (next: DiscoverFilters) => void; onSelect: (field: "kind" | "genre" | "country" | "sort") => void }) {
+export function DiscoverFiltersCard({ filters, onChange, onSelect }: { filters: DiscoverFilters; onChange: (next: DiscoverFilters) => void; onSelect: (field: "kind" | "genre" | "country" | "sort" | "excludeGenres") => void }) {
+  const excludedLabel = filters.excludeGenres.length
+    ? filters.excludeGenres.map(value => excludeGenreOptions.find(option => option.value === value)?.label || value).join(", ")
+    : "Nothing excluded";
+
   return (
     <View style={styles.filtersCard}>
       <View style={styles.filterGrid}>
@@ -165,6 +169,7 @@ export function DiscoverFiltersCard({ filters, onChange, onSelect }: { filters: 
         <FilterButton icon="options-outline" label="Genre" value={genres.find(g => g.value === filters.genre)?.label || "Every genre"} onPress={() => onSelect("genre")} />
         <FilterButton icon="earth-outline" label="Country" value={countries.find(c => c.value === filters.country)?.label || "Every country"} onPress={() => onSelect("country")} />
         <FilterButton icon="chevron-down" label="Sort by" value={filters.sort === "rating" ? "Highest rated" : filters.sort === "newest" ? "Newest releases" : "Most popular"} onPress={() => onSelect("sort")} />
+        <FilterButton icon="ban-outline" label="Exclude genres" value={excludedLabel} onPress={() => onSelect("excludeGenres")} />
       </View>
       <View style={styles.yearBox}>
         <View style={styles.yearHeader}>
@@ -177,12 +182,18 @@ export function DiscoverFiltersCard({ filters, onChange, onSelect }: { filters: 
   );
 }
 
-export function RecommendationFiltersCard({ filters, onChange, onSelect, onRefresh }: { filters: RecommendationFilters; onChange: (next: RecommendationFilters) => void; onSelect: (field: "kind" | "genre" | "country") => void; onRefresh: () => void }) {
+export function RecommendationFiltersCard({ filters, onChange, onSelect, onRefresh }: { filters: RecommendationFilters; onChange: (next: RecommendationFilters) => void; onSelect: (field: "kind" | "genre" | "country" | "excludeGenres") => void; onRefresh: () => void }) {
+  const excludedLabel = filters.excludeGenres.length
+    ? filters.excludeGenres.map(value => excludeGenreOptions.find(option => option.value === value)?.label || value).join(", ")
+    : "Nothing excluded";
+
   return (
     <View style={styles.filtersCard}>
       <View style={styles.filterGrid}>
         <FilterButton icon="film-outline" label="Format" value={filters.kind === "all" ? "Movies & series" : filters.kind === "movie" ? "Movies" : "Series"} onPress={() => onSelect("kind")} />
         <FilterButton icon="options-outline" label="Genre" value={genres.find(g => g.value === filters.genre)?.label || "Every genre"} onPress={() => onSelect("genre")} />
+        <FilterButton icon="earth-outline" label="Country" value={countries.find(c => c.value === filters.country)?.label || "Every country"} onPress={() => onSelect("country")} />
+        <FilterButton icon="ban-outline" label="Exclude genres" value={excludedLabel} onPress={() => onSelect("excludeGenres")} />
       </View>
       <View style={styles.yearBox}>
         <View style={styles.yearHeader}>
@@ -212,7 +223,9 @@ function CheckPill({ label, checked, onPress }: { label: string; checked: boolea
   );
 }
 
-export function PickerSheet({ title, visible, options, value, onClose, onPick }: { title: string; visible: boolean; options: Array<{ value: string; label: string }>; value: string; onClose: () => void; onPick: (value: string) => void }) {
+export function PickerSheet({ title, visible, options, value, multiValues, onClose, onPick }: { title: string; visible: boolean; options: Array<{ value: string; label: string }>; value: string; multiValues?: string[]; onClose: () => void; onPick: (value: string) => void }) {
+  const multi = Array.isArray(multiValues);
+
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <Pressable style={styles.modalScrim} onPress={onClose} />
@@ -221,9 +234,13 @@ export function PickerSheet({ title, visible, options, value, onClose, onPick }:
         <Text style={styles.sheetTitle}>{title}</Text>
         <ScrollView style={styles.sheetScroll}>
           {options.map(option => (
-            <Pressable key={option.value} onPress={() => { onPick(option.value); onClose(); }} style={[styles.sheetOption, option.value === value && styles.sheetOptionActive]}>
+            <Pressable
+              key={option.value}
+              onPress={() => { onPick(option.value); if (!multi) onClose(); }}
+              style={[styles.sheetOption, (multi ? multiValues.includes(option.value) : option.value === value) && styles.sheetOptionActive]}
+            >
               <Text style={styles.sheetOptionText}>{option.label}</Text>
-              {option.value === value ? <Ionicons name="checkmark" size={22} color={colors.text} /> : null}
+              {(multi ? multiValues.includes(option.value) : option.value === value) ? <Ionicons name="checkmark" size={22} color={colors.text} /> : null}
             </Pressable>
           ))}
         </ScrollView>

@@ -24,6 +24,12 @@ export const genres = [
   { value: "53", label: "Thriller" }
 ];
 
+export const excludeGenreOptions = [
+  { value: "anime", label: "Anime" },
+  { value: "16", label: "Animation / cartoons" },
+  ...genres.filter(genre => genre.value && genre.value !== "kdrama" && genre.value !== "16")
+];
+
 export const countries = [
   { value: "", label: "Every country" },
   { value: "US", label: "United States" },

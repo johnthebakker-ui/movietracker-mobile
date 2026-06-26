@@ -41,6 +41,7 @@ export interface DiscoverFilters {
   country: string;
   year: string;
   sort: "popularity" | "rating" | "newest";
+  excludeGenres: string[];
 }
 
 export interface RecommendationFilters {
@@ -50,4 +51,5 @@ export interface RecommendationFilters {
   year: string;
   hideWatched: boolean;
   hideListed: boolean;
+  excludeGenres: string[];
 }

@@ -42,6 +42,7 @@ export async function fetchDiscover(filters: DiscoverFilters, page = 1): Promise
     country: filters.genre === "kdrama" ? undefined : filters.country,
     yearMode: filters.year ? "exact" : undefined,
     year: filters.year,
+    excludeGenres: filters.excludeGenres.join(","),
     sort: filters.sort === "rating" ? "vote_average.desc" : filters.sort === "newest" ? "newest" : "popularity.desc",
     page
   });
@@ -54,6 +55,7 @@ export async function fetchRecommendations(filters: RecommendationFilters, token
     genre: filters.genre,
     country: filters.genre === "kdrama" ? undefined : filters.country,
     year: filters.year,
+    excludeGenres: filters.excludeGenres.join(","),
     hideWatched: filters.hideWatched ? "1" : "0",
     hideListed: filters.hideListed ? "1" : "0",
     cursor
