@@ -25,13 +25,13 @@ import {
 } from "react-native";
 
 import { AppHeader, BottomNav, DiscoverFiltersCard, Hero, PickerSheet, RecommendationFiltersCard, SectionTitle, TitleCard, type PickerAnchor } from "./src/components";
-import { fetchDiscover, fetchMobileCompany, fetchMobileEpisode, fetchMobilePerson, fetchMobileTitle, fetchRecommendations, fetchWebsiteEntityMetadata, fetchWebsiteHome, fetchWebsiteTitleMetadata, refreshRecommendations, setNotInterested } from "./src/api";
+import { fetchDiscover, fetchMobileCompany, fetchMobileEpisode, fetchMobilePerson, fetchMobileSeason, fetchMobileTitle, fetchRecommendations, fetchWebsiteEntityMetadata, fetchWebsiteHome, fetchWebsiteTitleMetadata, refreshRecommendations, setNotInterested } from "./src/api";
 import { API_URL, countries, excludeGenreOptions, genres, HAS_SUPABASE, ratingLabel, titleYear, tmdbImage, userRatingLabel } from "./src/config";
 import { supabase } from "./src/supabase";
 import { colors } from "./src/theme";
 import type { AppTab, DiscoverFilters, FeedResult, MediaKind, MediaSummary, RecommendationFilters } from "./src/types";
 
-const initialDiscoverFilters: DiscoverFilters = { kind: "all", genre: "", country: "", year: "", sort: "popularity", excludeGenres: [] };
+const initialDiscoverFilters: DiscoverFilters = { kind: "all", genre: "", country: "", year: "", sort: "popularity", excludeGenres: [], hideWatched: false, hideListed: false };
 const initialRecommendationFilters: RecommendationFilters = { kind: "all", genre: "", country: "", year: "", hideWatched: true, hideListed: true, excludeGenres: [] };
 const emptyFeed: FeedResult = { items: [] };
 
@@ -41,12 +41,13 @@ type ProgressCounts = { planned: number; watching: number; completed: number; pa
 type Profile = { id: string; username: string | null; display_name: string | null; avatar_url: string | null; banner_url: string | null; bio: string | null; region: string | null; created_at?: string | null };
 type MfaState = { required: boolean; factorId?: string; challengeId?: string; code: string; error?: string };
 type LibraryFilter = "all" | "planned" | "watching" | "completed" | "paused" | "dropped" | "favorites" | "lists";
-type ListGroup = "none" | "collections";
+type ListGroup = "none" | "collections" | "studios";
 type CalendarMode = "upcoming" | "watched";
 type ProfilePanel = "overview" | "activity" | "lists" | "reviews" | "history" | "statistics";
 type ProfileView = "profile" | "recommendations" | "settings" | "history" | "reviews" | "statistics";
 type CalendarEvent = { id: string; date: string; title: string; subtitle: string; artwork: string | null; item?: MediaSummary | null; href?: string | null; episodeTarget?: EpisodeTarget | null };
 type EpisodeTarget = { episodeId?: number; show: MediaSummary; seasonNumber: number; episodeNumber: number; title?: string | null; airDate?: string | null; artwork?: string | null };
+type SeasonTarget = { show: MediaSummary; season: DetailSeason };
 type EntityTarget =
   | { type: "person"; id: number; name: string; subtitle?: string | null; imagePath?: string | null }
   | { type: "company"; id: number; name: string; subtitle?: string | null; imagePath?: string | null };
@@ -176,6 +177,7 @@ export default function App() {
   const [progressCounts, setProgressCounts] = useState<ProgressCounts>(blankProgress);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState("");
   const [heroIndex, setHeroIndex] = useState(0);
 
@@ -185,7 +187,9 @@ export default function App() {
   const [picker, setPicker] = useState<PickerState>(null);
   const [actionItem, setActionItem] = useState<MediaSummary | null>(null);
   const [selected, setSelected] = useState<MediaSummary | null>(null);
+  const [selectedStack, setSelectedStack] = useState<MediaSummary[]>([]);
   const [selectedEpisode, setSelectedEpisode] = useState<EpisodeTarget | null>(null);
+  const [selectedSeason, setSelectedSeason] = useState<SeasonTarget | null>(null);
   const [selectedEntity, setSelectedEntity] = useState<EntityTarget | null>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -209,7 +213,9 @@ export default function App() {
 
   const goTab = useCallback((next: AppTab) => {
     setSelected(null);
+    setSelectedStack([]);
     setSelectedEpisode(null);
+    setSelectedSeason(null);
     setSelectedEntity(null);
     setSelectedList(null);
     setSearchMode(false);
@@ -220,7 +226,9 @@ export default function App() {
 
   const openProfileView = useCallback((next: ProfileView) => {
     setSelected(null);
+    setSelectedStack([]);
     setSelectedEpisode(null);
+    setSelectedSeason(null);
     setSelectedEntity(null);
     setSelectedList(null);
     setSearchMode(false);
@@ -347,8 +355,8 @@ export default function App() {
   }, [homeHero.length, tab]);
 
   const loadDiscover = useCallback(async () => {
-    setDiscoverFeed(await fetchDiscover(discoverFilters, 1));
-  }, [discoverFilters]);
+    setDiscoverFeed(await fetchDiscover(discoverFilters, 1, usableSession?.access_token));
+  }, [discoverFilters, usableSession?.access_token]);
 
   const loadRecommendations = useCallback(async (filters = recommendationFiltersRef.current) => {
     if (!usableSession?.access_token) {
@@ -697,8 +705,18 @@ export default function App() {
   const openItem = useCallback((item: MediaSummary) => {
     setActionItem(null);
     setSelectedEpisode(null);
+    setSelectedSeason(null);
     setSelectedEntity(null);
+    if (selected && (selected.kind !== item.kind || selected.id !== item.id)) setSelectedStack(current => [...current, selected]);
     setSelected(item);
+  }, [selected]);
+
+  const closeSelected = useCallback(() => {
+    setSelectedStack(current => {
+      const previous = current[current.length - 1] ?? null;
+      setSelected(previous);
+      return previous ? current.slice(0, -1) : [];
+    });
   }, []);
 
   const openEntity = useCallback((entity: EntityTarget) => {
@@ -860,6 +878,36 @@ export default function App() {
     await setNotInterested(item, usableSession.access_token).catch(() => undefined);
   }
 
+  async function loadMoreActive() {
+    if (loadingMore || loading || refreshing || selectedList || searchMode) return;
+    setLoadingMore(true);
+    try {
+      if (tab === "profile" && profileView === "recommendations" && usableSession?.access_token && recommendationFeed.nextCursor != null) {
+        const next = await fetchRecommendations(recommendationFilters, usableSession.access_token, recommendationFeed.nextCursor);
+        setRecommendationFeed(current => {
+          const seen = new Set(current.items.map(item => `${item.kind}-${item.id}`));
+          return {
+            ...next,
+            items: [...current.items, ...next.items.filter(item => !seen.has(`${item.kind}-${item.id}`))]
+          };
+        });
+      } else if (tab === "discover" && (discoverFeed.page ?? 1) < (discoverFeed.totalPages ?? 1)) {
+        const next = await fetchDiscover(discoverFilters, (discoverFeed.page ?? 1) + 1, usableSession?.access_token);
+        setDiscoverFeed(current => {
+          const seen = new Set(current.items.map(item => `${item.kind}-${item.id}`));
+          return {
+            ...next,
+            items: [...current.items, ...next.items.filter(item => !seen.has(`${item.kind}-${item.id}`))]
+          };
+        });
+      }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not load more titles.");
+    } finally {
+      setLoadingMore(false);
+    }
+  }
+
   async function removeHistoryEvent(eventId: string, title: string) {
     if (!usableSession?.user.id || !supabase) return;
     const client = supabase;
@@ -886,16 +934,19 @@ export default function App() {
   }
 
   function openDiscoverSection(title: string) {
-    if (title.includes("films")) setDiscoverFilters({ ...initialDiscoverFilters, kind: "movie", sort: "newest" });
-    else if (title.includes("Series")) setDiscoverFilters({ ...initialDiscoverFilters, kind: "show", sort: "newest" });
-    else setDiscoverFilters(initialDiscoverFilters);
+    const normalized = title.toLowerCase();
+    if (normalized.includes("film")) setDiscoverFilters({ ...initialDiscoverFilters, kind: "movie", sort: "newest", view: "films" });
+    else if (normalized.includes("series")) setDiscoverFilters({ ...initialDiscoverFilters, kind: "show", sort: "newest", view: "series" });
+    else setDiscoverFilters({ ...initialDiscoverFilters, view: "trending" });
     goTab("discover");
   }
 
   function openCalendarEvent(event: CalendarEvent) {
     if (event.episodeTarget) {
       setSelected(null);
+      setSelectedStack([]);
       setSelectedEntity(null);
+      setSelectedSeason(null);
       setSelectedEpisode(event.episodeTarget);
       return;
     }
@@ -1032,10 +1083,19 @@ export default function App() {
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={styles.root}>
         {selectedEntity ? (
           <EntityScreen target={selectedEntity} session={usableSession} onBack={() => setSelectedEntity(null)} onOpen={openItem} onMenu={setActionItem} />
+        ) : selectedSeason ? (
+          <SeasonDetailScreen target={selectedSeason} session={usableSession} onBack={() => setSelectedSeason(null)} onOpenEpisode={episode => setSelectedEpisode({
+            show: selectedSeason.show,
+            seasonNumber: selectedSeason.season.seasonNumber,
+            episodeNumber: Number(episode.episode_number ?? episode.episodeNumber ?? 0),
+            title: episode.name ?? null,
+            airDate: episode.air_date ?? episode.airDate ?? null,
+            artwork: episode.still_path ?? episode.stillPath ?? selectedSeason.show.backdropPath ?? selectedSeason.show.posterPath
+          })} />
         ) : selectedEpisode ? (
           <EpisodeDetailScreen target={selectedEpisode} session={usableSession} onBack={() => setSelectedEpisode(null)} onOpen={openItem} onOpenEntity={openEntity} />
         ) : selected ? (
-          <DetailScreenV2 item={selected} session={usableSession} onBack={() => setSelected(null)} onOpen={openItem} onOpenEntity={openEntity} onHide={hideRecommendation} onChanged={loadActive} />
+          <DetailScreenV2 key={`${selected.kind}-${selected.id}`} item={selected} session={usableSession} onBack={closeSelected} onOpen={openItem} onOpenEntity={openEntity} onOpenSeason={season => setSelectedSeason({ show: selected, season })} onHide={hideRecommendation} onChanged={loadActive} />
         ) : (
           <FlatList
             ref={listRef}
@@ -1048,6 +1108,9 @@ export default function App() {
             columnWrapperStyle={styles.columns}
             refreshControl={<RefreshControl tintColor={colors.accent} refreshing={refreshing} onRefresh={refresh} />}
             renderItem={({ item }) => <TitleCard item={item} onOpen={openItem} onMenu={setActionItem} />}
+            onEndReached={loadMoreActive}
+            onEndReachedThreshold={0.75}
+            ListFooterComponent={loadingMore ? <View style={styles.feedFooter}><ActivityIndicator color={colors.accent} /><Text style={styles.feedFooterText}>Loading more titles...</Text></View> : null}
           />
         )}
       </KeyboardAvoidingView>
@@ -1159,6 +1222,10 @@ function ListDetailHeader({ list, groupBy, onGroupBy, onBack }: { list: UserList
         <Pressable onPress={() => onGroupBy("collections")} style={[styles.groupChip, groupBy === "collections" && styles.groupChipActive]}>
           <Ionicons name="git-branch-outline" size={15} color={groupBy === "collections" ? colors.text : colors.muted} />
           <Text style={[styles.groupChipText, groupBy === "collections" && styles.groupChipTextActive]}>Group franchises</Text>
+        </Pressable>
+        <Pressable onPress={() => onGroupBy("studios")} style={[styles.groupChip, groupBy === "studios" && styles.groupChipActive]}>
+          <Ionicons name="business-outline" size={15} color={groupBy === "studios" ? colors.text : colors.muted} />
+          <Text style={[styles.groupChipText, groupBy === "studios" && styles.groupChipTextActive]}>Group studios</Text>
         </Pressable>
       </View>
     </View>
@@ -1458,6 +1525,89 @@ function genreStatusColor(status: TrackedStatus) {
   return "#9b78b8";
 }
 
+function SeasonDetailScreen({ target, session, onBack, onOpenEpisode }: { target: SeasonTarget; session: Session | null; onBack: () => void; onOpenEpisode: (episode: any) => void }) {
+  const [payload, setPayload] = useState<any | null>(null);
+  const [loadingSeason, setLoadingSeason] = useState(false);
+  const [source, setSource] = useState<"tmdb" | "imdb">("tmdb");
+  const season = payload?.season ?? target.season;
+  const episodes = [...(payload?.episodes ?? [])].sort((a, b) => Number(a.episode_number ?? a.episodeNumber ?? 0) - Number(b.episode_number ?? b.episodeNumber ?? 0));
+  const imdbRatings = new Map<number, number | null>((payload?.imdbRatings ?? []).map((rating: any) => [Number(rating.episode), typeof rating.imdbRating === "number" ? rating.imdbRating : null]));
+  const imdbAvailable = [...imdbRatings.values()].some(value => typeof value === "number");
+  const poster = tmdbImage(season.poster_path ?? season.posterPath ?? target.season.posterPath ?? target.show.posterPath, "w500");
+  const backdrop = tmdbImage(target.show.backdropPath || target.show.posterPath, "w780");
+
+  useEffect(() => {
+    let alive = true;
+    setLoadingSeason(true);
+    fetchMobileSeason(target.show.id, target.season.seasonNumber, session?.access_token)
+      .then(data => { if (alive) setPayload(data); })
+      .catch(() => undefined)
+      .finally(() => { if (alive) setLoadingSeason(false); });
+    return () => { alive = false; };
+  }, [session?.access_token, target.season.seasonNumber, target.show.id]);
+
+  function episodeScore(episode: any): number | null {
+    const episodeNumber = Number(episode.episode_number ?? episode.episodeNumber ?? 0);
+    if (source === "imdb") return imdbRatings.get(episodeNumber) ?? null;
+    const tmdbScore = Number(episode.vote_average ?? episode.voteAverage);
+    return Number.isFinite(tmdbScore) && tmdbScore > 0 ? tmdbScore : null;
+  }
+
+  return (
+    <ScrollView contentContainerStyle={styles.detailContent}>
+      <View style={styles.episodeHero}>
+        {backdrop ? <Image source={{ uri: backdrop }} style={StyleSheet.absoluteFill} resizeMode="cover" /> : null}
+        <View style={styles.detailShadeV2} />
+        <Pressable onPress={onBack} style={styles.backButton} hitSlop={10}><Ionicons name="chevron-back" size={22} color={colors.text} /><Text style={styles.backText}>Back</Text></Pressable>
+        <View style={styles.detailHeroCopyV2}>
+          {poster ? <Image source={{ uri: poster }} style={styles.detailPosterV2} resizeMode="cover" /> : null}
+          <Text style={styles.detailKicker}>{target.show.title}</Text>
+          <Text style={styles.detailTitleV2}>{season.name ?? target.season.name}</Text>
+          <Text style={styles.detailMeta}>{episodes.length || target.season.episodeCount || "?"} episodes - {season.air_date?.slice(0, 4) ?? season.airDate?.slice(0, 4) ?? target.season.airDate?.slice(0, 4) ?? "TBA"}</Text>
+          <Text style={styles.detailOverview}>{season.overview || target.season.overview || "No season overview has been published yet."}</Text>
+        </View>
+      </View>
+      <View style={styles.detailBody}>
+        <SectionTitle kicker="Season ratings" title="Episodes" />
+        <View style={styles.sourceTabs}>
+          <Pressable onPress={() => setSource("tmdb")} style={[styles.sourceTab, source === "tmdb" && styles.sourceTabActive]}><Text style={styles.sourceTabText}>TMDB</Text></Pressable>
+          <Pressable disabled={!imdbAvailable} onPress={() => setSource("imdb")} style={[styles.sourceTab, source === "imdb" && styles.sourceTabActive, !imdbAvailable && styles.sourceTabDisabled]}><Text style={styles.sourceTabText}>IMDb</Text></Pressable>
+          <View style={[styles.sourceTab, styles.sourceTabDisabled]}><Text style={styles.sourceTabText}>Rotten Tomatoes</Text></View>
+        </View>
+        {loadingSeason ? <ActivityIndicator color={colors.accent} style={{ marginVertical: 18 }} /> : null}
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.seasonEpisodeGrid}>
+          {episodes.map(episode => {
+            const score = episodeScore(episode);
+            const episodeNumber = Number(episode.episode_number ?? episode.episodeNumber ?? 0);
+            return (
+              <Pressable key={`${episode.id ?? episodeNumber}`} onPress={() => onOpenEpisode(episode)} style={styles.seasonEpisodeCell}>
+                <Text style={styles.seasonEpisodeCode}>E{episodeNumber}</Text>
+                <Text style={styles.seasonEpisodeScore}>{score != null ? score.toFixed(1) : "-"}</Text>
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+        <View style={styles.seasonList}>
+          {episodes.map(episode => {
+            const still = tmdbImage(episode.still_path ?? episode.stillPath, "w342");
+            const episodeNumber = Number(episode.episode_number ?? episode.episodeNumber ?? 0);
+            return (
+              <Pressable key={`row-${episode.id ?? episodeNumber}`} onPress={() => onOpenEpisode(episode)} style={styles.seasonCard}>
+                {still ? <Image source={{ uri: still }} style={styles.seasonPoster} resizeMode="cover" /> : <View style={styles.seasonPoster}><Ionicons name="film-outline" size={20} color={colors.muted} /></View>}
+                <View style={styles.seasonCopy}>
+                  <Text style={styles.seasonName} numberOfLines={1}>E{episodeNumber} - {episode.name ?? "Episode"}</Text>
+                  <Text style={styles.seasonMeta}>{episode.air_date ?? "Air date TBA"}{episode.runtime ? ` - ${episode.runtime} min` : ""}</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={colors.muted} />
+              </Pressable>
+            );
+          })}
+        </View>
+      </View>
+    </ScrollView>
+  );
+}
+
 function ReviewRow({ review, onOpen }: { review: ReviewItem; onOpen: (item: MediaSummary) => void }) {
   const image = tmdbImage(review.artwork, "w342");
   const score = typeof review.score === "number" ? review.score : null;
@@ -1495,15 +1645,43 @@ function ListGrid({ lists, onOpen }: { lists: UserList[]; onOpen?: (list: UserLi
 
 function groupedListItems(items: MediaSummary[], groupBy: ListGroup) {
   const ordered = [...items].sort((a, b) => (a.releaseDate ?? "9999-12-31").localeCompare(b.releaseDate ?? "9999-12-31") || a.title.localeCompare(b.title));
-  if (groupBy !== "collections") return [{ title: "Titles", items }];
+  if (groupBy === "none") return [{ title: "Titles", items }];
   const groups = new Map<string, MediaSummary[]>();
-  ordered.forEach(item => {
-    const key = item.kind === "movie" && item.collectionName ? item.collectionName : "Other titles";
-    groups.set(key, [...(groups.get(key) ?? []), item]);
-  });
+  if (groupBy === "collections") {
+    const other: MediaSummary[] = [];
+    ordered.forEach(item => {
+      const key = listFranchiseName(item);
+      if (key) groups.set(key, [...(groups.get(key) ?? []), item]);
+      else other.push(item);
+    });
+    [...groups.entries()].forEach(([title, groupItems]) => {
+      if (groupItems.length < 2) {
+        groups.delete(title);
+        other.push(...groupItems);
+      }
+    });
+    if (other.length) groups.set("Other titles", other);
+  } else {
+    ordered.forEach(item => listStudioNames(item).forEach(name => groups.set(name, [...(groups.get(name) ?? []), item])));
+  }
   return [...groups.entries()]
     .map(([title, groupItems]) => ({ title, items: groupItems }))
-    .sort((a, b) => (a.title === "Other titles" ? 1 : b.title === "Other titles" ? -1 : a.title.localeCompare(b.title)));
+    .sort((a, b) => (a.title.startsWith("Other") ? 1 : b.title.startsWith("Other") ? -1 : a.title.localeCompare(b.title)));
+}
+
+function listFranchiseName(item: MediaSummary) {
+  if (item.collectionName) return item.collectionName;
+  const title = item.title.toLowerCase();
+  if (title.includes("attack on titan")) return "Attack on Titan Collection";
+  if (title.includes("chainsaw man")) return "Chainsaw Man Collection";
+  if (title.includes("avatar: the last airbender") || title.includes("legend of korra") || title.includes("the last airbender")) return "Avatar: The Last Airbender Collection";
+  return null;
+}
+
+function listStudioNames(item: MediaSummary) {
+  const companies = item.companies?.length ? item.companies : Array.isArray(item.raw?.production_companies) ? item.raw.production_companies : [];
+  const names = companies.map((company: any) => company?.name).filter(Boolean);
+  return names.length ? [...new Set(names)] : ["Other studios"];
 }
 
 function GroupedListContent({ groups, onOpen, onMenu }: { groups: Array<{ title: string; items: MediaSummary[] }>; onOpen: (item: MediaSummary) => void; onMenu: (item: MediaSummary) => void }) {
@@ -2013,7 +2191,7 @@ function EntityScreen({ target, session, onBack, onOpen, onMenu }: { target: Ent
   );
 }
 
-function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onHide, onChanged }: { item: MediaSummary; session: Session | null; onBack: () => void; onOpen: (item: MediaSummary) => void; onOpenEntity: (entity: EntityTarget) => void; onHide: (item: MediaSummary) => void; onChanged: () => Promise<void> }) {
+function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSeason, onHide, onChanged }: { item: MediaSummary; session: Session | null; onBack: () => void; onOpen: (item: MediaSummary) => void; onOpenEntity: (entity: EntityTarget) => void; onOpenSeason: (season: DetailSeason) => void; onHide: (item: MediaSummary) => void; onChanged: () => Promise<void> }) {
   const [detail, setDetail] = useState<DetailData | null>(null);
   const [busy, setBusy] = useState(false);
   const [listsExpanded, setListsExpanded] = useState(false);
@@ -2307,7 +2485,7 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onHide, o
         </View>
         <RatingSheet visible={ratingSheetVisible} value={detail?.userRating ?? null} busy={busy} onClose={() => setRatingSheetVisible(false)} onSave={saveUserRating} />
         <View style={styles.factGrid}><Fact label="Released" value={detail?.releaseDate || item.releaseDate || "TBA"} /><Fact label={director?.job ?? "Director"} value={director?.name ?? "TBA"} /><Fact label="Original language" value={(detail?.originalLanguage || item.originalLanguage || "Unknown").toUpperCase()} /><Fact label="Genres" value={detailGenres.map(genre => genre.name).join(", ") || "Unknown"} /></View>
-        {item.kind === "show" && detail?.seasons.length ? <SeasonsSection tmdbId={item.id} seasons={detail.seasons} /> : null}
+        {item.kind === "show" && detail?.seasons.length ? <SeasonsSection seasons={detail.seasons} onOpenSeason={onOpenSeason} /> : null}
         {detail?.images.length || trailer ? <TitleMediaPreview trailer={trailer} images={detail?.images ?? []} /> : null}
         {detail?.cast.length ? <CastSection cast={detail.cast} onOpen={onOpenEntity} /> : null}
         {detail?.companies.length ? <CompanySection companies={detail.companies} onOpen={onOpenEntity} /> : null}
@@ -2368,15 +2546,15 @@ function mapTargetReview(review: any, item: MediaSummary, label: "season" | "epi
   }];
 }
 
-function SeasonsSection({ tmdbId, seasons }: { tmdbId: number; seasons: DetailSeason[] }) {
+function SeasonsSection({ seasons, onOpenSeason }: { seasons: DetailSeason[]; onOpenSeason: (season: DetailSeason) => void }) {
   return (
     <View style={styles.detailSection}>
-      <SectionTitle kicker="The full story" title="Seasons & episodes" action="All episodes & ratings ->" onAction={() => WebBrowser.openBrowserAsync(`${API_URL}/title/show/${tmdbId}/episodes`)} />
+      <SectionTitle kicker="The full story" title="Seasons & episodes" action="All episodes & ratings ->" onAction={() => seasons[0] && onOpenSeason(seasons[0])} />
       <View style={styles.seasonList}>
         {seasons.map(season => {
           const poster = tmdbImage(season.posterPath, "w342");
           return (
-            <Pressable key={`${season.id ?? season.seasonNumber}`} style={styles.seasonCard} onPress={() => WebBrowser.openBrowserAsync(`${API_URL}/title/show/${tmdbId}/season/${season.seasonNumber}`)}>
+            <Pressable key={`${season.id ?? season.seasonNumber}`} style={styles.seasonCard} onPress={() => onOpenSeason(season)}>
               {poster ? <Image source={{ uri: poster }} style={styles.seasonPoster} /> : <View style={styles.seasonPoster}><Ionicons name="albums-outline" size={20} color={colors.muted} /></View>}
               <View style={styles.seasonCopy}>
                 <Text style={styles.seasonName} numberOfLines={1}>{season.name}</Text>
@@ -2779,7 +2957,9 @@ function fromDbMedia(row: any, ratingByMedia?: Map<any, number>): MediaSummary {
     collectionTmdbId: row.collection_tmdb_id ?? row.raw?.belongs_to_collection?.id ?? null,
     collectionName: row.collection_name ?? row.raw?.belongs_to_collection?.name ?? null,
     originalLanguage: row.original_language ?? null,
-    originCountries: row.origin_countries ?? []
+    originCountries: row.origin_countries ?? [],
+    companies: row.companies ?? row.raw?.production_companies ?? [],
+    raw: row.raw ?? null
   };
 }
 
@@ -3099,6 +3279,8 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
   listContent: { paddingBottom: 116 },
   columns: { paddingHorizontal: 8 },
+  feedFooter: { minHeight: 86, alignItems: "center", justifyContent: "center", gap: 8 },
+  feedFooterText: { color: colors.muted, fontSize: 13, fontWeight: "900" },
   loading: { alignItems: "center", backgroundColor: "rgba(6,8,8,0.72)", bottom: 0, justifyContent: "center", left: 0, position: "absolute", right: 0, top: 0 },
   errorText: { color: colors.danger, fontSize: 14, fontWeight: "800", lineHeight: 20, marginHorizontal: 18, marginTop: 14 },
   afterFilters: { height: 18 },
@@ -3448,6 +3630,15 @@ const styles = StyleSheet.create({
   seasonCopy: { flex: 1, minWidth: 0 },
   seasonName: { color: colors.text, fontSize: 16, fontWeight: "900" },
   seasonMeta: { color: colors.muted, fontSize: 13, fontWeight: "700", marginTop: 4 },
+  sourceTabs: { flexDirection: "row", gap: 9, paddingHorizontal: 18, marginTop: 10, flexWrap: "wrap" },
+  sourceTab: { minHeight: 42, paddingHorizontal: 14, borderRadius: 14, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel, alignItems: "center", justifyContent: "center" },
+  sourceTabActive: { borderColor: colors.accent, backgroundColor: "rgba(255,84,57,0.18)" },
+  sourceTabDisabled: { opacity: 0.42 },
+  sourceTabText: { color: colors.text, fontWeight: "900" },
+  seasonEpisodeGrid: { paddingHorizontal: 18, paddingVertical: 14, gap: 8 },
+  seasonEpisodeCell: { width: 62, height: 54, borderRadius: 9, backgroundColor: "#f5c20b", alignItems: "center", justifyContent: "center" },
+  seasonEpisodeCode: { color: "#1d1705", fontSize: 11, fontWeight: "900" },
+  seasonEpisodeScore: { color: "#1d1705", fontSize: 18, fontWeight: "900", marginTop: 2 },
   trailerPreview: { marginHorizontal: 18, minHeight: 190, borderRadius: 22, backgroundColor: colors.panel2, alignItems: "center", justifyContent: "center", gap: 8, overflow: "hidden" },
   trailerPreviewText: { color: colors.text, fontSize: 22, fontWeight: "900" },
   trailerPreviewSub: { color: colors.muted, fontSize: 13, fontWeight: "800" },

@@ -65,6 +65,15 @@ export type MobileEpisodePayload = {
   recommendations: MediaSummary[];
 };
 
+export type MobileSeasonPayload = {
+  show: MediaSummary;
+  mediaId: number | null;
+  seasonId: number | null;
+  season: any;
+  episodes: any[];
+  imdbRatings: Array<{ episode: number; title: string; released?: string; imdbRating: number | null; imdbId?: string }>;
+};
+
 function queryString(values: Record<string, string | number | boolean | undefined>) {
   const params = new URLSearchParams();
   Object.entries(values).forEach(([key, value]) => {
@@ -112,7 +121,7 @@ function normalizeRecommendations(data: { items?: Array<{ item?: MediaSummary; r
   };
 }
 
-export async function fetchDiscover(filters: DiscoverFilters, page = 1): Promise<FeedResult> {
+export async function fetchDiscover(filters: DiscoverFilters, page = 1, token?: string): Promise<FeedResult> {
   const query = queryString({
     kind: filters.kind,
     genre: filters.genre,
@@ -121,9 +130,12 @@ export async function fetchDiscover(filters: DiscoverFilters, page = 1): Promise
     year: filters.year,
     excludeGenres: filters.excludeGenres.join(","),
     sort: filters.sort === "rating" ? "vote_average.desc" : filters.sort === "newest" ? "newest" : "popularity.desc",
+    hideWatched: filters.hideWatched ? "1" : "0",
+    hideListed: filters.hideListed ? "1" : "0",
+    view: filters.view,
     page
   });
-  return request<FeedResult>(`/api/discover?${query}`);
+  return request<FeedResult>(`/api/discover?${query}`, token);
 }
 
 export async function fetchWebsiteHome(): Promise<HomePayload> {
@@ -166,6 +178,10 @@ export async function fetchMobileCompany(id: number, kind?: MediaSummary["kind"]
 
 export async function fetchMobileEpisode(showId: number, season: number, episode: number, token?: string) {
   return request<MobileEpisodePayload>(`/api/mobile/episode/${showId}/season/${season}/episode/${episode}`, token);
+}
+
+export async function fetchMobileSeason(showId: number, season: number, token?: string) {
+  return request<MobileSeasonPayload>(`/api/mobile/season/${showId}/${season}`, token);
 }
 
 export async function refreshRecommendations(token: string) {

@@ -1,11 +1,13 @@
 import { BlurView } from "expo-blur";
-import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import { Ionicons } from "@expo/vector-icons";
 import type { Session } from "@supabase/supabase-js";
 import React, { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Dimensions, Image, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { colors, shadow } from "./theme";
 import { countries, excludeGenreOptions, genres, ratingLabel, titleYear, tmdbImage, userRatingLabel } from "./config";
 import type { AppTab, DiscoverFilters, MediaSummary, RecommendationFilters } from "./types";
+
+const logoIcon = require("../assets/logo.png");
 
 const tabIcons: Record<AppTab, keyof typeof Ionicons.glyphMap> = {
   home: "home-outline",
@@ -23,13 +25,12 @@ export function AppHeader({ session, onProfile, onSearch, onNotifications }: { s
   return (
     <View style={styles.header}>
       <View style={styles.logoDot}>
-        <MaterialCommunityIcons name="movie-open-outline" size={21} color={colors.text} />
+        <Image source={logoIcon} style={styles.logoImage} resizeMode="contain" />
       </View>
       <Text style={styles.logoText}>MovieTracker</Text>
       <View style={styles.headerSpacer} />
       <HeaderButton icon="search-outline" onPress={onSearch} />
       <HeaderButton icon="notifications-outline" onPress={onNotifications} />
-      <HeaderButton icon="moon-outline" />
       <Pressable onPress={onProfile} style={styles.avatar} hitSlop={8}>
         {avatarUrl ? (
           <Image source={{ uri: avatarUrl }} style={styles.avatarImage} />
@@ -215,6 +216,10 @@ export function DiscoverFiltersCard({ filters, onChange, onSelect }: { filters: 
         </View>
         <TextInput value={filters.year} onChangeText={year => onChange({ ...filters, year: year.replace(/\D/g, "").slice(0, 4) })} placeholder="e.g. 2024" placeholderTextColor="#6f7477" keyboardType="number-pad" style={styles.yearInput} />
       </View>
+      <View style={styles.checkRow}>
+        <CheckPill label="Hide watched" checked={filters.hideWatched} onPress={() => onChange({ ...filters, hideWatched: !filters.hideWatched })} />
+        <CheckPill label="Hide titles in my lists" checked={filters.hideListed} onPress={() => onChange({ ...filters, hideListed: !filters.hideListed })} />
+      </View>
     </View>
   );
 }
@@ -356,7 +361,8 @@ function ActionRow({ icon, label, danger, onPress }: { icon: keyof typeof Ionico
 
 export const styles = StyleSheet.create({
   header: { height: 82, paddingHorizontal: 18, paddingTop: 22, borderBottomWidth: 1, borderBottomColor: colors.line, flexDirection: "row", alignItems: "center", backgroundColor: "#080a0a" },
-  logoDot: { width: 38, height: 38, borderRadius: 19, backgroundColor: colors.accent, alignItems: "center", justifyContent: "center" },
+  logoDot: { width: 38, height: 38, borderRadius: 19, backgroundColor: colors.accent, alignItems: "center", justifyContent: "center", overflow: "hidden" },
+  logoImage: { width: 34, height: 34 },
   logoText: { color: colors.text, fontSize: 24, fontWeight: "900", marginLeft: 10, letterSpacing: -0.8 },
   headerSpacer: { flex: 1 },
   headerButton: { width: 44, height: 44, borderRadius: 22, borderWidth: 1, borderColor: colors.line, alignItems: "center", justifyContent: "center", marginLeft: 8, backgroundColor: "rgba(14,18,19,0.86)" },

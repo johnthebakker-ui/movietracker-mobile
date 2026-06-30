@@ -27,6 +27,8 @@ export interface MediaSummary {
   collectionName?: string | null;
   originalLanguage?: string | null;
   originCountries?: string[];
+  companies?: Array<{ id?: number; name: string; logo_path?: string | null }>;
+  raw?: Record<string, any> | null;
   reason?: string;
 }
 
@@ -45,6 +47,9 @@ export interface DiscoverFilters {
   year: string;
   sort: "popularity" | "rating" | "newest";
   excludeGenres: string[];
+  hideWatched: boolean;
+  hideListed: boolean;
+  view?: "trending" | "films" | "series";
 }
 
 export interface RecommendationFilters {
