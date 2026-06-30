@@ -1658,12 +1658,6 @@ function groupedListItems(items: MediaSummary[], groupBy: ListGroup) {
       if (key) groups.set(key, [...(groups.get(key) ?? []), item]);
       else other.push(item);
     });
-    [...groups.entries()].forEach(([title, groupItems]) => {
-      if (groupItems.length < 2) {
-        groups.delete(title);
-        other.push(...groupItems);
-      }
-    });
     if (other.length) groups.set("Other titles", other);
   } else {
     ordered.forEach(item => listStudioNames(item).forEach(name => groups.set(name, [...(groups.get(name) ?? []), item])));
@@ -1675,10 +1669,13 @@ function groupedListItems(items: MediaSummary[], groupBy: ListGroup) {
 
 function listFranchiseName(item: MediaSummary) {
   if (item.collectionName) return item.collectionName;
-  const title = item.title.toLowerCase();
+  const title = item.title.toLowerCase().replace(/[-_]/g, " ");
   if (title.includes("attack on titan")) return "Attack on Titan Collection";
   if (title.includes("chainsaw man")) return "Chainsaw Man Collection";
-  if (title.includes("avatar: the last airbender") || title.includes("legend of korra") || title.includes("the last airbender")) return "Avatar: The Last Airbender Collection";
+  if ((title.includes("avatar") && title.includes("last airbender")) || title.includes("legend of korra")) return "Avatar: The Last Airbender Collection";
+  if (title.includes("wreck it ralph") || title.includes("ralph breaks the internet")) return "Wreck-It Ralph Collection";
+  if (title.includes("incredibles")) return "The Incredibles Collection";
+  if (title.includes("ice age")) return "Ice Age Collection";
   return null;
 }
 
