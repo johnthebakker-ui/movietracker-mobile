@@ -297,7 +297,11 @@ export default function App() {
     }).catch(() => {
       if (alive) setAuthReady(true);
     });
-    const { data: listener } = supabase?.auth.onAuthStateChange((_event, nextSession) => {
+    const { data: listener } = supabase?.auth.onAuthStateChange((event, nextSession) => {
+      if (event === "TOKEN_REFRESHED" || event === "USER_UPDATED") {
+        setSession(nextSession);
+        return;
+      }
       setTimeout(() => { void acceptSession(nextSession); }, 0);
     }) ?? { data: null };
     return () => { alive = false; listener?.subscription.unsubscribe(); };
