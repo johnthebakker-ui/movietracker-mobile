@@ -1,10 +1,10 @@
 import { BlurView } from "expo-blur";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import type { Session } from "@supabase/supabase-js";
-import React from "react";
-import { ActivityIndicator, Image, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import React, { useEffect, useRef, useState } from "react";
+import { ActivityIndicator, Dimensions, Image, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { colors, shadow } from "./theme";
-import { countries, excludeGenreOptions, genres, ratingLabel, titleYear, tmdbImage } from "./config";
+import { countries, excludeGenreOptions, genres, ratingLabel, titleYear, tmdbImage, userRatingLabel } from "./config";
 import type { AppTab, DiscoverFilters, MediaSummary, RecommendationFilters } from "./types";
 
 const tabIcons: Record<AppTab, keyof typeof Ionicons.glyphMap> = {
@@ -15,7 +15,9 @@ const tabIcons: Record<AppTab, keyof typeof Ionicons.glyphMap> = {
   profile: "person-outline"
 };
 
-export function AppHeader({ session, onProfile, onSearch }: { session: Session | null; onProfile: () => void; onSearch: () => void }) {
+export type PickerAnchor = { x: number; y: number; width: number; height: number };
+
+export function AppHeader({ session, onProfile, onSearch, onNotifications }: { session: Session | null; onProfile: () => void; onSearch: () => void; onNotifications?: () => void }) {
   const avatarUrl = (session?.user.user_metadata?.avatar_url || session?.user.user_metadata?.picture) as string | undefined;
 
   return (
@@ -26,7 +28,7 @@ export function AppHeader({ session, onProfile, onSearch }: { session: Session |
       <Text style={styles.logoText}>MovieTracker</Text>
       <View style={styles.headerSpacer} />
       <HeaderButton icon="search-outline" onPress={onSearch} />
-      <HeaderButton icon="notifications-outline" />
+      <HeaderButton icon="notifications-outline" onPress={onNotifications} />
       <HeaderButton icon="moon-outline" />
       <Pressable onPress={onProfile} style={styles.avatar} hitSlop={8}>
         {avatarUrl ? (
@@ -72,7 +74,7 @@ export function BottomNav({ tab, onTab }: { tab: AppTab; onTab: (tab: AppTab) =>
   );
 }
 
-export function Hero({ item, onOpen }: { item: MediaSummary | null; onOpen: (item: MediaSummary) => void }) {
+export function Hero({ item, index, count, onOpen, onPrevious, onNext }: { item: MediaSummary | null; index?: number; count?: number; onOpen: (item: MediaSummary) => void; onPrevious?: () => void; onNext?: () => void }) {
   if (!item) {
     return (
       <View style={[styles.hero, styles.heroEmpty]}>
@@ -83,20 +85,35 @@ export function Hero({ item, onOpen }: { item: MediaSummary | null; onOpen: (ite
 
   const backdrop = tmdbImage(item.backdropPath || item.posterPath, "w780");
   return (
-    <Pressable onPress={() => onOpen(item)} style={styles.hero}>
+    <View style={styles.hero}>
       {backdrop ? <Image source={{ uri: backdrop }} style={StyleSheet.absoluteFill} resizeMode="cover" /> : null}
       <View style={styles.heroShade} />
       <View style={styles.heroCopy}>
-        <Text style={styles.kicker}>THIS WEEK'S ESSENTIAL WATCH</Text>
+        <Text style={styles.kicker}>THIS WEEK'S ESSENTIAL WATCHES{count ? ` · ${(index ?? 0) + 1} OF ${count}` : ""}</Text>
         <Text style={styles.heroTitle} numberOfLines={2}>{item.title}</Text>
-        <Text style={styles.meta}>{titleYear(item)} · {item.kind === "show" ? "Series" : "Film"} · {ratingLabel(item)}</Text>
+        <Text style={styles.meta}>{titleYear(item)} - {item.kind === "show" ? "Series" : "Film"} - {ratingLabel(item)}</Text>
         <Text style={styles.heroOverview} numberOfLines={4}>{item.overview || "A cinematic pick from the MovieTracker catalog."}</Text>
-        <View style={styles.heroButton}>
+        <Pressable onPress={() => onOpen(item)} style={styles.heroButton}>
           <Ionicons name="play" size={16} color={colors.text} />
           <Text style={styles.heroButtonText}>Explore title</Text>
-        </View>
+        </Pressable>
       </View>
-    </Pressable>
+      {count && count > 1 ? (
+        <View style={styles.heroControls}>
+          <Pressable onPress={onPrevious} style={styles.heroArrow} hitSlop={8}>
+            <Ionicons name="chevron-back" size={24} color={colors.text} />
+          </Pressable>
+          <View style={styles.heroDots}>
+            {Array.from({ length: count }).map((_, dotIndex) => (
+              <View key={dotIndex} style={[styles.heroDot, dotIndex === index && styles.heroDotActive]} />
+            ))}
+          </View>
+          <Pressable onPress={onNext} style={styles.heroArrow} hitSlop={8}>
+            <Ionicons name="chevron-forward" size={24} color={colors.text} />
+          </Pressable>
+        </View>
+      ) : null}
+    </View>
   );
 }
 
@@ -118,17 +135,32 @@ export function SectionTitle({ kicker, title, action, onAction }: { kicker?: str
 
 export function TitleCard({ item, onOpen, onMenu }: { item: MediaSummary; onOpen: (item: MediaSummary) => void; onMenu: (item: MediaSummary) => void }) {
   const image = tmdbImage(item.posterPath || item.backdropPath, "w500");
+  const longPressed = useRef(false);
 
   return (
-    <Pressable onPress={() => onOpen(item)} onLongPress={() => onMenu(item)} delayLongPress={300} style={styles.card}>
+    <Pressable
+      onPress={() => {
+        if (longPressed.current) {
+          longPressed.current = false;
+          return;
+        }
+        onOpen(item);
+      }}
+      onLongPress={() => {
+        longPressed.current = true;
+        onMenu(item);
+      }}
+      delayLongPress={360}
+      style={styles.card}
+    >
       <View style={styles.poster}>
         {image ? <Image source={{ uri: image }} style={styles.posterImage} resizeMode="cover" /> : <Text style={styles.posterFallback}>{item.title}</Text>}
         <Pressable onPress={() => onMenu(item)} style={styles.menuDot} hitSlop={10}>
           <Ionicons name="ellipsis-vertical" size={22} color={colors.text} />
         </Pressable>
-        {item.communityRating ? (
+        {userRatingLabel(item) ? (
           <View style={styles.ratingBadge}>
-            <Text style={styles.ratingBadgeText}>{ratingLabel(item)}</Text>
+            <Text style={styles.ratingBadgeText}>{userRatingLabel(item)}</Text>
           </View>
         ) : null}
       </View>
@@ -142,9 +174,14 @@ export function TitleCard({ item, onOpen, onMenu }: { item: MediaSummary; onOpen
   );
 }
 
-export function FilterButton({ icon, label, value, onPress }: { icon: keyof typeof Ionicons.glyphMap; label: string; value: string; onPress: () => void }) {
+export function FilterButton({ icon, label, value, onPress }: { icon: keyof typeof Ionicons.glyphMap; label: string; value: string; onPress: (anchor?: PickerAnchor) => void }) {
+  const buttonRef = useRef<View>(null);
+  const handlePress = () => {
+    buttonRef.current?.measureInWindow((x, y, width, height) => onPress({ x, y, width, height }));
+  };
+
   return (
-    <Pressable onPress={onPress} style={styles.filterButton}>
+    <Pressable ref={buttonRef} onPress={handlePress} style={styles.filterButton}>
       <View style={styles.filterIcon}>
         <Ionicons name={icon} size={22} color={colors.accent} />
       </View>
@@ -157,7 +194,7 @@ export function FilterButton({ icon, label, value, onPress }: { icon: keyof type
   );
 }
 
-export function DiscoverFiltersCard({ filters, onChange, onSelect }: { filters: DiscoverFilters; onChange: (next: DiscoverFilters) => void; onSelect: (field: "kind" | "genre" | "country" | "sort" | "excludeGenres") => void }) {
+export function DiscoverFiltersCard({ filters, onChange, onSelect }: { filters: DiscoverFilters; onChange: (next: DiscoverFilters) => void; onSelect: (field: "kind" | "genre" | "country" | "sort" | "excludeGenres", anchor?: PickerAnchor) => void }) {
   const excludedLabel = filters.excludeGenres.length
     ? filters.excludeGenres.map(value => excludeGenreOptions.find(option => option.value === value)?.label || value).join(", ")
     : "Nothing excluded";
@@ -165,11 +202,11 @@ export function DiscoverFiltersCard({ filters, onChange, onSelect }: { filters: 
   return (
     <View style={styles.filtersCard}>
       <View style={styles.filterGrid}>
-        <FilterButton icon="film-outline" label="Format" value={filters.kind === "all" ? "Movies & series" : filters.kind === "movie" ? "Movies" : "Series"} onPress={() => onSelect("kind")} />
-        <FilterButton icon="options-outline" label="Genre" value={genres.find(g => g.value === filters.genre)?.label || "Every genre"} onPress={() => onSelect("genre")} />
-        <FilterButton icon="earth-outline" label="Country" value={countries.find(c => c.value === filters.country)?.label || "Every country"} onPress={() => onSelect("country")} />
-        <FilterButton icon="chevron-down" label="Sort by" value={filters.sort === "rating" ? "Highest rated" : filters.sort === "newest" ? "Newest releases" : "Most popular"} onPress={() => onSelect("sort")} />
-        <FilterButton icon="ban-outline" label="Exclude genres" value={excludedLabel} onPress={() => onSelect("excludeGenres")} />
+        <FilterButton icon="film-outline" label="Format" value={filters.kind === "all" ? "Movies & series" : filters.kind === "movie" ? "Movies" : "Series"} onPress={anchor => onSelect("kind", anchor)} />
+        <FilterButton icon="options-outline" label="Genre" value={genres.find(g => g.value === filters.genre)?.label || "Every genre"} onPress={anchor => onSelect("genre", anchor)} />
+        <FilterButton icon="earth-outline" label="Country" value={countries.find(c => c.value === filters.country)?.label || "Every country"} onPress={anchor => onSelect("country", anchor)} />
+        <FilterButton icon="chevron-down" label="Sort by" value={filters.sort === "rating" ? "Highest rated" : filters.sort === "newest" ? "Newest releases" : "Most popular"} onPress={anchor => onSelect("sort", anchor)} />
+        <FilterButton icon="ban-outline" label="Exclude genres" value={excludedLabel} onPress={anchor => onSelect("excludeGenres", anchor)} />
       </View>
       <View style={styles.yearBox}>
         <View style={styles.yearHeader}>
@@ -182,7 +219,7 @@ export function DiscoverFiltersCard({ filters, onChange, onSelect }: { filters: 
   );
 }
 
-export function RecommendationFiltersCard({ filters, onChange, onSelect, onRefresh }: { filters: RecommendationFilters; onChange: (next: RecommendationFilters) => void; onSelect: (field: "kind" | "genre" | "country" | "excludeGenres") => void; onRefresh: () => void }) {
+export function RecommendationFiltersCard({ filters, onChange, onSelect, onRefresh }: { filters: RecommendationFilters; onChange: (next: RecommendationFilters) => void; onSelect: (field: "kind" | "genre" | "country" | "excludeGenres", anchor?: PickerAnchor) => void; onRefresh: () => void }) {
   const excludedLabel = filters.excludeGenres.length
     ? filters.excludeGenres.map(value => excludeGenreOptions.find(option => option.value === value)?.label || value).join(", ")
     : "Nothing excluded";
@@ -190,10 +227,10 @@ export function RecommendationFiltersCard({ filters, onChange, onSelect, onRefre
   return (
     <View style={styles.filtersCard}>
       <View style={styles.filterGrid}>
-        <FilterButton icon="film-outline" label="Format" value={filters.kind === "all" ? "Movies & series" : filters.kind === "movie" ? "Movies" : "Series"} onPress={() => onSelect("kind")} />
-        <FilterButton icon="options-outline" label="Genre" value={genres.find(g => g.value === filters.genre)?.label || "Every genre"} onPress={() => onSelect("genre")} />
-        <FilterButton icon="earth-outline" label="Country" value={countries.find(c => c.value === filters.country)?.label || "Every country"} onPress={() => onSelect("country")} />
-        <FilterButton icon="ban-outline" label="Exclude genres" value={excludedLabel} onPress={() => onSelect("excludeGenres")} />
+        <FilterButton icon="film-outline" label="Format" value={filters.kind === "all" ? "Movies & series" : filters.kind === "movie" ? "Movies" : "Series"} onPress={anchor => onSelect("kind", anchor)} />
+        <FilterButton icon="options-outline" label="Genre" value={genres.find(g => g.value === filters.genre)?.label || "Every genre"} onPress={anchor => onSelect("genre", anchor)} />
+        <FilterButton icon="earth-outline" label="Country" value={countries.find(c => c.value === filters.country)?.label || "Every country"} onPress={anchor => onSelect("country", anchor)} />
+        <FilterButton icon="ban-outline" label="Exclude genres" value={excludedLabel} onPress={anchor => onSelect("excludeGenres", anchor)} />
       </View>
       <View style={styles.yearBox}>
         <View style={styles.yearHeader}>
@@ -208,7 +245,7 @@ export function RecommendationFiltersCard({ filters, onChange, onSelect, onRefre
       </View>
       <Pressable onPress={onRefresh} style={styles.primaryButton}>
         <Ionicons name="refresh" size={20} color={colors.text} />
-        <Text style={styles.primaryButtonText}>Refresh picks</Text>
+        <Text style={styles.primaryButtonText}>Update picks</Text>
       </Pressable>
     </View>
   );
@@ -223,27 +260,58 @@ function CheckPill({ label, checked, onPress }: { label: string; checked: boolea
   );
 }
 
-export function PickerSheet({ title, visible, options, value, multiValues, onClose, onPick }: { title: string; visible: boolean; options: Array<{ value: string; label: string }>; value: string; multiValues?: string[]; onClose: () => void; onPick: (value: string) => void }) {
+export function PickerSheet({ title, visible, options, value, multiValues, anchor, onClose, onPick, onApply }: { title: string; visible: boolean; options: Array<{ value: string; label: string }>; value: string; multiValues?: string[]; anchor?: PickerAnchor; onClose: () => void; onPick: (value: string) => void; onApply?: (values: string[]) => void }) {
   const multi = Array.isArray(multiValues);
+  const [draftValues, setDraftValues] = useState<string[]>(multiValues ?? []);
+  const window = Dimensions.get("window");
+  const sheetWidth = Math.min(360, window.width - 28);
+  const anchoredStyle = anchor
+    ? {
+      left: Math.max(14, Math.min(anchor.x, window.width - sheetWidth - 14)),
+      top: Math.min(anchor.y + anchor.height + 8, window.height - 420),
+      right: undefined,
+      bottom: undefined,
+      width: sheetWidth
+    }
+    : null;
+
+  useEffect(() => {
+    if (visible) setDraftValues(multiValues ?? []);
+  }, [multiValues, visible]);
+
+  const selectedValues = onApply ? draftValues : multiValues ?? [];
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <Pressable style={styles.modalScrim} onPress={onClose} />
-      <View style={styles.sheet}>
-        <View style={styles.grabber} />
+      <View style={[styles.sheet, anchoredStyle]}>
+        {!anchor ? <View style={styles.grabber} /> : null}
         <Text style={styles.sheetTitle}>{title}</Text>
         <ScrollView style={styles.sheetScroll}>
           {options.map(option => (
             <Pressable
               key={option.value}
-              onPress={() => { onPick(option.value); if (!multi) onClose(); }}
-              style={[styles.sheetOption, (multi ? multiValues.includes(option.value) : option.value === value) && styles.sheetOptionActive]}
+              onPress={() => {
+                if (multi && onApply) {
+                  setDraftValues(current => current.includes(option.value) ? current.filter(item => item !== option.value) : [...current, option.value]);
+                  return;
+                }
+                onPick(option.value);
+                if (!multi) onClose();
+              }}
+              style={[styles.sheetOption, (multi ? selectedValues.includes(option.value) : option.value === value) && styles.sheetOptionActive]}
             >
               <Text style={styles.sheetOptionText}>{option.label}</Text>
-              {(multi ? multiValues.includes(option.value) : option.value === value) ? <Ionicons name="checkmark" size={22} color={colors.text} /> : null}
+              {(multi ? selectedValues.includes(option.value) : option.value === value) ? <Ionicons name="checkmark" size={22} color={colors.text} /> : null}
             </Pressable>
           ))}
         </ScrollView>
+        {multi && onApply ? (
+          <View style={styles.sheetActions}>
+            <Pressable onPress={onClose} style={styles.sheetSecondaryButton}><Text style={styles.sheetSecondaryText}>Cancel</Text></Pressable>
+            <Pressable onPress={() => { onApply(draftValues); onClose(); }} style={styles.sheetPrimaryButton}><Text style={styles.sheetPrimaryText}>Update</Text></Pressable>
+          </View>
+        ) : null}
       </View>
     </Modal>
   );
@@ -299,23 +367,28 @@ export const styles = StyleSheet.create({
   navItem: { alignItems: "center", justifyContent: "center", minWidth: 58, height: "100%" },
   navText: { color: colors.muted, fontSize: 12, fontWeight: "800", marginTop: 5 },
   navActive: { color: colors.accent },
-  hero: { height: 430, borderRadius: 30, overflow: "hidden", marginHorizontal: 18, marginTop: 18, backgroundColor: colors.panel, justifyContent: "flex-end" },
+  hero: { height: 620, borderRadius: 0, overflow: "hidden", marginHorizontal: 0, marginTop: 0, backgroundColor: colors.panel, justifyContent: "flex-end" },
   heroEmpty: { alignItems: "center", justifyContent: "center" },
   heroShade: { ...StyleSheet.absoluteFill, backgroundColor: "rgba(0,0,0,0.43)" },
-  heroCopy: { padding: 24, paddingBottom: 30 },
-  kicker: { color: colors.accent, letterSpacing: 4, fontSize: 12, fontWeight: "900", textTransform: "uppercase" },
-  heroTitle: { color: colors.text, fontSize: 54, lineHeight: 56, fontFamily: "serif", marginTop: 10 },
+  heroCopy: { padding: 26, paddingBottom: 88 },
+  kicker: { color: colors.accent, letterSpacing: 4, fontSize: 11, fontWeight: "900", textTransform: "uppercase" },
+  heroTitle: { color: colors.text, fontSize: 48, lineHeight: 50, fontFamily: "serif", marginTop: 10 },
   meta: { color: colors.text, fontSize: 13, fontWeight: "700", marginTop: 12 },
   heroOverview: { color: colors.text, fontSize: 16, lineHeight: 24, marginTop: 16, maxWidth: 620 },
   heroButton: { alignSelf: "flex-start", marginTop: 20, backgroundColor: colors.accent, borderRadius: 24, paddingHorizontal: 18, paddingVertical: 12, flexDirection: "row", alignItems: "center", gap: 8 },
   heroButtonText: { color: colors.text, fontWeight: "900" },
+  heroControls: { position: "absolute", right: 24, bottom: 28, flexDirection: "row", alignItems: "center", gap: 10 },
+  heroArrow: { width: 42, height: 42, borderRadius: 21, borderWidth: 1, borderColor: "rgba(255,255,255,0.25)", backgroundColor: "rgba(0,0,0,0.42)", alignItems: "center", justifyContent: "center" },
+  heroDots: { flexDirection: "row", alignItems: "center", gap: 6 },
+  heroDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: "rgba(255,255,255,0.34)" },
+  heroDotActive: { width: 20, backgroundColor: colors.accent },
   sectionTitle: { marginTop: 36, marginBottom: 14, paddingHorizontal: 18, flexDirection: "row", justifyContent: "space-between", alignItems: "flex-end", gap: 12 },
   sectionTitleCopy: { flex: 1 },
-  sectionHeading: { color: colors.text, fontSize: 42, lineHeight: 48, fontFamily: "serif" },
+  sectionHeading: { color: colors.text, fontSize: 38, lineHeight: 44, fontFamily: "serif" },
   sectionActionButton: { paddingHorizontal: 6, paddingVertical: 8 },
   sectionAction: { color: colors.muted, fontWeight: "900", fontSize: 15 },
   card: { width: "50%", paddingHorizontal: 10, marginBottom: 24, userSelect: "none" as never },
-  poster: { aspectRatio: 0.68, borderRadius: 18, overflow: "hidden", backgroundColor: colors.panel2, alignItems: "center", justifyContent: "center" },
+  poster: { aspectRatio: 0.68, borderRadius: 10, overflow: "hidden", backgroundColor: colors.panel2, alignItems: "center", justifyContent: "center" },
   posterImage: { width: "100%", height: "100%" },
   posterFallback: { color: colors.muted, textAlign: "center", padding: 18, fontSize: 17, fontWeight: "800" },
   menuDot: { position: "absolute", top: 10, left: 10, width: 42, height: 42, borderRadius: 21, backgroundColor: "rgba(0,0,0,0.55)", alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "rgba(255,255,255,0.2)" },
@@ -325,17 +398,17 @@ export const styles = StyleSheet.create({
   cardMetaRow: { flexDirection: "row", justifyContent: "space-between", gap: 8, marginTop: 4 },
   cardMeta: { color: colors.muted, fontSize: 15 },
   reason: { color: colors.muted, marginTop: 8, fontSize: 13, lineHeight: 18 },
-  filtersCard: { marginHorizontal: 18, marginTop: 18, padding: 14, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel, borderRadius: 26 },
-  filterGrid: { flexDirection: "row", flexWrap: "wrap", gap: 12 },
-  filterButton: { flex: 1, minWidth: "45%", minHeight: 76, borderWidth: 1, borderColor: colors.line, borderRadius: 18, paddingHorizontal: 12, flexDirection: "row", alignItems: "center", backgroundColor: colors.panel2 },
-  filterIcon: { width: 38, height: 38, borderRadius: 12, backgroundColor: colors.accentSoft, alignItems: "center", justifyContent: "center", marginRight: 12 },
+  filtersCard: { marginHorizontal: 18, marginTop: 10, padding: 12, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel, borderRadius: 22 },
+  filterGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
+  filterButton: { flex: 1, minWidth: "45%", minHeight: 66, borderWidth: 1, borderColor: colors.line, borderRadius: 16, paddingHorizontal: 10, flexDirection: "row", alignItems: "center", backgroundColor: colors.panel2 },
+  filterIcon: { width: 34, height: 34, borderRadius: 11, backgroundColor: colors.accentSoft, alignItems: "center", justifyContent: "center", marginRight: 10 },
   filterTextWrap: { flex: 1, minWidth: 0 },
   filterLabel: { color: colors.muted, fontSize: 12, fontWeight: "900" },
   filterValue: { color: colors.text, fontSize: 16, fontWeight: "900", marginTop: 2 },
-  yearBox: { marginTop: 16, borderTopWidth: 1, borderTopColor: colors.line, paddingTop: 16 },
+  yearBox: { marginTop: 14, borderTopWidth: 1, borderTopColor: colors.line, paddingTop: 14 },
   yearHeader: { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 10 },
   yearLabel: { color: colors.muted, fontSize: 18 },
-  yearInput: { height: 58, borderRadius: 16, borderWidth: 1, borderColor: colors.line, paddingHorizontal: 16, color: colors.text, fontSize: 19, backgroundColor: colors.panel2 },
+  yearInput: { height: 54, borderRadius: 15, borderWidth: 1, borderColor: colors.line, paddingHorizontal: 16, color: colors.text, fontSize: 18, backgroundColor: colors.panel2 },
   checkRow: { flexDirection: "row", gap: 10, marginTop: 14 },
   checkPill: { flex: 1, borderRadius: 16, backgroundColor: colors.panel2, padding: 14, flexDirection: "row", alignItems: "center", gap: 10 },
   checkText: { color: colors.text, fontWeight: "900", flex: 1 },
@@ -349,6 +422,11 @@ export const styles = StyleSheet.create({
   sheetOption: { minHeight: 58, borderRadius: 16, paddingHorizontal: 16, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   sheetOptionActive: { backgroundColor: colors.panel2 },
   sheetOptionText: { color: colors.text, fontSize: 20 },
+  sheetActions: { flexDirection: "row", gap: 10, padding: 8, paddingTop: 12 },
+  sheetSecondaryButton: { flex: 1, height: 48, borderRadius: 16, borderWidth: 1, borderColor: colors.line, alignItems: "center", justifyContent: "center" },
+  sheetSecondaryText: { color: colors.muted, fontWeight: "900" },
+  sheetPrimaryButton: { flex: 1, height: 48, borderRadius: 16, backgroundColor: colors.accent, alignItems: "center", justifyContent: "center" },
+  sheetPrimaryText: { color: colors.text, fontWeight: "900" },
   actionSheet: { position: "absolute", left: 14, right: 14, bottom: 100, borderRadius: 28, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.line, padding: 18, ...shadow },
   actionHeader: { flexDirection: "row", alignItems: "flex-start" },
   actionTitle: { color: colors.text, flex: 1, fontSize: 22, fontWeight: "900" },
@@ -360,3 +438,4 @@ export const styles = StyleSheet.create({
   actionDivider: { height: 1, backgroundColor: colors.line, marginVertical: 8 },
   dangerText: { color: colors.danger }
 });
+

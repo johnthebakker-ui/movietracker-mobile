@@ -8,6 +8,7 @@ export const HAS_SUPABASE = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 export const genres = [
   { value: "", label: "Every genre" },
   { value: "kdrama", label: "K-Drama" },
+  { value: "superhero", label: "Superhero" },
   { value: "28", label: "Action" },
   { value: "12", label: "Adventure" },
   { value: "16", label: "Animation" },
@@ -27,7 +28,8 @@ export const genres = [
 export const excludeGenreOptions = [
   { value: "anime", label: "Anime" },
   { value: "16", label: "Animation / cartoons" },
-  ...genres.filter(genre => genre.value && genre.value !== "kdrama" && genre.value !== "16")
+  { value: "superhero", label: "Superhero" },
+  ...genres.filter(genre => genre.value && !["kdrama", "superhero", "16"].includes(genre.value))
 ];
 
 export const countries = [
@@ -43,18 +45,25 @@ export const countries = [
 ];
 
 export function tmdbImage(path: string | null | undefined, size: "w342" | "w500" | "w780" | "original" = "w500") {
-  return path ? `https://image.tmdb.org/t/p/${size}${path}` : null;
+  if (!path) return null;
+  if (/^https?:\/\//i.test(path)) return path;
+  return `https://image.tmdb.org/t/p/${size}${path}`;
 }
 
 export function titleYear(item: Pick<MediaSummary, "releaseDate" | "endDate" | "kind" | "status">) {
   const start = item.releaseDate?.slice(0, 4);
   const end = item.endDate?.slice(0, 4);
-  if (item.kind === "show" && start && end && end !== start) return `${start}–${end} · Ended`;
-  if (item.kind === "show" && start && item.status?.toLowerCase().includes("return")) return `${start}–present`;
+  const status = item.status?.toLowerCase() ?? "";
+  if (item.kind === "show" && start && end && end !== start) return `${start}-${end} - Ended`;
+  if (item.kind === "show" && start && (status.includes("return") || status.includes("production"))) return `${start}-present`;
   return start || "TBA";
 }
 
 export function ratingLabel(item: MediaSummary) {
   if (typeof item.communityRating === "number" && item.communityRatingCount) return `${item.communityRating.toFixed(1)}/10`;
   return item.voteAverage ? `${item.voteAverage.toFixed(1)}/10` : "New";
+}
+
+export function userRatingLabel(item: MediaSummary) {
+  return typeof item.userRating === "number" ? `${item.userRating.toFixed(1)}/10` : null;
 }

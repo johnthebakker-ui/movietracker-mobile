@@ -20,8 +20,11 @@ export interface MediaSummary {
   voteCount: number;
   communityRating?: number | null;
   communityRatingCount?: number;
+  userRating?: number | null;
   popularity: number;
   genres: Genre[];
+  collectionTmdbId?: number | null;
+  collectionName?: string | null;
   originalLanguage?: string | null;
   originCountries?: string[];
   reason?: string;

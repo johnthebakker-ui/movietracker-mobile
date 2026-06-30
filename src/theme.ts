@@ -2,7 +2,7 @@ export const colors = {
   bg: "#060808",
   panel: "#111516",
   panel2: "#171c1e",
-  line: "#2a3033",
+  line: "rgba(255,255,255,0.10)",
   muted: "#9a9a9a",
   text: "#f6f2eb",
   accent: "#ff5638",

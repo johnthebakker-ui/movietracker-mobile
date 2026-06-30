@@ -7,6 +7,15 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
+    "androidStatusBar": {
+      "hidden": true,
+      "backgroundColor": "#050706",
+      "translucent": true
+    },
+    "androidNavigationBar": {
+      "backgroundColor": "#050706",
+      "barStyle": "light-content"
+    },
     "ios": {
       "supportsTablet": true
     },
