@@ -31,8 +31,8 @@ import { supabase } from "./src/supabase";
 import { colors } from "./src/theme";
 import type { AppTab, DiscoverFilters, FeedResult, MediaKind, MediaSummary, RecommendationFilters } from "./src/types";
 
-const initialDiscoverFilters: DiscoverFilters = { kind: "all", genre: "", country: "", year: "", sort: "popularity", excludeGenres: [], hideWatched: false, hideListed: false };
-const initialRecommendationFilters: RecommendationFilters = { kind: "all", genre: "", country: "", year: "", hideWatched: true, hideListed: true, excludeGenres: [] };
+const initialDiscoverFilters: DiscoverFilters = { kind: "all", genre: "", country: "", yearMode: "exact", year: "", fromYear: "", toYear: "", sort: "popularity", excludeGenres: [], hideWatched: false, hideListed: false };
+const initialRecommendationFilters: RecommendationFilters = { kind: "all", genre: "", country: "", yearMode: "exact", year: "", fromYear: "", toYear: "", hideWatched: true, hideListed: true, excludeGenres: [] };
 const emptyFeed: FeedResult = { items: [] };
 
 type PickerState = { title: string; value: string; options: Array<{ value: string; label: string }>; multiValues?: string[]; anchor?: PickerAnchor; onPick: (value: string) => void; onApply?: (values: string[]) => void } | null;
@@ -48,6 +48,7 @@ type ProfileView = "profile" | "recommendations" | "settings" | "history" | "rev
 type CalendarEvent = { id: string; date: string; title: string; subtitle: string; artwork: string | null; item?: MediaSummary | null; href?: string | null; episodeTarget?: EpisodeTarget | null };
 type EpisodeTarget = { episodeId?: number; show: MediaSummary; seasonNumber: number; episodeNumber: number; title?: string | null; airDate?: string | null; artwork?: string | null };
 type SeasonTarget = { show: MediaSummary; season: DetailSeason };
+type SeriesEpisodesTarget = { show: MediaSummary; seasons: DetailSeason[] };
 type EntityTarget =
   | { type: "person"; id: number; name: string; subtitle?: string | null; imagePath?: string | null }
   | { type: "company"; id: number; name: string; subtitle?: string | null; imagePath?: string | null };
@@ -190,6 +191,7 @@ export default function App() {
   const [selectedStack, setSelectedStack] = useState<MediaSummary[]>([]);
   const [selectedEpisode, setSelectedEpisode] = useState<EpisodeTarget | null>(null);
   const [selectedSeason, setSelectedSeason] = useState<SeasonTarget | null>(null);
+  const [selectedSeriesEpisodes, setSelectedSeriesEpisodes] = useState<SeriesEpisodesTarget | null>(null);
   const [selectedEntity, setSelectedEntity] = useState<EntityTarget | null>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -216,6 +218,7 @@ export default function App() {
     setSelectedStack([]);
     setSelectedEpisode(null);
     setSelectedSeason(null);
+    setSelectedSeriesEpisodes(null);
     setSelectedEntity(null);
     setSelectedList(null);
     setSearchMode(false);
@@ -229,6 +232,7 @@ export default function App() {
     setSelectedStack([]);
     setSelectedEpisode(null);
     setSelectedSeason(null);
+    setSelectedSeriesEpisodes(null);
     setSelectedEntity(null);
     setSelectedList(null);
     setSearchMode(false);
@@ -710,6 +714,7 @@ export default function App() {
     setActionItem(null);
     setSelectedEpisode(null);
     setSelectedSeason(null);
+    setSelectedSeriesEpisodes(null);
     setSelectedEntity(null);
     if (selected && (selected.kind !== item.kind || selected.id !== item.id)) setSelectedStack(current => [...current, selected]);
     setSelected(item);
@@ -951,6 +956,7 @@ export default function App() {
       setSelectedStack([]);
       setSelectedEntity(null);
       setSelectedSeason(null);
+      setSelectedSeriesEpisodes(null);
       setSelectedEpisode(event.episodeTarget);
       return;
     }
@@ -991,8 +997,8 @@ export default function App() {
           </>
         ) : null}
         {tab === "discover" ? (
-          <>
-            <DiscoverHeading onForYou={() => openProfileView("recommendations")} />
+            <>
+              <DiscoverHeading view={discoverFilters.view} onForYou={() => openProfileView("recommendations")} />
             <DiscoverFiltersCard filters={discoverFilters} onChange={setDiscoverFilters} onSelect={pickerHelpers.discover} />
             <View style={styles.afterFilters} />
           </>
@@ -1087,6 +1093,17 @@ export default function App() {
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={styles.root}>
         {selectedEntity ? (
           <EntityScreen target={selectedEntity} session={usableSession} onBack={() => setSelectedEntity(null)} onOpen={openItem} onMenu={setActionItem} />
+        ) : selectedEpisode ? (
+          <EpisodeDetailScreen target={selectedEpisode} session={usableSession} onBack={() => setSelectedEpisode(null)} onOpen={openItem} onOpenEntity={openEntity} />
+        ) : selectedSeriesEpisodes ? (
+          <SeriesEpisodesScreen target={selectedSeriesEpisodes} session={usableSession} onBack={() => setSelectedSeriesEpisodes(null)} onOpenSeason={season => setSelectedSeason({ show: selectedSeriesEpisodes.show, season })} onOpenEpisode={(season, episode) => setSelectedEpisode({
+            show: selectedSeriesEpisodes.show,
+            seasonNumber: season.seasonNumber,
+            episodeNumber: Number(episode.episode_number ?? episode.episodeNumber ?? 0),
+            title: episode.name ?? null,
+            airDate: episode.air_date ?? episode.airDate ?? null,
+            artwork: episode.still_path ?? episode.stillPath ?? selectedSeriesEpisodes.show.backdropPath ?? selectedSeriesEpisodes.show.posterPath
+          })} />
         ) : selectedSeason ? (
           <SeasonDetailScreen target={selectedSeason} session={usableSession} onBack={() => setSelectedSeason(null)} onOpenEpisode={episode => setSelectedEpisode({
             show: selectedSeason.show,
@@ -1096,10 +1113,8 @@ export default function App() {
             airDate: episode.air_date ?? episode.airDate ?? null,
             artwork: episode.still_path ?? episode.stillPath ?? selectedSeason.show.backdropPath ?? selectedSeason.show.posterPath
           })} />
-        ) : selectedEpisode ? (
-          <EpisodeDetailScreen target={selectedEpisode} session={usableSession} onBack={() => setSelectedEpisode(null)} onOpen={openItem} onOpenEntity={openEntity} />
         ) : selected ? (
-          <DetailScreenV2 key={`${selected.kind}-${selected.id}`} item={selected} session={usableSession} onBack={closeSelected} onOpen={openItem} onOpenEntity={openEntity} onOpenSeason={season => setSelectedSeason({ show: selected, season })} onHide={hideRecommendation} onChanged={loadActive} />
+          <DetailScreenV2 key={`${selected.kind}-${selected.id}`} item={selected} session={usableSession} onBack={closeSelected} onOpen={openItem} onOpenEntity={openEntity} onOpenSeason={season => setSelectedSeason({ show: selected, season })} onOpenAllSeasons={seasons => setSelectedSeriesEpisodes({ show: selected, seasons })} onHide={hideRecommendation} onChanged={loadActive} />
         ) : (
           <FlatList
             ref={listRef}
@@ -1195,12 +1210,19 @@ function SearchPanel({ query, onQuery, onSearch, onClear }: { query: string; onQ
   );
 }
 
-function DiscoverHeading({ onForYou }: { onForYou: () => void }) {
+function DiscoverHeading({ view, onForYou }: { view?: string; onForYou: () => void }) {
+  const heading = view === "trending"
+    ? { kicker: "Everyone is watching", title: "Trending now" }
+    : view === "films"
+      ? { kicker: "Fresh from the cinema", title: "New & upcoming films" }
+      : view === "series"
+        ? { kicker: "Stories worth settling into", title: "Series premieres" }
+        : { kicker: "Find your next obsession", title: "Discover" };
   return (
     <View style={styles.discoverHeading}>
       <View style={styles.discoverTitleCopy}>
-        <Text style={styles.kickerText}>Find your next obsession</Text>
-        <Text style={styles.discoverTitle}>Discover</Text>
+        <Text style={styles.kickerText}>{heading.kicker}</Text>
+        <Text style={styles.discoverTitle}>{heading.title}</Text>
       </View>
       <Pressable onPress={onForYou} style={styles.forYouButton}>
         <Ionicons name="sparkles-outline" size={18} color={colors.text} />
@@ -1261,9 +1283,11 @@ function LibraryFilters({ value, onChange }: { value: LibraryFilter; onChange: (
 
 function CalendarPanel({ mode, month, events, onMode, onMonth, onOpen }: { mode: CalendarMode; month: string; events: CalendarEvent[]; onMode: (mode: CalendarMode) => void; onMonth: (month: string) => void; onOpen: (event: CalendarEvent) => void }) {
   const { cells, label } = calendarCells(month);
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const eventsByDate = new Map<string, CalendarEvent[]>();
   events.forEach(event => eventsByDate.set(event.date, [...(eventsByDate.get(event.date) ?? []), event]));
-  const eventDays = [...eventsByDate.entries()].sort(([a], [b]) => a.localeCompare(b));
+  const eventDays = [...eventsByDate.entries()].sort(([a], [b]) => b.localeCompare(a));
+  const orderedEventDays = selectedDate ? [...eventDays].sort(([a], [b]) => a === selectedDate ? -1 : b === selectedDate ? 1 : 0) : eventDays;
   return (
     <View style={styles.calendarWrap}>
       <View style={styles.segmented}>
@@ -1281,16 +1305,16 @@ function CalendarPanel({ mode, month, events, onMode, onMonth, onOpen }: { mode:
           const count = date ? eventsByDate.get(date)?.length ?? 0 : 0;
           const today = date === new Date().toISOString().slice(0, 10);
           return (
-            <View key={date ?? `blank-${index}`} style={[styles.dayCell, !date && styles.blankDay, today && styles.todayCell]}>
+            <Pressable key={date ?? `blank-${index}`} disabled={!date || !count} onPress={() => date && setSelectedDate(date)} style={[styles.dayCell, !date && styles.blankDay, today && styles.todayCell, date === selectedDate && styles.selectedDayCell]}>
               {date ? <Text style={[styles.dayText, today && styles.todayText]}>{Number(date.slice(8, 10))}</Text> : null}
               {count ? <Text style={styles.dayCount}>{count}</Text> : null}
-            </View>
+            </Pressable>
           );
         })}
       </View>
       {eventDays.length ? (
         <View style={styles.agenda}>
-          {eventDays.map(([date, dayEvents]) => (
+          {orderedEventDays.map(([date, dayEvents]) => (
             <View key={date} style={styles.agendaDay}>
               <View style={styles.agendaHeader}><Text style={styles.agendaDate}>{formatCalendarDate(date)}</Text><Text style={styles.agendaCount}>{dayEvents.length}</Text></View>
               {dayEvents.map(event => <AgendaRow key={event.id} event={event} onOpen={onOpen} />)}
@@ -1365,6 +1389,7 @@ function ProfileHistorySection({ items, onOpen, onHistory }: { items: HistoryIte
 
 function FullHistoryPage({ data, onOpen, onBack, onRemove }: { data: ProfileData; onOpen: (item: MediaSummary) => void; onBack: () => void; onRemove: (id: string, title: string) => void }) {
   const items = data.history;
+  const [visibleGroups, setVisibleGroups] = useState(18);
   const groups = useMemo(() => {
     const grouped = new Map<string, HistoryItem[]>();
     items.forEach(item => {
@@ -1374,6 +1399,10 @@ function FullHistoryPage({ data, onOpen, onBack, onRemove }: { data: ProfileData
     });
     return [...grouped.entries()].map(([dateKey, dayItems]) => ({ dateKey, dateTitle: dayItems[0]?.dateTitle ?? "Unknown", dateSubtitle: dayItems[0]?.dateSubtitle ?? "Watched date not specified", items: dayItems }));
   }, [items]);
+  useEffect(() => {
+    setVisibleGroups(18);
+  }, [items]);
+  const visible = groups.slice(0, visibleGroups);
   return (
     <View style={styles.profileSection}>
       <SectionTitle kicker="Every play, kept in order" title="Watch history" action="Back to profile ->" onAction={onBack} />
@@ -1385,7 +1414,12 @@ function FullHistoryPage({ data, onOpen, onBack, onRemove }: { data: ProfileData
             <HistorySummary icon="film-outline" value={data.historyUniqueTitles} label="unique titles" last />
           </View>
           <View style={styles.historyTimeline}>
-            {groups.map(group => <MemoHistoryDay key={group.dateKey} group={group} onOpen={onOpen} onRemove={onRemove} />)}
+            {visible.map(group => <MemoHistoryDay key={group.dateKey} group={group} onOpen={onOpen} onRemove={onRemove} />)}
+            {visibleGroups < groups.length ? (
+              <Pressable onPress={() => setVisibleGroups(count => count + 18)} style={styles.historyLoadMore}>
+                <Text style={styles.historyLoadMoreText}>Load more history</Text>
+              </Pressable>
+            ) : null}
           </View>
         </>
       ) : <EmptyPanel title="No watch history yet" body="Your watched movies and episodes will appear here." />}
@@ -1533,6 +1567,8 @@ function SeasonDetailScreen({ target, session, onBack, onOpenEpisode }: { target
   const [payload, setPayload] = useState<any | null>(null);
   const [loadingSeason, setLoadingSeason] = useState(false);
   const [source, setSource] = useState<"tmdb" | "imdb">("tmdb");
+  const [busy, setBusy] = useState(false);
+  const [ratingSheetVisible, setRatingSheetVisible] = useState(false);
   const season = payload?.season ?? target.season;
   const episodes = [...(payload?.episodes ?? [])].sort((a, b) => Number(a.episode_number ?? a.episodeNumber ?? 0) - Number(b.episode_number ?? b.episodeNumber ?? 0));
   const imdbRatings = new Map<number, number | null>((payload?.imdbRatings ?? []).map((rating: any) => [Number(rating.episode), typeof rating.imdbRating === "number" ? rating.imdbRating : null]));
@@ -1557,6 +1593,61 @@ function SeasonDetailScreen({ target, session, onBack, onOpenEpisode }: { target
     return Number.isFinite(tmdbScore) && tmdbScore > 0 ? tmdbScore : null;
   }
 
+  async function refreshSeasonFeedback() {
+    const data = await fetchMobileSeason(target.show.id, target.season.seasonNumber, session?.access_token);
+    setPayload(data);
+  }
+
+  async function saveSeasonRating(score: number | null) {
+    if (!session?.user.id || !payload?.seasonId || !supabase) return Alert.alert("Sign in needed", "Sign in before rating seasons.");
+    setBusy(true);
+    try {
+      if (score == null) {
+        await supabase.from("ratings").delete().eq("user_id", session.user.id).eq("season_id", payload.seasonId);
+        setPayload((current: any) => current ? { ...current, userRating: null } : current);
+        return;
+      }
+      const nextScore = clampRating(score);
+      const { data: existing } = await supabase.from("ratings").select("id").eq("user_id", session.user.id).eq("season_id", payload.seasonId).maybeSingle();
+      const result = existing
+        ? await supabase.from("ratings").update({ score: nextScore, updated_at: new Date().toISOString() }).eq("id", existing.id)
+        : await supabase.from("ratings").insert({ user_id: session.user.id, season_id: payload.seasonId, score: nextScore });
+      if (result.error) throw result.error;
+      setPayload((current: any) => current ? { ...current, userRating: nextScore } : current);
+    } finally {
+      setBusy(false);
+      setRatingSheetVisible(false);
+    }
+  }
+
+  async function saveSeasonReview(values: { score: number | null; title: string; body: string; containsSpoilers: boolean }) {
+    if (!session?.user.id || !payload?.seasonId || !supabase) return Alert.alert("Sign in needed", "Sign in before reviewing seasons.");
+    setBusy(true);
+    try {
+      let ratingId: string | null = payload.myReview?.ratingId ?? null;
+      if (values.score != null) {
+        const nextScore = clampRating(values.score);
+        const { data: existing } = await supabase.from("ratings").select("id").eq("user_id", session.user.id).eq("season_id", payload.seasonId).maybeSingle();
+        const { data, error } = existing
+          ? await supabase.from("ratings").update({ score: nextScore, updated_at: new Date().toISOString() }).eq("id", existing.id).select("id").single()
+          : await supabase.from("ratings").insert({ user_id: session.user.id, season_id: payload.seasonId, score: nextScore }).select("id").single();
+        if (error) throw error;
+        ratingId = data?.id ?? ratingId;
+      }
+      const body = values.body.trim();
+      const title = values.title.trim();
+      const reviewPayload = { user_id: session.user.id, season_id: payload.seasonId, rating_id: ratingId, title: title || null, body: body || null, contains_spoilers: values.containsSpoilers, updated_at: new Date().toISOString() };
+      const { data: existingReview } = await supabase.from("reviews").select("id").eq("user_id", session.user.id).eq("season_id", payload.seasonId).maybeSingle();
+      const { error } = existingReview
+        ? await supabase.from("reviews").update(reviewPayload).eq("id", existingReview.id)
+        : await supabase.from("reviews").insert(reviewPayload);
+      if (error) throw error;
+      await refreshSeasonFeedback();
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <ScrollView contentContainerStyle={styles.detailContent}>
       <View style={styles.episodeHero}>
@@ -1573,6 +1664,16 @@ function SeasonDetailScreen({ target, session, onBack, onOpenEpisode }: { target
       </View>
       <View style={styles.detailBody}>
         <SectionTitle kicker="Season ratings" title="Episodes" />
+        <Pressable disabled={busy || !payload?.seasonId} onPress={() => setRatingSheetVisible(true)} style={styles.ratingAction}>
+          <Ionicons name="speedometer-outline" size={24} color="#ffc24b" />
+          <View style={styles.ratingActionCopy}>
+            <Text style={styles.ratingActionLabel}>Your season rating</Text>
+            <Text style={styles.ratingActionValue}>{payload?.userRating != null ? `${payload.userRating.toFixed(1)}/10` : "Rate this season"}</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color={colors.muted} />
+        </Pressable>
+        <RatingSheet visible={ratingSheetVisible} value={payload?.userRating ?? null} busy={busy} onClose={() => setRatingSheetVisible(false)} onSave={saveSeasonRating} />
+        {session?.user.id && payload?.seasonId ? <ReviewComposerPanel existingReview={payload.myReview} currentRating={payload.userRating} busy={busy} onSubmit={saveSeasonReview} /> : null}
         <View style={styles.sourceTabs}>
           <Pressable onPress={() => setSource("tmdb")} style={[styles.sourceTab, source === "tmdb" && styles.sourceTabActive]}><Text style={styles.sourceTabText}>TMDB</Text></Pressable>
           <Pressable disabled={!imdbAvailable} onPress={() => setSource("imdb")} style={[styles.sourceTab, source === "imdb" && styles.sourceTabActive, !imdbAvailable && styles.sourceTabDisabled]}><Text style={styles.sourceTabText}>IMDb</Text></Pressable>
@@ -1608,6 +1709,83 @@ function SeasonDetailScreen({ target, session, onBack, onOpenEpisode }: { target
           })}
         </View>
       </View>
+    </ScrollView>
+  );
+}
+
+function SeriesEpisodesScreen({ target, session, onBack, onOpenSeason, onOpenEpisode }: { target: SeriesEpisodesTarget; session: Session | null; onBack: () => void; onOpenSeason: (season: DetailSeason) => void; onOpenEpisode: (season: DetailSeason, episode: any) => void }) {
+  const [payloads, setPayloads] = useState<any[]>([]);
+  const [loadingAll, setLoadingAll] = useState(false);
+  const [source, setSource] = useState<"tmdb" | "imdb">("tmdb");
+  const seasons = useMemo(() => [...target.seasons].sort((a, b) => a.seasonNumber - b.seasonNumber), [target.seasons]);
+  const payloadBySeason = useMemo(() => new Map(payloads.map(payload => [Number(payload?.season?.season_number ?? payload?.season?.seasonNumber ?? payload?.seasonNumber ?? 0), payload])), [payloads]);
+  const hasImdb = payloads.some(payload => (payload?.imdbRatings ?? []).some((rating: any) => typeof rating.imdbRating === "number"));
+
+  useEffect(() => {
+    let alive = true;
+    setLoadingAll(true);
+    Promise.all(seasons.map(season => fetchMobileSeason(target.show.id, season.seasonNumber, session?.access_token).catch(() => ({ season, episodes: [], imdbRatings: [] }))))
+      .then(data => { if (alive) setPayloads(data); })
+      .finally(() => { if (alive) setLoadingAll(false); });
+    return () => { alive = false; };
+  }, [seasons, session?.access_token, target.show.id]);
+
+  function episodeScore(payload: any, episode: any): number | null {
+    const episodeNumber = Number(episode.episode_number ?? episode.episodeNumber ?? 0);
+    if (source === "imdb") {
+      const rating = (payload?.imdbRatings ?? []).find((item: any) => Number(item.episode) === episodeNumber);
+      return typeof rating?.imdbRating === "number" ? rating.imdbRating : null;
+    }
+    const tmdbScore = Number(episode.vote_average ?? episode.voteAverage);
+    return Number.isFinite(tmdbScore) && tmdbScore > 0 ? tmdbScore : null;
+  }
+
+  return (
+    <ScrollView contentContainerStyle={styles.detailContent}>
+      <View style={styles.entityHeader}>
+        <Pressable onPress={onBack} style={styles.backChip}><Ionicons name="chevron-back" size={18} color={colors.text} /><Text style={styles.backChipText}>Back</Text></Pressable>
+        <Text style={styles.detailKicker}>{target.show.title}</Text>
+        <Text style={styles.entityTitle}>All episodes & ratings</Text>
+      </View>
+      <View style={styles.sourceTabs}>
+        <Pressable onPress={() => setSource("tmdb")} style={[styles.sourceTab, source === "tmdb" && styles.sourceTabActive]}><Text style={styles.sourceTabText}>TMDB</Text></Pressable>
+        <Pressable disabled={!hasImdb} onPress={() => setSource("imdb")} style={[styles.sourceTab, source === "imdb" && styles.sourceTabActive, !hasImdb && styles.sourceTabDisabled]}><Text style={styles.sourceTabText}>IMDb</Text></Pressable>
+        <View style={[styles.sourceTab, styles.sourceTabDisabled]}><Text style={styles.sourceTabText}>Rotten Tomatoes</Text></View>
+      </View>
+      {loadingAll ? <ActivityIndicator color={colors.accent} style={{ marginVertical: 18 }} /> : null}
+      {seasons.map(season => {
+        const payload = payloadBySeason.get(season.seasonNumber);
+        const episodes = [...(payload?.episodes ?? [])].sort((a, b) => Number(a.episode_number ?? a.episodeNumber ?? 0) - Number(b.episode_number ?? b.episodeNumber ?? 0));
+        return (
+          <View key={`${season.id ?? season.seasonNumber}`} style={styles.detailSection}>
+            <SectionTitle kicker={`Season ${season.seasonNumber}`} title={season.name || `Season ${season.seasonNumber}`} action="Open season ->" onAction={() => onOpenSeason(season)} />
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.seasonEpisodeGrid}>
+              {episodes.map(episode => {
+                const episodeNumber = Number(episode.episode_number ?? episode.episodeNumber ?? 0);
+                const score = episodeScore(payload, episode);
+                return <Pressable key={`${season.seasonNumber}-${episode.id ?? episodeNumber}`} onPress={() => onOpenEpisode(season, episode)} style={styles.seasonEpisodeCell}><Text style={styles.seasonEpisodeCode}>E{episodeNumber}</Text><Text style={styles.seasonEpisodeScore}>{score != null ? score.toFixed(1) : "-"}</Text></Pressable>;
+              })}
+            </ScrollView>
+            <View style={styles.seasonList}>
+              {episodes.map(episode => {
+                const still = tmdbImage(episode.still_path ?? episode.stillPath, "w342");
+                const episodeNumber = Number(episode.episode_number ?? episode.episodeNumber ?? 0);
+                return (
+                  <Pressable key={`row-${season.seasonNumber}-${episode.id ?? episodeNumber}`} onPress={() => onOpenEpisode(season, episode)} style={styles.seasonCard}>
+                    {still ? <Image source={{ uri: still }} style={styles.seasonPoster} resizeMode="cover" /> : <View style={styles.seasonPoster}><Ionicons name="film-outline" size={20} color={colors.muted} /></View>}
+                    <View style={styles.seasonCopy}>
+                      <Text style={styles.seasonName} numberOfLines={1}>E{episodeNumber} - {episode.name ?? "Episode"}</Text>
+                      <Text style={styles.seasonMeta}>{episode.air_date ?? "Air date TBA"}{episode.runtime ? ` - ${episode.runtime} min` : ""}</Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={18} color={colors.muted} />
+                  </Pressable>
+                );
+              })}
+              {!episodes.length && !loadingAll ? <Text style={styles.mutedBody}>No episodes loaded for this season.</Text> : null}
+            </View>
+          </View>
+        );
+      })}
     </ScrollView>
   );
 }
@@ -1652,12 +1830,22 @@ function groupedListItems(items: MediaSummary[], groupBy: ListGroup) {
   if (groupBy === "none") return [{ title: "Titles", items }];
   const groups = new Map<string, MediaSummary[]>();
   if (groupBy === "collections") {
+    const explicitGroups = new Set<string>();
     const other: MediaSummary[] = [];
     ordered.forEach(item => {
       const key = listFranchiseName(item);
-      if (key) groups.set(key, [...(groups.get(key) ?? []), item]);
+      if (key) {
+        if (key.explicit) explicitGroups.add(key.name);
+        groups.set(key.name, [...(groups.get(key.name) ?? []), item]);
+      }
       else other.push(item);
     });
+    for (const [name, groupItems] of groups.entries()) {
+      if (groupItems.length < 2 && !explicitGroups.has(name)) {
+        groups.delete(name);
+        other.push(...groupItems);
+      }
+    }
     if (other.length) groups.set("Other titles", other);
   } else {
     ordered.forEach(item => listStudioNames(item).forEach(name => groups.set(name, [...(groups.get(name) ?? []), item])));
@@ -1667,15 +1855,15 @@ function groupedListItems(items: MediaSummary[], groupBy: ListGroup) {
     .sort((a, b) => (a.title.startsWith("Other") ? 1 : b.title.startsWith("Other") ? -1 : a.title.localeCompare(b.title)));
 }
 
-function listFranchiseName(item: MediaSummary) {
-  if (item.collectionName) return item.collectionName;
+function listFranchiseName(item: MediaSummary): { name: string; explicit: boolean } | null {
+  if (item.collectionName) return { name: item.collectionName, explicit: false };
   const title = item.title.toLowerCase().replace(/[-_]/g, " ");
-  if (title.includes("attack on titan")) return "Attack on Titan Collection";
-  if (title.includes("chainsaw man")) return "Chainsaw Man Collection";
-  if ((title.includes("avatar") && title.includes("last airbender")) || title.includes("legend of korra")) return "Avatar: The Last Airbender Collection";
-  if (title.includes("wreck it ralph") || title.includes("ralph breaks the internet")) return "Wreck-It Ralph Collection";
-  if (title.includes("incredibles")) return "The Incredibles Collection";
-  if (title.includes("ice age")) return "Ice Age Collection";
+  if (title.includes("attack on titan")) return { name: "Attack on Titan Collection", explicit: true };
+  if (title.includes("chainsaw man")) return { name: "Chainsaw Man Collection", explicit: true };
+  if ((title.includes("avatar") && title.includes("last airbender")) || title.includes("legend of korra")) return { name: "Avatar: The Last Airbender Collection", explicit: true };
+  if (title.includes("wreck it ralph") || title.includes("ralph breaks the internet")) return { name: "Wreck-It Ralph Collection", explicit: true };
+  if (title.includes("incredibles")) return { name: "The Incredibles Collection", explicit: true };
+  if (title.includes("ice age")) return { name: "Ice Age Collection", explicit: true };
   return null;
 }
 
@@ -2192,7 +2380,7 @@ function EntityScreen({ target, session, onBack, onOpen, onMenu }: { target: Ent
   );
 }
 
-function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSeason, onHide, onChanged }: { item: MediaSummary; session: Session | null; onBack: () => void; onOpen: (item: MediaSummary) => void; onOpenEntity: (entity: EntityTarget) => void; onOpenSeason: (season: DetailSeason) => void; onHide: (item: MediaSummary) => void; onChanged: () => Promise<void> }) {
+function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSeason, onOpenAllSeasons, onHide, onChanged }: { item: MediaSummary; session: Session | null; onBack: () => void; onOpen: (item: MediaSummary) => void; onOpenEntity: (entity: EntityTarget) => void; onOpenSeason: (season: DetailSeason) => void; onOpenAllSeasons: (seasons: DetailSeason[]) => void; onHide: (item: MediaSummary) => void; onChanged: () => Promise<void> }) {
   const [detail, setDetail] = useState<DetailData | null>(null);
   const [busy, setBusy] = useState(false);
   const [listsExpanded, setListsExpanded] = useState(false);
@@ -2486,7 +2674,7 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
         </View>
         <RatingSheet visible={ratingSheetVisible} value={detail?.userRating ?? null} busy={busy} onClose={() => setRatingSheetVisible(false)} onSave={saveUserRating} />
         <View style={styles.factGrid}><Fact label="Released" value={detail?.releaseDate || item.releaseDate || "TBA"} /><Fact label={director?.job ?? "Director"} value={director?.name ?? "TBA"} /><Fact label="Original language" value={(detail?.originalLanguage || item.originalLanguage || "Unknown").toUpperCase()} /><Fact label="Genres" value={detailGenres.map(genre => genre.name).join(", ") || "Unknown"} /></View>
-        {item.kind === "show" && detail?.seasons.length ? <SeasonsSection seasons={detail.seasons} onOpenSeason={onOpenSeason} /> : null}
+        {item.kind === "show" && detail?.seasons.length ? <SeasonsSection seasons={detail.seasons} onOpenSeason={onOpenSeason} onOpenAllSeasons={onOpenAllSeasons} /> : null}
         {detail?.images.length || trailer ? <TitleMediaPreview trailer={trailer} images={detail?.images ?? []} /> : null}
         {detail?.cast.length ? <CastSection cast={detail.cast} onOpen={onOpenEntity} /> : null}
         {detail?.companies.length ? <CompanySection companies={detail.companies} onOpen={onOpenEntity} /> : null}
@@ -2547,10 +2735,10 @@ function mapTargetReview(review: any, item: MediaSummary, label: "season" | "epi
   }];
 }
 
-function SeasonsSection({ seasons, onOpenSeason }: { seasons: DetailSeason[]; onOpenSeason: (season: DetailSeason) => void }) {
+function SeasonsSection({ seasons, onOpenSeason, onOpenAllSeasons }: { seasons: DetailSeason[]; onOpenSeason: (season: DetailSeason) => void; onOpenAllSeasons: (seasons: DetailSeason[]) => void }) {
   return (
     <View style={styles.detailSection}>
-      <SectionTitle kicker="The full story" title="Seasons & episodes" action="All episodes & ratings ->" onAction={() => seasons[0] && onOpenSeason(seasons[0])} />
+      <SectionTitle kicker="The full story" title="Seasons & episodes" action="All episodes & ratings ->" onAction={() => onOpenAllSeasons(seasons)} />
       <View style={styles.seasonList}>
         {seasons.map(season => {
           const poster = tmdbImage(season.posterPath, "w342");
@@ -3314,6 +3502,7 @@ const styles = StyleSheet.create({
   todayCell: { backgroundColor: colors.accent },
   dayText: { color: colors.text, fontSize: 13, fontWeight: "900" },
   todayText: { color: colors.text },
+  selectedDayCell: { borderColor: colors.accent },
   dayCount: { position: "absolute", right: 3, bottom: 3, minWidth: 15, height: 15, borderRadius: 8, overflow: "hidden", backgroundColor: "rgba(0,0,0,0.72)", color: colors.text, textAlign: "center", fontSize: 9, fontWeight: "900" },
   agenda: { marginHorizontal: 18, marginTop: 22, gap: 18 },
   agendaDay: { gap: 7 },
@@ -3351,6 +3540,8 @@ const styles = StyleSheet.create({
   historySummaryValue: { color: colors.text, fontFamily: "serif", fontSize: 28, fontWeight: "700" },
   historySummaryLabel: { color: colors.muted, fontSize: 11, fontWeight: "800" },
   historyTimeline: { gap: 26, paddingHorizontal: 18 },
+  historyLoadMore: { minHeight: 48, borderRadius: 14, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel, alignItems: "center", justifyContent: "center" },
+  historyLoadMoreText: { color: colors.text, fontSize: 14, fontWeight: "900" },
   historyDay: { gap: 10 },
   historyDayDate: { gap: 2 },
   historyDayTitle: { color: colors.text, fontSize: 18, fontWeight: "900" },
@@ -3636,6 +3827,7 @@ const styles = StyleSheet.create({
   sourceTabActive: { borderColor: colors.accent, backgroundColor: "rgba(255,84,57,0.18)" },
   sourceTabDisabled: { opacity: 0.42 },
   sourceTabText: { color: colors.text, fontWeight: "900" },
+  mutedBody: { color: colors.muted, fontSize: 13, lineHeight: 20, paddingHorizontal: 18 },
   seasonEpisodeGrid: { paddingHorizontal: 18, paddingVertical: 14, gap: 8 },
   seasonEpisodeCell: { width: 62, height: 54, borderRadius: 9, backgroundColor: "#f5c20b", alignItems: "center", justifyContent: "center" },
   seasonEpisodeCode: { color: "#1d1705", fontSize: 11, fontWeight: "900" },

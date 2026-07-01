@@ -44,7 +44,10 @@ export interface DiscoverFilters {
   kind: "all" | MediaKind;
   genre: string;
   country: string;
+  yearMode?: "exact" | "range";
   year: string;
+  fromYear?: string;
+  toYear?: string;
   sort: "popularity" | "rating" | "newest";
   excludeGenres: string[];
   hideWatched: boolean;
@@ -56,7 +59,10 @@ export interface RecommendationFilters {
   kind: "all" | MediaKind;
   genre: string;
   country: string;
+  yearMode?: "exact" | "range";
   year: string;
+  fromYear?: string;
+  toYear?: string;
   hideWatched: boolean;
   hideListed: boolean;
   excludeGenres: string[];

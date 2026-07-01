@@ -69,6 +69,10 @@ export type MobileSeasonPayload = {
   show: MediaSummary;
   mediaId: number | null;
   seasonId: number | null;
+  userRating: number | null;
+  communityRating: number | null;
+  reviews: any[];
+  myReview: any | null;
   season: any;
   episodes: any[];
   imdbRatings: Array<{ episode: number; title: string; released?: string; imdbRating: number | null; imdbId?: string }>;
@@ -122,12 +126,15 @@ function normalizeRecommendations(data: { items?: Array<{ item?: MediaSummary; r
 }
 
 export async function fetchDiscover(filters: DiscoverFilters, page = 1, token?: string): Promise<FeedResult> {
+  const yearMode = filters.yearMode === "range" ? "range" : "exact";
   const query = queryString({
     kind: filters.kind,
     genre: filters.genre,
     country: filters.genre === "kdrama" ? undefined : filters.country,
-    yearMode: filters.year ? "exact" : undefined,
-    year: filters.year,
+    yearMode: yearMode === "range" || filters.year ? yearMode : undefined,
+    year: yearMode === "exact" ? filters.year : undefined,
+    fromYear: yearMode === "range" ? filters.fromYear : undefined,
+    toYear: yearMode === "range" ? filters.toYear : undefined,
     excludeGenres: filters.excludeGenres.join(","),
     sort: filters.sort === "rating" ? "vote_average.desc" : filters.sort === "newest" ? "newest" : "popularity.desc",
     hideWatched: filters.hideWatched ? "1" : "0",
@@ -150,11 +157,15 @@ export async function fetchWebsiteHome(): Promise<HomePayload> {
 }
 
 export async function fetchRecommendations(filters: RecommendationFilters, token: string, cursor = 0): Promise<FeedResult> {
+  const yearMode = filters.yearMode === "range" ? "range" : "exact";
   const query = queryString({
     kind: filters.kind === "all" ? undefined : filters.kind,
     genre: filters.genre,
     country: filters.genre === "kdrama" ? undefined : filters.country,
-    year: filters.year,
+    yearMode: yearMode === "range" || filters.year ? yearMode : undefined,
+    year: yearMode === "exact" ? filters.year : undefined,
+    fromYear: yearMode === "range" ? filters.fromYear : undefined,
+    toYear: yearMode === "range" ? filters.toYear : undefined,
     excludeGenres: filters.excludeGenres.join(","),
     hideWatched: filters.hideWatched ? "1" : "0",
     hideListed: filters.hideListed ? "1" : "0",

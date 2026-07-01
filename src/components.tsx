@@ -209,13 +209,13 @@ export function DiscoverFiltersCard({ filters, onChange, onSelect }: { filters: 
         <FilterButton icon="chevron-down" label="Sort by" value={filters.sort === "rating" ? "Highest rated" : filters.sort === "newest" ? "Newest releases" : "Most popular"} onPress={anchor => onSelect("sort", anchor)} />
         <FilterButton icon="ban-outline" label="Exclude genres" value={excludedLabel} onPress={anchor => onSelect("excludeGenres", anchor)} />
       </View>
-      <View style={styles.yearBox}>
-        <View style={styles.yearHeader}>
-          <Ionicons name="calendar-outline" size={21} color={colors.text} />
-          <Text style={styles.yearLabel}>Release year</Text>
-        </View>
-        <TextInput value={filters.year} onChangeText={year => onChange({ ...filters, year: year.replace(/\D/g, "").slice(0, 4) })} placeholder="e.g. 2024" placeholderTextColor="#6f7477" keyboardType="number-pad" style={styles.yearInput} />
-      </View>
+      <YearFilter
+        mode={filters.yearMode ?? "exact"}
+        year={filters.year}
+        fromYear={filters.fromYear ?? ""}
+        toYear={filters.toYear ?? ""}
+        onChange={values => onChange({ ...filters, ...values })}
+      />
       <View style={styles.checkRow}>
         <CheckPill label="Hide watched" checked={filters.hideWatched} onPress={() => onChange({ ...filters, hideWatched: !filters.hideWatched })} />
         <CheckPill label="Hide titles in my lists" checked={filters.hideListed} onPress={() => onChange({ ...filters, hideListed: !filters.hideListed })} />
@@ -237,13 +237,13 @@ export function RecommendationFiltersCard({ filters, onChange, onSelect, onRefre
         <FilterButton icon="earth-outline" label="Country" value={countries.find(c => c.value === filters.country)?.label || "Every country"} onPress={anchor => onSelect("country", anchor)} />
         <FilterButton icon="ban-outline" label="Exclude genres" value={excludedLabel} onPress={anchor => onSelect("excludeGenres", anchor)} />
       </View>
-      <View style={styles.yearBox}>
-        <View style={styles.yearHeader}>
-          <Ionicons name="calendar-outline" size={21} color={colors.text} />
-          <Text style={styles.yearLabel}>Release year</Text>
-        </View>
-        <TextInput value={filters.year} onChangeText={year => onChange({ ...filters, year: year.replace(/\D/g, "").slice(0, 4) })} placeholder="e.g. 2024" placeholderTextColor="#6f7477" keyboardType="number-pad" style={styles.yearInput} />
-      </View>
+      <YearFilter
+        mode={filters.yearMode ?? "exact"}
+        year={filters.year}
+        fromYear={filters.fromYear ?? ""}
+        toYear={filters.toYear ?? ""}
+        onChange={values => onChange({ ...filters, ...values })}
+      />
       <View style={styles.checkRow}>
         <CheckPill label="Hide watched" checked={filters.hideWatched} onPress={() => onChange({ ...filters, hideWatched: !filters.hideWatched })} />
         <CheckPill label="Hide titles in my lists" checked={filters.hideListed} onPress={() => onChange({ ...filters, hideListed: !filters.hideListed })} />
@@ -262,6 +262,33 @@ function CheckPill({ label, checked, onPress }: { label: string; checked: boolea
       <Ionicons name={checked ? "checkbox" : "square-outline"} size={24} color={checked ? colors.accent : colors.text} />
       <Text style={styles.checkText}>{label}</Text>
     </Pressable>
+  );
+}
+
+function YearFilter({ mode, year, fromYear, toYear, onChange }: { mode: "exact" | "range"; year: string; fromYear: string; toYear: string; onChange: (values: { yearMode?: "exact" | "range"; year?: string; fromYear?: string; toYear?: string }) => void }) {
+  const sanitize = (value: string) => value.replace(/\D/g, "").slice(0, 4);
+  return (
+    <View style={styles.yearBox}>
+      <View style={styles.yearHeader}>
+        <View style={styles.yearHeadingCopy}>
+          <Ionicons name="calendar-outline" size={20} color={colors.text} />
+          <Text style={styles.yearLabel}>Release year</Text>
+        </View>
+        <View style={styles.yearModeRow}>
+          <Pressable onPress={() => onChange({ yearMode: "exact" })} style={[styles.yearModePill, mode !== "range" && styles.yearModePillActive]}><Text style={styles.yearModeText}>Exact</Text></Pressable>
+          <Pressable onPress={() => onChange({ yearMode: "range" })} style={[styles.yearModePill, mode === "range" && styles.yearModePillActive]}><Text style={styles.yearModeText}>Range</Text></Pressable>
+        </View>
+      </View>
+      {mode === "range" ? (
+        <View style={styles.yearRangeRow}>
+          <TextInput value={fromYear} onChangeText={value => onChange({ fromYear: sanitize(value) })} placeholder="From" placeholderTextColor="#6f7477" keyboardType="number-pad" style={[styles.yearInput, styles.yearRangeInput]} />
+          <Text style={styles.yearRangeTo}>to</Text>
+          <TextInput value={toYear} onChangeText={value => onChange({ toYear: sanitize(value) })} placeholder="To" placeholderTextColor="#6f7477" keyboardType="number-pad" style={[styles.yearInput, styles.yearRangeInput]} />
+        </View>
+      ) : (
+        <TextInput value={year} onChangeText={value => onChange({ year: sanitize(value) })} placeholder="e.g. 2024" placeholderTextColor="#6f7477" keyboardType="number-pad" style={styles.yearInput} />
+      )}
+    </View>
   );
 }
 
@@ -361,8 +388,8 @@ function ActionRow({ icon, label, danger, onPress }: { icon: keyof typeof Ionico
 
 export const styles = StyleSheet.create({
   header: { height: 82, paddingHorizontal: 18, paddingTop: 22, borderBottomWidth: 1, borderBottomColor: colors.line, flexDirection: "row", alignItems: "center", backgroundColor: "#080a0a" },
-  logoDot: { width: 42, height: 42, borderRadius: 21, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel2, alignItems: "center", justifyContent: "center", overflow: "hidden" },
-  logoImage: { width: 38, height: 38 },
+  logoDot: { width: 42, height: 42, borderRadius: 21, backgroundColor: colors.accent, alignItems: "center", justifyContent: "center", overflow: "hidden" },
+  logoImage: { width: 39, height: 39, transform: [{ translateX: -1 }] },
   logoText: { color: colors.text, fontSize: 24, fontWeight: "900", marginLeft: 10, letterSpacing: -0.8 },
   headerSpacer: { flex: 1 },
   headerButton: { width: 44, height: 44, borderRadius: 22, borderWidth: 1, borderColor: colors.line, alignItems: "center", justifyContent: "center", marginLeft: 8, backgroundColor: "rgba(14,18,19,0.86)" },
@@ -411,13 +438,21 @@ export const styles = StyleSheet.create({
   filterTextWrap: { flex: 1, minWidth: 0 },
   filterLabel: { color: colors.muted, fontSize: 12, fontWeight: "900" },
   filterValue: { color: colors.text, fontSize: 16, fontWeight: "900", marginTop: 2 },
-  yearBox: { marginTop: 14, borderTopWidth: 1, borderTopColor: colors.line, paddingTop: 14 },
-  yearHeader: { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 10 },
+  yearBox: { marginTop: 12, borderTopWidth: 1, borderTopColor: colors.line, paddingTop: 12 },
+  yearHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 10 },
+  yearHeadingCopy: { flexDirection: "row", alignItems: "center", gap: 9, minWidth: 0 },
   yearLabel: { color: colors.muted, fontSize: 18 },
-  yearInput: { height: 54, borderRadius: 15, borderWidth: 1, borderColor: colors.line, paddingHorizontal: 16, color: colors.text, fontSize: 18, backgroundColor: colors.panel2 },
-  checkRow: { flexDirection: "row", gap: 10, marginTop: 14 },
-  checkPill: { flex: 1, borderRadius: 16, backgroundColor: colors.panel2, padding: 14, flexDirection: "row", alignItems: "center", gap: 10 },
-  checkText: { color: colors.text, fontWeight: "900", flex: 1 },
+  yearModeRow: { flexDirection: "row", padding: 4, borderRadius: 12, backgroundColor: colors.panel2 },
+  yearModePill: { minHeight: 30, paddingHorizontal: 10, borderRadius: 9, alignItems: "center", justifyContent: "center" },
+  yearModePillActive: { backgroundColor: colors.accent },
+  yearModeText: { color: colors.text, fontSize: 12, fontWeight: "900" },
+  yearInput: { height: 48, borderRadius: 13, borderWidth: 1, borderColor: colors.line, paddingHorizontal: 14, color: colors.text, fontSize: 16, backgroundColor: colors.panel2 },
+  yearRangeRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  yearRangeInput: { flex: 1 },
+  yearRangeTo: { color: colors.muted, fontSize: 13, fontWeight: "800" },
+  checkRow: { flexDirection: "row", gap: 8, marginTop: 10 },
+  checkPill: { flex: 1, minHeight: 48, borderRadius: 13, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel2, paddingHorizontal: 11, paddingVertical: 9, flexDirection: "row", alignItems: "center", gap: 8 },
+  checkText: { color: colors.text, fontSize: 13, fontWeight: "900", flex: 1 },
   primaryButton: { marginTop: 16, height: 60, borderRadius: 22, alignItems: "center", justifyContent: "center", backgroundColor: colors.accent, flexDirection: "row", gap: 8 },
   primaryButtonText: { color: colors.text, fontSize: 18, fontWeight: "900" },
   modalScrim: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)" },
