@@ -1096,7 +1096,10 @@ export default function App() {
         ) : selectedEpisode ? (
           <EpisodeDetailScreen target={selectedEpisode} session={usableSession} onBack={() => setSelectedEpisode(null)} onOpen={openItem} onOpenEntity={openEntity} />
         ) : selectedSeriesEpisodes ? (
-          <SeriesEpisodesScreen target={selectedSeriesEpisodes} session={usableSession} onBack={() => setSelectedSeriesEpisodes(null)} onOpenSeason={season => setSelectedSeason({ show: selectedSeriesEpisodes.show, season })} onOpenEpisode={(season, episode) => setSelectedEpisode({
+          <SeriesEpisodesScreen target={selectedSeriesEpisodes} session={usableSession} onBack={() => setSelectedSeriesEpisodes(null)} onOpenSeason={season => {
+            setSelectedSeriesEpisodes(null);
+            setSelectedSeason({ show: selectedSeriesEpisodes.show, season });
+          }} onOpenEpisode={(season, episode) => setSelectedEpisode({
             show: selectedSeriesEpisodes.show,
             seasonNumber: season.seasonNumber,
             episodeNumber: Number(episode.episode_number ?? episode.episodeNumber ?? 0),
@@ -1402,6 +1405,11 @@ function FullHistoryPage({ data, onOpen, onBack, onRemove }: { data: ProfileData
   useEffect(() => {
     setVisibleGroups(18);
   }, [items]);
+  useEffect(() => {
+    if (!items.length || visibleGroups >= groups.length) return;
+    const timer = setTimeout(() => setVisibleGroups(count => Math.min(count + 12, groups.length)), 180);
+    return () => clearTimeout(timer);
+  }, [groups.length, items.length, visibleGroups]);
   const visible = groups.slice(0, visibleGroups);
   return (
     <View style={styles.profileSection}>
@@ -1415,11 +1423,6 @@ function FullHistoryPage({ data, onOpen, onBack, onRemove }: { data: ProfileData
           </View>
           <View style={styles.historyTimeline}>
             {visible.map(group => <MemoHistoryDay key={group.dateKey} group={group} onOpen={onOpen} onRemove={onRemove} />)}
-            {visibleGroups < groups.length ? (
-              <Pressable onPress={() => setVisibleGroups(count => count + 18)} style={styles.historyLoadMore}>
-                <Text style={styles.historyLoadMoreText}>Load more history</Text>
-              </Pressable>
-            ) : null}
           </View>
         </>
       ) : <EmptyPanel title="No watch history yet" body="Your watched movies and episodes will appear here." />}
@@ -1864,6 +1867,8 @@ function listFranchiseName(item: MediaSummary): { name: string; explicit: boolea
   if (title.includes("wreck it ralph") || title.includes("ralph breaks the internet")) return { name: "Wreck-It Ralph Collection", explicit: true };
   if (title.includes("incredibles")) return { name: "The Incredibles Collection", explicit: true };
   if (title.includes("ice age")) return { name: "Ice Age Collection", explicit: true };
+  if (title.includes("madagascar")) return { name: "Madagascar Collection", explicit: true };
+  if (title.includes("big hero 6")) return { name: "Big Hero 6 Collection", explicit: true };
   return null;
 }
 

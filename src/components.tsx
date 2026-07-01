@@ -389,7 +389,7 @@ function ActionRow({ icon, label, danger, onPress }: { icon: keyof typeof Ionico
 export const styles = StyleSheet.create({
   header: { height: 82, paddingHorizontal: 18, paddingTop: 22, borderBottomWidth: 1, borderBottomColor: colors.line, flexDirection: "row", alignItems: "center", backgroundColor: "#080a0a" },
   logoDot: { width: 42, height: 42, borderRadius: 21, backgroundColor: colors.accent, alignItems: "center", justifyContent: "center", overflow: "hidden" },
-  logoImage: { width: 39, height: 39, transform: [{ translateX: -1 }] },
+  logoImage: { width: 39, height: 39 },
   logoText: { color: colors.text, fontSize: 24, fontWeight: "900", marginLeft: 10, letterSpacing: -0.8 },
   headerSpacer: { flex: 1 },
   headerButton: { width: 44, height: 44, borderRadius: 22, borderWidth: 1, borderColor: colors.line, alignItems: "center", justifyContent: "center", marginLeft: 8, backgroundColor: "rgba(14,18,19,0.86)" },
