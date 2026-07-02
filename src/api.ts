@@ -145,6 +145,11 @@ export async function fetchDiscover(filters: DiscoverFilters, page = 1, token?: 
   return request<FeedResult>(`/api/discover?${query}`, token);
 }
 
+export async function fetchSearch(query: string, token?: string): Promise<FeedResult> {
+  const params = queryString({ q: query });
+  return request<FeedResult>(`/api/mobile/search?${params}`, token);
+}
+
 export async function fetchWebsiteHome(): Promise<HomePayload> {
   const html = await requestText("/");
   const hero = extractHeroItems(html);

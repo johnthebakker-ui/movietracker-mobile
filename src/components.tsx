@@ -19,6 +19,21 @@ const tabIcons: Record<AppTab, keyof typeof Ionicons.glyphMap> = {
 
 export type PickerAnchor = { x: number; y: number; width: number; height: number };
 
+export function RemoteImage({ uri, style, resizeMode = "cover" }: { uri: string; style: any; resizeMode?: "cover" | "contain" | "stretch" | "repeat" | "center" }) {
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => setAttempt(0), [uri]);
+  const retryUri = attempt ? `${uri}${uri.includes("?") ? "&" : "?"}retry=${attempt}` : uri;
+  return (
+    <Image
+      key={`${uri}-${attempt}`}
+      source={{ uri: retryUri }}
+      style={style}
+      resizeMode={resizeMode}
+      onError={() => setAttempt(value => (value < 2 ? value + 1 : value))}
+    />
+  );
+}
+
 export function AppHeader({ session, onProfile, onSearch, onNotifications }: { session: Session | null; onProfile: () => void; onSearch: () => void; onNotifications?: () => void }) {
   const avatarUrl = (session?.user.user_metadata?.avatar_url || session?.user.user_metadata?.picture) as string | undefined;
 
@@ -87,7 +102,7 @@ export function Hero({ item, index, count, onOpen, onPrevious, onNext }: { item:
   const backdrop = tmdbImage(item.backdropPath || item.posterPath, "w780");
   return (
     <View style={styles.hero}>
-      {backdrop ? <Image source={{ uri: backdrop }} style={StyleSheet.absoluteFill} resizeMode="cover" /> : null}
+      {backdrop ? <RemoteImage uri={backdrop} style={StyleSheet.absoluteFill} resizeMode="cover" /> : null}
       <View style={styles.heroShade} />
       <View style={styles.heroCopy}>
         <Text style={styles.kicker}>THIS WEEK'S ESSENTIAL WATCHES{count ? ` · ${(index ?? 0) + 1} OF ${count}` : ""}</Text>
@@ -155,7 +170,7 @@ export function TitleCard({ item, onOpen, onMenu }: { item: MediaSummary; onOpen
       style={styles.card}
     >
       <View style={styles.poster}>
-        {image ? <Image source={{ uri: image }} style={styles.posterImage} resizeMode="cover" /> : <Text style={styles.posterFallback}>{item.title}</Text>}
+        {image ? <RemoteImage uri={image} style={styles.posterImage} resizeMode="cover" /> : <Text style={styles.posterFallback}>{item.title}</Text>}
         <Pressable onPress={() => onMenu(item)} style={styles.menuDot} hitSlop={10}>
           <Ionicons name="ellipsis-vertical" size={22} color={colors.text} />
         </Pressable>

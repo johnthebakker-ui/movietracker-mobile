@@ -24,8 +24,8 @@ import {
   View
 } from "react-native";
 
-import { AppHeader, BottomNav, DiscoverFiltersCard, Hero, PickerSheet, RecommendationFiltersCard, SectionTitle, TitleCard, type PickerAnchor } from "./src/components";
-import { fetchDiscover, fetchMobileCompany, fetchMobileEpisode, fetchMobilePerson, fetchMobileSeason, fetchMobileTitle, fetchRecommendations, fetchWebsiteEntityMetadata, fetchWebsiteHome, fetchWebsiteTitleMetadata, refreshRecommendations, setNotInterested } from "./src/api";
+import { AppHeader, BottomNav, DiscoverFiltersCard, Hero, PickerSheet, RecommendationFiltersCard, RemoteImage, SectionTitle, TitleCard, type PickerAnchor } from "./src/components";
+import { fetchDiscover, fetchMobileCompany, fetchMobileEpisode, fetchMobilePerson, fetchMobileSeason, fetchMobileTitle, fetchRecommendations, fetchSearch, fetchWebsiteEntityMetadata, fetchWebsiteHome, fetchWebsiteTitleMetadata, refreshRecommendations, setNotInterested } from "./src/api";
 import { API_URL, countries, excludeGenreOptions, genres, HAS_SUPABASE, ratingLabel, titleYear, tmdbImage, userRatingLabel } from "./src/config";
 import { supabase } from "./src/supabase";
 import { colors } from "./src/theme";
@@ -382,9 +382,18 @@ export default function App() {
 
   const loadSearch = useCallback(async (query = searchQuery) => {
     const clean = query.trim();
-    if (!clean || !supabase) {
+    if (!clean) {
       setSearchFeed(emptyFeed);
       return;
+    }
+    try {
+      setSearchFeed(await fetchSearch(clean, usableSession?.access_token));
+      return;
+    } catch {
+      if (!supabase) {
+        setSearchFeed(emptyFeed);
+        return;
+      }
     }
     const { data, error: searchError } = await supabase
       .from("media")
@@ -395,7 +404,7 @@ export default function App() {
       .limit(40);
     if (searchError) throw searchError;
     setSearchFeed({ items: (data ?? []).map(row => fromDbMedia(row)) });
-  }, [searchQuery]);
+  }, [searchQuery, usableSession?.access_token]);
 
   const openList = useCallback(async (list: UserList) => {
     if (!supabase) return;
@@ -1176,7 +1185,7 @@ function RailCard({ item, onOpen, onMenu }: { item: MediaSummary; onOpen: (item:
       style={styles.railCard}
     >
       <View style={styles.railPoster}>
-        {image ? <Image source={{ uri: image }} style={styles.posterImage} resizeMode="cover" /> : <Text style={styles.posterFallback}>{item.title}</Text>}
+        {image ? <RemoteImage uri={image} style={styles.posterImage} resizeMode="cover" /> : <Text style={styles.posterFallback}>{item.title}</Text>}
         {userRatingLabel(item) ? <View style={styles.railRating}><Text style={styles.railRatingText}>{userRatingLabel(item)}</Text></View> : null}
       </View>
       <Text style={styles.railTitle} numberOfLines={2}>{item.title}</Text>
@@ -1335,7 +1344,7 @@ function AgendaRow({ event, onOpen }: { event: CalendarEvent; onOpen: (event: Ca
   const image = tmdbImage(event.artwork, "w342");
   return (
     <Pressable onPress={() => onOpen(event)} style={styles.agendaRow}>
-      <View style={styles.agendaImage}>{image ? <Image source={{ uri: image }} style={styles.posterImage} resizeMode="cover" /> : <Ionicons name="calendar-outline" size={20} color={colors.muted} />}</View>
+      <View style={styles.agendaImage}>{image ? <RemoteImage uri={image} style={styles.posterImage} resizeMode="cover" /> : <Ionicons name="calendar-outline" size={20} color={colors.muted} />}</View>
       <View style={styles.agendaCopy}><Text style={styles.agendaTitle} numberOfLines={1}>{event.title}</Text><Text style={styles.agendaSub} numberOfLines={1}>{event.subtitle}</Text></View>
       <Ionicons name="chevron-forward" size={18} color={colors.muted} />
     </Pressable>
@@ -1392,7 +1401,7 @@ function ProfileHistorySection({ items, onOpen, onHistory }: { items: HistoryIte
 
 function FullHistoryPage({ data, onOpen, onBack, onRemove }: { data: ProfileData; onOpen: (item: MediaSummary) => void; onBack: () => void; onRemove: (id: string, title: string) => void }) {
   const items = data.history;
-  const [visibleGroups, setVisibleGroups] = useState(18);
+  const [visibleGroups, setVisibleGroups] = useState(8);
   const groups = useMemo(() => {
     const grouped = new Map<string, HistoryItem[]>();
     items.forEach(item => {
@@ -1403,11 +1412,11 @@ function FullHistoryPage({ data, onOpen, onBack, onRemove }: { data: ProfileData
     return [...grouped.entries()].map(([dateKey, dayItems]) => ({ dateKey, dateTitle: dayItems[0]?.dateTitle ?? "Unknown", dateSubtitle: dayItems[0]?.dateSubtitle ?? "Watched date not specified", items: dayItems }));
   }, [items]);
   useEffect(() => {
-    setVisibleGroups(18);
+    setVisibleGroups(8);
   }, [items]);
   useEffect(() => {
     if (!items.length || visibleGroups >= groups.length) return;
-    const timer = setTimeout(() => setVisibleGroups(count => Math.min(count + 12, groups.length)), 180);
+    const timer = setTimeout(() => setVisibleGroups(count => Math.min(count + 6, groups.length)), 320);
     return () => clearTimeout(timer);
   }, [groups.length, items.length, visibleGroups]);
   const visible = groups.slice(0, visibleGroups);
@@ -1447,7 +1456,7 @@ function HistoryEventRow({ item, onOpen, onRemove }: { item: HistoryItem; onOpen
   const image = tmdbImage(item.artwork, "w500");
   return (
     <Pressable onPress={() => item.item && onOpen(item.item)} style={styles.historyEvent}>
-      <View style={styles.historyEventArt}>{image ? <Image source={{ uri: image }} style={styles.posterImage} resizeMode="cover" /> : <Ionicons name="film-outline" size={22} color={colors.muted} />}{item.rating != null ? <Text style={styles.historyRating}>{item.rating.toFixed(1)}<Text style={styles.historyRatingSmall}>/10</Text></Text> : null}</View>
+      <View style={styles.historyEventArt}>{image ? <RemoteImage uri={image} style={styles.posterImage} resizeMode="cover" /> : <Ionicons name="film-outline" size={22} color={colors.muted} />}{item.rating != null ? <Text style={styles.historyRating}>{item.rating.toFixed(1)}<Text style={styles.historyRatingSmall}>/10</Text></Text> : null}</View>
       <View style={styles.historyEventCopy}>
         <Text style={styles.historyEventKicker}>{item.metaLabel}</Text>
         <Text style={styles.historyEventTitle} numberOfLines={1}>{item.title}</Text>
@@ -1469,7 +1478,7 @@ const MemoHistoryEventRow = React.memo(HistoryEventRow);
 
 function HistoryCard({ item, onOpen }: { item: HistoryItem; onOpen: (item: MediaSummary) => void }) {
   const image = tmdbImage(item.artwork, "w500");
-  return <Pressable onPress={() => item.item && onOpen(item.item)} style={styles.historyCard}><View style={styles.historyArt}>{image ? <Image source={{ uri: image }} style={styles.posterImage} resizeMode="cover" /> : null}{item.rating != null ? <Text style={styles.historyRating}>{item.rating.toFixed(1)}/10</Text> : null}<Text style={styles.historyDate}>{formatShortDate(item.date)}</Text></View><Text style={styles.historyTitle} numberOfLines={1}>{item.title}</Text><Text style={styles.historySub} numberOfLines={1}>{item.subtitle}</Text></Pressable>;
+  return <Pressable onPress={() => item.item && onOpen(item.item)} style={styles.historyCard}><View style={styles.historyArt}>{image ? <RemoteImage uri={image} style={styles.posterImage} resizeMode="cover" /> : null}{item.rating != null ? <Text style={styles.historyRating}>{item.rating.toFixed(1)}/10</Text> : null}<Text style={styles.historyDate}>{formatShortDate(item.date)}</Text></View><Text style={styles.historyTitle} numberOfLines={1}>{item.title}</Text><Text style={styles.historySub} numberOfLines={1}>{item.subtitle}</Text></Pressable>;
 }
 
 function ProfileProgressSection({ data, onLibrary, onOpen, onMenu }: { data: ProfileData; onLibrary: () => void; onOpen: (item: MediaSummary) => void; onMenu: (item: MediaSummary) => void }) {
@@ -1654,11 +1663,11 @@ function SeasonDetailScreen({ target, session, onBack, onOpenEpisode }: { target
   return (
     <ScrollView contentContainerStyle={styles.detailContent}>
       <View style={styles.episodeHero}>
-        {backdrop ? <Image source={{ uri: backdrop }} style={StyleSheet.absoluteFill} resizeMode="cover" /> : null}
+        {backdrop ? <RemoteImage uri={backdrop} style={StyleSheet.absoluteFill} resizeMode="cover" /> : null}
         <View style={styles.detailShadeV2} />
         <Pressable onPress={onBack} style={styles.backButton} hitSlop={10}><Ionicons name="chevron-back" size={22} color={colors.text} /><Text style={styles.backText}>Back</Text></Pressable>
         <View style={styles.detailHeroCopyV2}>
-          {poster ? <Image source={{ uri: poster }} style={styles.detailPosterV2} resizeMode="cover" /> : null}
+          {poster ? <RemoteImage uri={poster} style={styles.detailPosterV2} resizeMode="cover" /> : null}
           <Text style={styles.detailKicker}>{target.show.title}</Text>
           <Text style={styles.detailTitleV2}>{season.name ?? target.season.name}</Text>
           <Text style={styles.detailMeta}>{episodes.length || target.season.episodeCount || "?"} episodes - {season.air_date?.slice(0, 4) ?? season.airDate?.slice(0, 4) ?? target.season.airDate?.slice(0, 4) ?? "TBA"}</Text>
@@ -1701,7 +1710,7 @@ function SeasonDetailScreen({ target, session, onBack, onOpenEpisode }: { target
             const episodeNumber = Number(episode.episode_number ?? episode.episodeNumber ?? 0);
             return (
               <Pressable key={`row-${episode.id ?? episodeNumber}`} onPress={() => onOpenEpisode(episode)} style={styles.seasonCard}>
-                {still ? <Image source={{ uri: still }} style={styles.seasonPoster} resizeMode="cover" /> : <View style={styles.seasonPoster}><Ionicons name="film-outline" size={20} color={colors.muted} /></View>}
+                {still ? <RemoteImage uri={still} style={styles.seasonPoster} resizeMode="cover" /> : <View style={styles.seasonPoster}><Ionicons name="film-outline" size={20} color={colors.muted} /></View>}
                 <View style={styles.seasonCopy}>
                   <Text style={styles.seasonName} numberOfLines={1}>E{episodeNumber} - {episode.name ?? "Episode"}</Text>
                   <Text style={styles.seasonMeta}>{episode.air_date ?? "Air date TBA"}{episode.runtime ? ` - ${episode.runtime} min` : ""}</Text>
@@ -1775,7 +1784,7 @@ function SeriesEpisodesScreen({ target, session, onBack, onOpenSeason, onOpenEpi
                 const episodeNumber = Number(episode.episode_number ?? episode.episodeNumber ?? 0);
                 return (
                   <Pressable key={`row-${season.seasonNumber}-${episode.id ?? episodeNumber}`} onPress={() => onOpenEpisode(season, episode)} style={styles.seasonCard}>
-                    {still ? <Image source={{ uri: still }} style={styles.seasonPoster} resizeMode="cover" /> : <View style={styles.seasonPoster}><Ionicons name="film-outline" size={20} color={colors.muted} /></View>}
+                    {still ? <RemoteImage uri={still} style={styles.seasonPoster} resizeMode="cover" /> : <View style={styles.seasonPoster}><Ionicons name="film-outline" size={20} color={colors.muted} /></View>}
                     <View style={styles.seasonCopy}>
                       <Text style={styles.seasonName} numberOfLines={1}>E{episodeNumber} - {episode.name ?? "Episode"}</Text>
                       <Text style={styles.seasonMeta}>{episode.air_date ?? "Air date TBA"}{episode.runtime ? ` - ${episode.runtime} min` : ""}</Text>
@@ -1798,7 +1807,7 @@ function ReviewRow({ review, onOpen }: { review: ReviewItem; onOpen: (item: Medi
   const score = typeof review.score === "number" ? review.score : null;
   return (
     <Pressable disabled={!review.item} onPress={() => review.item && onOpen(review.item)} style={styles.reviewRow}>
-      {image ? <Image source={{ uri: image }} style={styles.reviewImage} resizeMode="cover" /> : <View style={styles.reviewImage} />}
+      {image ? <RemoteImage uri={image} style={styles.reviewImage} resizeMode="cover" /> : <View style={styles.reviewImage} />}
       <View style={styles.reviewCopy}>
         <View style={styles.reviewKindRow}>
           <Text style={styles.reviewKind}>{review.kind === "show" ? "Series review" : "Film review"}</Text>
@@ -1868,7 +1877,6 @@ function listFranchiseName(item: MediaSummary): { name: string; explicit: boolea
   if (title.includes("incredibles")) return { name: "The Incredibles Collection", explicit: true };
   if (title.includes("ice age")) return { name: "Ice Age Collection", explicit: true };
   if (title.includes("madagascar")) return { name: "Madagascar Collection", explicit: true };
-  if (title.includes("big hero 6")) return { name: "Big Hero 6 Collection", explicit: true };
   return null;
 }
 
@@ -1905,11 +1913,11 @@ function ProfileHero({ profile, session, data, fallbackName, onSettings }: { pro
 
   return (
     <View style={styles.profileHero}>
-      {bannerUrl ? <Image source={{ uri: bannerUrl }} style={styles.profileBanner} resizeMode="cover" /> : <View style={styles.profileBannerFallback} />}
+      {bannerUrl ? <RemoteImage uri={bannerUrl} style={styles.profileBanner} resizeMode="cover" /> : <View style={styles.profileBannerFallback} />}
       <View style={styles.profileShade} />
       <View style={styles.profileContent}>
         <View style={styles.profileAvatarLarge}>
-          {avatarUrl ? <Image source={{ uri: avatarUrl }} style={styles.profileAvatarImage} /> : <Text style={styles.profileAvatarInitial}>{initial}</Text>}
+          {avatarUrl ? <RemoteImage uri={avatarUrl} style={styles.profileAvatarImage} /> : <Text style={styles.profileAvatarInitial}>{initial}</Text>}
         </View>
         <View style={styles.profileNameRow}>
           <View style={styles.profileNameCopy}>
@@ -2043,7 +2051,7 @@ function MovieActionSheet({ item, visible, session, currentList, allowNotInteres
       <View style={styles.actionSheet}>
         <View style={styles.grabber} />
         <View style={styles.actionHeader}>
-          {poster ? <Image source={{ uri: poster }} style={styles.actionThumb} /> : null}
+          {poster ? <RemoteImage uri={poster} style={styles.actionThumb} /> : null}
           <View style={{ flex: 1 }}>
             <Text style={styles.actionTitle} numberOfLines={2}>{item?.title}</Text>
             <Text style={styles.actionSub}>{session ? "Movie actions" : "Sign in to edit lists and status"}</Text>
@@ -2246,7 +2254,7 @@ function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity }: 
   return (
     <ScrollView contentContainerStyle={styles.detailContent}>
       <View style={styles.episodeHero}>
-        {art ? <Image source={{ uri: art }} style={StyleSheet.absoluteFill} resizeMode="cover" /> : null}
+        {art ? <RemoteImage uri={art} style={StyleSheet.absoluteFill} resizeMode="cover" /> : null}
         <View style={styles.detailShadeV2} />
         <Pressable onPress={onBack} style={styles.backButton} hitSlop={10}><Ionicons name="chevron-back" size={22} color={colors.text} /><Text style={styles.backText}>Back</Text></Pressable>
         <View style={styles.detailHeroCopyV2}>
@@ -2370,7 +2378,7 @@ function EntityScreen({ target, session, onBack, onOpen, onMenu }: { target: Ent
       <View style={styles.entityHeader}>
         <Pressable onPress={onBack} style={styles.backChip}><Ionicons name="chevron-back" size={18} color={colors.text} /><Text style={styles.backChipText}>Back</Text></Pressable>
         <View style={styles.entityHeroRow}>
-          <View style={target.type === "person" ? styles.entityPortrait : styles.entityLogoBox}>{image ? <Image source={{ uri: image }} style={styles.posterImage} resizeMode={target.type === "person" ? "cover" : "contain"} /> : <Ionicons name={target.type === "person" ? "person-outline" : "business-outline"} size={44} color={colors.muted} />}</View>
+          <View style={target.type === "person" ? styles.entityPortrait : styles.entityLogoBox}>{image ? <RemoteImage uri={image} style={styles.posterImage} resizeMode={target.type === "person" ? "cover" : "contain"} /> : <Ionicons name={target.type === "person" ? "person-outline" : "business-outline"} size={44} color={colors.muted} />}</View>
           <View style={styles.entityCopy}>
             <Text style={styles.detailKicker}>{target.type === "person" ? "Cast & crew" : "Production company"}</Text>
             <Text style={styles.entityTitle}>{target.name}</Text>
@@ -2648,11 +2656,11 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
   return (
     <ScrollView contentContainerStyle={styles.detailContent}>
       <View style={styles.detailHeroV2}>
-        {backdrop ? <Image source={{ uri: backdrop }} style={StyleSheet.absoluteFill} resizeMode="cover" /> : null}
+        {backdrop ? <RemoteImage uri={backdrop} style={StyleSheet.absoluteFill} resizeMode="cover" /> : null}
         <View style={styles.detailShadeV2} />
         <Pressable onPress={onBack} style={styles.backButton} hitSlop={10}><Ionicons name="chevron-back" size={22} color={colors.text} /><Text style={styles.backText}>Back</Text></Pressable>
         <View style={styles.detailHeroCopyV2}>
-          {poster ? <Image source={{ uri: poster }} style={styles.detailPosterV2} resizeMode="cover" /> : null}
+          {poster ? <RemoteImage uri={poster} style={styles.detailPosterV2} resizeMode="cover" /> : null}
           <Text style={styles.detailKicker}>{item.kind === "show" ? "Television series" : "Film"}</Text>
           <Text style={styles.detailTitleV2}>{item.title}</Text>
           <Text style={styles.detailMeta}>{titleYear(detailYearItem)} · {detail?.runtime ? minutesToLabel(detail.runtime) : item.kind === "show" ? "Series" : "Film"} · {detail?.status ?? item.status ?? "Released"}</Text>
@@ -2749,7 +2757,7 @@ function SeasonsSection({ seasons, onOpenSeason, onOpenAllSeasons }: { seasons: 
           const poster = tmdbImage(season.posterPath, "w342");
           return (
             <Pressable key={`${season.id ?? season.seasonNumber}`} style={styles.seasonCard} onPress={() => onOpenSeason(season)}>
-              {poster ? <Image source={{ uri: poster }} style={styles.seasonPoster} /> : <View style={styles.seasonPoster}><Ionicons name="albums-outline" size={20} color={colors.muted} /></View>}
+              {poster ? <RemoteImage uri={poster} style={styles.seasonPoster} /> : <View style={styles.seasonPoster}><Ionicons name="albums-outline" size={20} color={colors.muted} /></View>}
               <View style={styles.seasonCopy}>
                 <Text style={styles.seasonName} numberOfLines={1}>{season.name}</Text>
                 <Text style={styles.seasonMeta}>{season.episodeCount ?? "?"} episodes · {season.airDate?.slice(0, 4) ?? "TBA"}</Text>
@@ -2804,11 +2812,11 @@ function TitleMediaPreview({ trailer, images }: { trailer?: DetailVideo; images:
 }
 
 function CastSection({ cast, onOpen }: { cast: DetailPerson[]; onOpen: (entity: EntityTarget) => void }) {
-  return <View style={styles.detailSection}><SectionTitle kicker="In front of the camera" title="Cast" /><View style={styles.castGrid}>{cast.map((person, index) => <Pressable disabled={!person.id} onPress={() => person.id && onOpen({ type: "person", id: person.id, name: person.name, subtitle: person.character, imagePath: person.profile_path ?? null })} key={`${person.id ?? person.name}-${index}`} style={styles.personCard}>{person.profile_path ? <Image source={{ uri: tmdbImage(person.profile_path, "w342")! }} style={styles.personPhoto} /> : <View style={styles.personPhoto} />}<Text style={styles.personName} numberOfLines={1}>{person.name}</Text><Text style={styles.personRole} numberOfLines={1}>{person.character}</Text></Pressable>)}</View></View>;
+  return <View style={styles.detailSection}><SectionTitle kicker="In front of the camera" title="Cast" /><View style={styles.castGrid}>{cast.map((person, index) => <Pressable disabled={!person.id} onPress={() => person.id && onOpen({ type: "person", id: person.id, name: person.name, subtitle: person.character, imagePath: person.profile_path ?? null })} key={`${person.id ?? person.name}-${index}`} style={styles.personCard}>{person.profile_path ? <RemoteImage uri={tmdbImage(person.profile_path, "w342")!} style={styles.personPhoto} /> : <View style={styles.personPhoto} />}<Text style={styles.personName} numberOfLines={1}>{person.name}</Text><Text style={styles.personRole} numberOfLines={1}>{person.character}</Text></Pressable>)}</View></View>;
 }
 
 function CompanySection({ companies, onOpen }: { companies: DetailCompany[]; onOpen: (entity: EntityTarget) => void }) {
-  return <View style={styles.detailSection}><SectionTitle kicker="Behind the production" title="Studios & companies" /><View style={styles.companyGrid}>{companies.map((company, index) => <Pressable disabled={!company.id} onPress={() => company.id && onOpen({ type: "company", id: company.id, name: company.name, imagePath: company.logo_path ?? null })} key={`${company.id ?? company.name}-${index}`} style={styles.companyCard}><View style={styles.companyLogo}>{company.logo_path ? <Image source={{ uri: tmdbImage(company.logo_path, "w342")! }} style={styles.companyLogoImage} resizeMode="contain" /> : <Text style={styles.companyInitial}>{company.name.slice(0, 1)}</Text>}</View><Text style={styles.companyName} numberOfLines={2}>{company.name}</Text></Pressable>)}</View></View>;
+  return <View style={styles.detailSection}><SectionTitle kicker="Behind the production" title="Studios & companies" /><View style={styles.companyGrid}>{companies.map((company, index) => <Pressable disabled={!company.id} onPress={() => company.id && onOpen({ type: "company", id: company.id, name: company.name, imagePath: company.logo_path ?? null })} key={`${company.id ?? company.name}-${index}`} style={styles.companyCard}><View style={styles.companyLogo}>{company.logo_path ? <RemoteImage uri={tmdbImage(company.logo_path, "w342")!} style={styles.companyLogoImage} resizeMode="contain" /> : <Text style={styles.companyInitial}>{company.name.slice(0, 1)}</Text>}</View><Text style={styles.companyName} numberOfLines={2}>{company.name}</Text></Pressable>)}</View></View>;
 }
 
 function DetailReviewsSection({ reviews, onOpen }: { reviews: ReviewItem[]; onOpen: (item: MediaSummary) => void }) {
@@ -2929,14 +2937,14 @@ function DetailScreen({ item, token, onBack, onHide }: { item: MediaSummary; tok
   return (
     <ScrollView contentContainerStyle={styles.detailContent}>
       <View style={styles.detailHero}>
-        {backdrop ? <Image source={{ uri: backdrop }} style={StyleSheet.absoluteFill} resizeMode="cover" /> : null}
+        {backdrop ? <RemoteImage uri={backdrop} style={StyleSheet.absoluteFill} resizeMode="cover" /> : null}
         <View style={styles.detailShade} />
         <Pressable onPress={onBack} style={styles.backButton} hitSlop={10}>
           <Ionicons name="chevron-back" size={22} color={colors.text} />
           <Text style={styles.backText}>Back</Text>
         </Pressable>
         <View style={styles.detailCopy}>
-          {poster ? <Image source={{ uri: poster }} style={styles.detailPoster} resizeMode="cover" /> : null}
+          {poster ? <RemoteImage uri={poster} style={styles.detailPoster} resizeMode="cover" /> : null}
           <View style={styles.detailText}>
             <Text style={styles.detailKicker}>{item.kind === "show" ? "Series" : "Film"}</Text>
             <Text style={styles.detailTitle} numberOfLines={3}>{item.title}</Text>

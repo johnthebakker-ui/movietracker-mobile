@@ -5,10 +5,28 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
 RES = ROOT / "android" / "app" / "src" / "main" / "res"
-ICON = Image.open(ROOT / "assets" / "icon.png").convert("RGBA")
-FOREGROUND = Image.open(ROOT / "assets" / "android-icon-foreground.png").convert("RGBA")
-BACKGROUND = Image.open(ROOT / "assets" / "android-icon-background.png").convert("RGBA")
-MONO = Image.open(ROOT / "assets" / "android-icon-monochrome.png").convert("RGBA")
+SIZE = 1024
+
+
+def centered_logo(source: Image.Image, max_size: int, background: tuple[int, int, int, int]) -> Image.Image:
+    bbox = source.getbbox()
+    logo = source.crop(bbox) if bbox else source.copy()
+    logo.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+    canvas = Image.new("RGBA", (SIZE, SIZE), background)
+    canvas.alpha_composite(logo, ((SIZE - logo.width) // 2, (SIZE - logo.height) // 2))
+    return canvas
+
+
+SOURCE = Image.open(ROOT / "assets" / "logo.png").convert("RGBA")
+ICON = centered_logo(SOURCE, 650, (255, 255, 255, 255))
+FOREGROUND = centered_logo(SOURCE, 620, (0, 0, 0, 0))
+BACKGROUND = Image.new("RGBA", (SIZE, SIZE), (255, 255, 255, 255))
+MONO = centered_logo(SOURCE, 620, (0, 0, 0, 0))
+
+ICON.save(ROOT / "assets" / "icon.png")
+FOREGROUND.save(ROOT / "assets" / "android-icon-foreground.png")
+BACKGROUND.save(ROOT / "assets" / "android-icon-background.png")
+MONO.save(ROOT / "assets" / "android-icon-monochrome.png")
 
 DENSITIES = {
     "mipmap-mdpi": (48, 108),
