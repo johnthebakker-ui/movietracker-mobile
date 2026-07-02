@@ -3279,11 +3279,19 @@ async function loadUserLists(userId: string): Promise<UserList[]> {
 async function loadListFeed(listId: string): Promise<FeedResult> {
   const client = supabase;
   if (!client) return emptyFeed;
-  const { data, error } = await client
+  let result: any = await client
     .from("list_items")
     .select("position,franchise_group,media(*)")
     .eq("list_id", listId)
     .order("position", { ascending: true });
+  if (result.error) {
+    result = await client
+      .from("list_items")
+      .select("position,media(*)")
+      .eq("list_id", listId)
+      .order("position", { ascending: true });
+  }
+  const { data, error } = result;
   if (error) throw error;
   return { items: (data ?? []).flatMap((row: any) => {
     const media = firstRow(row.media);
