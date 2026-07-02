@@ -25,7 +25,7 @@ import {
 } from "react-native";
 
 import { AppHeader, BottomNav, DiscoverFiltersCard, Hero, PickerSheet, RecommendationFiltersCard, RemoteImage, SectionTitle, TitleCard, type PickerAnchor } from "./src/components";
-import { fetchDiscover, fetchMobileCompany, fetchMobileEpisode, fetchMobilePerson, fetchMobileSeason, fetchMobileTitle, fetchRecommendations, fetchSearch, fetchWebsiteEntityMetadata, fetchWebsiteHome, fetchWebsiteTitleMetadata, refreshRecommendations, setNotInterested } from "./src/api";
+import { disconnectTrakt, fetchDiscover, fetchMobileCompany, fetchMobileEpisode, fetchMobilePerson, fetchMobileSeason, fetchMobileTitle, fetchRecommendations, fetchSearch, fetchTraktStatus, fetchWebsiteEntityMetadata, fetchWebsiteHome, fetchWebsiteTitleMetadata, refreshRecommendations, setNotInterested, startTraktConnect, syncTrakt, type MobileTraktStatus } from "./src/api";
 import { API_URL, countries, excludeGenreOptions, genres, HAS_SUPABASE, ratingLabel, titleYear, tmdbImage, userRatingLabel } from "./src/config";
 import { supabase } from "./src/supabase";
 import { colors } from "./src/theme";
@@ -1646,10 +1646,10 @@ function SeasonDetailScreen({ target, session, onBack, onOpenEpisode }: { target
       }
       const body = values.body.trim();
       const title = values.title.trim();
-      const reviewPayload = { user_id: session.user.id, season_id: payload.seasonId, rating_id: ratingId, title: title || null, body: body || null, contains_spoilers: values.containsSpoilers, updated_at: new Date().toISOString() };
+      const reviewPayload = { user_id: session.user.id, season_id: payload.seasonId, rating_id: ratingId, title: title || null, body: body || null, contains_spoilers: values.containsSpoilers };
       const { data: existingReview } = await supabase.from("reviews").select("id").eq("user_id", session.user.id).eq("season_id", payload.seasonId).maybeSingle();
       const { error } = existingReview
-        ? await supabase.from("reviews").update(reviewPayload).eq("id", existingReview.id)
+        ? await supabase.from("reviews").update({ ...reviewPayload, updated_at: new Date().toISOString() }).eq("id", existingReview.id)
         : await supabase.from("reviews").insert(reviewPayload);
       if (error) throw error;
       await refreshSeasonFeedback();
@@ -1812,7 +1812,7 @@ function ReviewRow({ review, onOpen }: { review: ReviewItem; onOpen: (item: Medi
           {score != null ? <View style={styles.reviewScore}><Ionicons name="star" size={14} color="#ffc24b" /><Text style={styles.reviewScoreText}>{score.toFixed(1)}</Text></View> : null}
         </View>
         <Text style={styles.reviewMedia} numberOfLines={1}>{review.mediaTitle}</Text>
-        <Text style={styles.reviewMeta}>{review.kind === "show" ? "Show" : "Movie"} - {formatShortDate(review.created_at)}{review.updated_at && review.updated_at !== review.created_at ? " - edited" : ""}</Text>
+        <Text style={styles.reviewMeta}>{review.kind === "show" ? "Show" : "Movie"} - {formatShortDate(review.created_at)}{isEditedReview(review) ? " - edited" : ""}</Text>
         <Text style={styles.reviewTitle} numberOfLines={1}>{review.title}</Text>
         <Text style={styles.reviewBody} numberOfLines={2}>{review.body}</Text>
       </View>
@@ -1969,6 +1969,8 @@ function MovieActionSheet({ item, visible, session, currentList, franchiseGroups
   const [busy, setBusy] = useState(false);
   const poster = tmdbImage(item?.posterPath ?? item?.backdropPath ?? null, "w342");
   const filteredLists = lists.filter(list => list.name.toLowerCase().includes(listQuery.trim().toLowerCase()));
+  const isCurrentListItem = Boolean(currentList && lists.some(list => list.id === currentList.id && list.contains));
+  const activeCurrentList = isCurrentListItem ? currentList : null;
 
   const loadState = useCallback(async () => {
     if (!visible || !item || !session?.user.id || !supabase) return;
@@ -2091,7 +2093,7 @@ function MovieActionSheet({ item, visible, session, currentList, franchiseGroups
             <View style={styles.actionDivider} />
             <Text style={styles.actionSectionLabel}>Custom lists</Text>
             {lists.length ? <View style={styles.contextListSearch}><Ionicons name="search-outline" size={18} color={colors.muted} /><TextInput value={listQuery} onChangeText={setListQuery} placeholder="Find a list" placeholderTextColor={colors.muted} style={styles.contextListInput} /></View> : null}
-            <ScrollView style={styles.actionListScroll} nestedScrollEnabled showsVerticalScrollIndicator>
+            <ScrollView style={[styles.actionListScroll, isCurrentListItem && styles.actionListScrollCompact]} nestedScrollEnabled showsVerticalScrollIndicator>
               {filteredLists.length ? filteredLists.map(list => (
                 <Pressable disabled={busy} key={list.id} onPress={() => toggleList(list)} style={[styles.listActionRow, list.contains && styles.listActionRowActive]}>
                   <Text style={[styles.listActionName, list.contains && styles.listActionNameActive]} numberOfLines={1}>{list.name}</Text>
@@ -2102,7 +2104,7 @@ function MovieActionSheet({ item, visible, session, currentList, franchiseGroups
                 </Pressable>
               )) : <Text style={styles.actionSub}>{lists.length ? "No lists match that search." : "No lists yet."}</Text>}
             </ScrollView>
-            {currentList && lists.some(list => list.id === currentList.id && list.contains) ? (
+            {isCurrentListItem ? (
               <View style={styles.currentListSection}>
                 <Text style={styles.actionSectionLabel}>Franchise group</Text>
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.franchiseGroupChips}>
@@ -2117,13 +2119,13 @@ function MovieActionSheet({ item, visible, session, currentList, franchiseGroups
                 </View>
               </View>
             ) : null}
-            {currentList && lists.some(list => list.id === currentList.id && list.contains) ? (
+            {activeCurrentList ? (
               <View style={styles.currentListSection}>
                 <Text style={styles.actionSectionLabel}>Current list</Text>
                 <Pressable disabled={busy} onPress={() => {
-                  const list = lists.find(candidate => candidate.id === currentList.id);
+                  const list = lists.find(candidate => candidate.id === activeCurrentList.id);
                   if (list) toggleList(list);
-                }} style={styles.currentListRemove}><Ionicons name="trash-outline" size={17} color={colors.danger} /><Text style={styles.currentListRemoveText}>Remove from {currentList.name}</Text></Pressable>
+                }} style={styles.currentListRemove}><Ionicons name="trash-outline" size={17} color={colors.danger} /><Text style={styles.currentListRemoveText}>Remove from {activeCurrentList.name}</Text></Pressable>
               </View>
             ) : null}
             {allowNotInterested && item ? <><View style={styles.actionDivider} /><ActionRow icon="ban-outline" label="Not interested" danger onPress={() => onNotInterested(item)} /></> : null}
@@ -2280,9 +2282,9 @@ function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity }: 
         if (error) throw error;
         ratingId = savedRating?.id ?? null;
       }
-      const payload = { title: values.title.trim() || null, body: values.body.trim(), contains_spoilers: values.containsSpoilers, rating_id: ratingId, updated_at: new Date().toISOString() };
+      const payload = { title: values.title.trim() || null, body: values.body.trim(), contains_spoilers: values.containsSpoilers, rating_id: ratingId };
       const { data: existingReview } = await supabase!.from("reviews").select("id").eq("user_id", session.user.id).eq("episode_id", episodeId).maybeSingle();
-      const result = existingReview?.id ? await supabase!.from("reviews").update(payload).eq("id", existingReview.id) : await supabase!.from("reviews").insert({ user_id: session.user.id, episode_id: episodeId, ...payload });
+      const result = existingReview?.id ? await supabase!.from("reviews").update({ ...payload, updated_at: new Date().toISOString() }).eq("id", existingReview.id) : await supabase!.from("reviews").insert({ user_id: session.user.id, episode_id: episodeId, ...payload });
       if (result.error) throw result.error;
     });
     Alert.alert(myReview ? "Review updated" : "Review published", "Your episode review is saved.");
@@ -2647,10 +2649,10 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
         if (error) throw error;
         ratingId = savedRating?.id ?? null;
       }
-      const payload = { title: values.title.trim() || null, body: values.body.trim(), contains_spoilers: values.containsSpoilers, rating_id: ratingId, updated_at: new Date().toISOString() };
+      const payload = { title: values.title.trim() || null, body: values.body.trim(), contains_spoilers: values.containsSpoilers, rating_id: ratingId };
       const { data: existingReview } = await supabase!.from("reviews").select("id").eq("user_id", session.user.id).eq("media_id", detail.dbId).maybeSingle();
       const result = existingReview?.id
-        ? await supabase!.from("reviews").update(payload).eq("id", existingReview.id)
+        ? await supabase!.from("reviews").update({ ...payload, updated_at: new Date().toISOString() }).eq("id", existingReview.id)
         : await supabase!.from("reviews").insert({ user_id: session.user.id, media_id: detail.dbId, ...payload });
       if (result.error) throw result.error;
       setDetail(current => current ? { ...current, userRating: nextScore ?? current.userRating } : current);
@@ -3045,6 +3047,9 @@ function SettingsScreen({ session, profile, tab, onTab, onBack, onSignOut, onSav
   const [region, setRegion] = useState(profile?.region ?? "US");
   const [privacy, setPrivacy] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
+  const [traktStatus, setTraktStatus] = useState<MobileTraktStatus | null>(null);
+  const [traktBusy, setTraktBusy] = useState(false);
+  const [traktMessage, setTraktMessage] = useState("");
 
   useEffect(() => {
     setDisplayName(profile?.display_name ?? "");
@@ -3059,6 +3064,19 @@ function SettingsScreen({ session, profile, tab, onTab, onBack, onSignOut, onSav
       if (data) setPrivacy({ profile: data.profile, activity: data.activity, history: data.history, ratings: data.ratings, favorites: data.favorites, statistics: data.statistics });
     });
   }, [session.user.id]);
+
+  const loadTrakt = useCallback(async () => {
+    if (tab !== "integrations") return;
+    try {
+      setTraktStatus(await fetchTraktStatus(session.access_token));
+    } catch (reason) {
+      setTraktMessage(reason instanceof Error ? reason.message : "Could not load Trakt status.");
+    }
+  }, [session.access_token, tab]);
+
+  useEffect(() => {
+    loadTrakt().catch(() => undefined);
+  }, [loadTrakt]);
 
   async function saveProfile() {
     if (!supabase) return;
@@ -3089,6 +3107,63 @@ function SettingsScreen({ session, profile, tab, onTab, onBack, onSignOut, onSav
     }
   }
 
+  async function connectTrakt() {
+    setTraktBusy(true);
+    setTraktMessage("");
+    try {
+      const redirectTo = "movietracker://trakt/callback";
+      const data = await startTraktConnect(session.access_token, redirectTo);
+      const result = await WebBrowser.openAuthSessionAsync(data.url, data.redirectTo);
+      if (result.type !== "success") return;
+      const parsed = new URL(result.url);
+      const error = parsed.searchParams.get("error");
+      if (error) throw new Error(error);
+      setTraktMessage("Trakt connected. Run sync now to import your history.");
+      await loadTrakt();
+    } catch (reason) {
+      Alert.alert("Trakt connection failed", reason instanceof Error ? reason.message : "Could not connect Trakt.");
+    } finally {
+      setTraktBusy(false);
+    }
+  }
+
+  async function runTraktSync() {
+    setTraktBusy(true);
+    setTraktMessage("Syncing Trakt...");
+    try {
+      const result = await syncTrakt(session.access_token);
+      setTraktMessage(`Synced: ${result.history ?? 0} watches, ${result.ratings ?? 0} ratings, ${result.watchlist ?? 0} watchlist titles.`);
+      await loadTrakt();
+      await onSaved();
+    } catch (reason) {
+      setTraktMessage(reason instanceof Error ? reason.message : "Trakt sync failed.");
+    } finally {
+      setTraktBusy(false);
+    }
+  }
+
+  async function unlinkTrakt() {
+    Alert.alert("Disconnect Trakt?", "Imported MovieTracker data will stay in your account.", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Disconnect",
+        style: "destructive",
+        onPress: async () => {
+          setTraktBusy(true);
+          try {
+            await disconnectTrakt(session.access_token);
+            setTraktMessage("Trakt disconnected.");
+            await loadTrakt();
+          } catch (reason) {
+            Alert.alert("Could not disconnect", reason instanceof Error ? reason.message : "Try again.");
+          } finally {
+            setTraktBusy(false);
+          }
+        }
+      }
+    ]);
+  }
+
   return (
     <View style={styles.settingsWrap}>
       <SectionTitle kicker="Your account" title="Settings" action="Back to profile" onAction={onBack} />
@@ -3099,7 +3174,19 @@ function SettingsScreen({ session, profile, tab, onTab, onBack, onSignOut, onSav
       {tab === "privacy" ? <View style={styles.settingsPanel}><Text style={styles.settingsTitle}>Privacy</Text>{["profile", "activity", "history", "ratings", "favorites", "statistics"].map(key => <PrivacyRow key={key} label={key} value={privacy[key] ?? "public"} onChange={value => setPrivacy(current => ({ ...current, [key]: value }))} />)}<Pressable disabled={saving} onPress={savePrivacy} style={styles.settingsSave}><Text style={styles.settingsSaveText}>Save privacy</Text></Pressable></View> : null}
       {tab === "security" ? <View style={styles.settingsPanel}><Text style={styles.settingsTitle}>Security</Text><Text style={styles.settingsBody}>Two-factor authentication is enforced when your account requires it. Password reset uses your account email.</Text><Pressable onPress={() => supabase?.auth.resetPasswordForEmail(session.user.email ?? "")} style={styles.settingsGhost}><Text style={styles.settingsGhostText}>Send password reset email</Text></Pressable><Pressable onPress={onSignOut} style={styles.settingsDanger}><Text style={styles.settingsDangerText}>Sign out</Text></Pressable></View> : null}
       {tab === "notifications" ? <View style={styles.settingsPanel}><Text style={styles.settingsTitle}>Notifications</Text>{["Follow requests and approvals", "Review and list interactions", "Release reminders", "Recommendation digest"].map(label => <ToggleRow key={label} label={label} />)}</View> : null}
-      {tab === "integrations" ? <View style={styles.settingsPanel}><Text style={styles.settingsTitle}>Integrations</Text><Text style={styles.settingsBody}>Trakt and data import/export are managed by the website for now, so the native app stays synced without handling provider secrets here.</Text></View> : null}
+      {tab === "integrations" ? <View style={styles.settingsPanel}><Text style={styles.settingsTitle}>Integrations</Text><Text style={styles.settingsBody}>Connect Trakt once and MovieTracker will keep your viewing diary synced across the app and website.</Text>
+        {!traktStatus ? <ActivityIndicator color={colors.accent} style={{ marginTop: 18 }} /> : !traktStatus.databaseReady ? <Text style={styles.settingsError}>Trakt database migration is not ready yet.</Text> : !traktStatus.environmentReady ? <Text style={styles.settingsError}>Trakt server credentials are not configured yet.</Text> : traktStatus.connection ? (
+          <View style={styles.integrationBox}>
+            <Text style={styles.integrationLabel}>Connected as</Text>
+            <Text style={styles.integrationValue}>@{traktStatus.connection.trakt_username || "Trakt user"}</Text>
+            <Text style={styles.settingsBody}>Last synced: {traktStatus.connection.last_synced_at ? new Date(traktStatus.connection.last_synced_at).toLocaleString() : "Not yet"}</Text>
+            {traktStatus.connection.last_error ? <Text style={styles.settingsError}>{traktStatus.connection.last_error}</Text> : null}
+            <Pressable disabled={traktBusy} onPress={runTraktSync} style={styles.settingsSave}>{traktBusy ? <ActivityIndicator color={colors.text} /> : <Text style={styles.settingsSaveText}>Sync now</Text>}</Pressable>
+            <Pressable disabled={traktBusy} onPress={unlinkTrakt} style={styles.settingsDanger}><Text style={styles.settingsDangerText}>Disconnect Trakt</Text></Pressable>
+          </View>
+        ) : <Pressable disabled={traktBusy} onPress={connectTrakt} style={styles.settingsSave}>{traktBusy ? <ActivityIndicator color={colors.text} /> : <Text style={styles.settingsSaveText}>Connect Trakt</Text>}</Pressable>}
+        {traktMessage ? <Text style={styles.settingsBody}>{traktMessage}</Text> : null}
+      </View> : null}
     </View>
   );
 }
@@ -3499,6 +3586,11 @@ function formatShortDate(value: string) {
   return new Date(value).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+function isEditedReview(review: Pick<ReviewItem, "created_at" | "updated_at">) {
+  if (!review.updated_at) return false;
+  return new Date(review.updated_at).getTime() - new Date(review.created_at).getTime() > 1000;
+}
+
 function formatHistoryDay(value: string) {
   if (value === "unknown") return "Unknown";
   return new Date(`${value}T12:00:00`).toLocaleDateString(undefined, { weekday: "short", day: "numeric" });
@@ -3794,6 +3886,7 @@ const styles = StyleSheet.create({
   contextListSearch: { height: 48, borderRadius: 14, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel2, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 12, marginBottom: 8 },
   contextListInput: { flex: 1, color: colors.text, fontSize: 15 },
   actionListScroll: { maxHeight: 292 },
+  actionListScrollCompact: { maxHeight: 152 },
   statusSheetRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginVertical: 10 },
   statusSheetButton: { flexBasis: "31%", minHeight: 58, borderRadius: 16, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel2, alignItems: "center", justifyContent: "center", gap: 4 },
   statusSheetButtonActive: { backgroundColor: colors.accentSoft, borderColor: colors.accent },
@@ -3939,6 +4032,10 @@ const styles = StyleSheet.create({
   settingsGhostText: { color: colors.text, fontWeight: "900" },
   settingsDanger: { minHeight: 52, borderRadius: 18, borderWidth: 1, borderColor: "rgba(255,77,77,0.36)", backgroundColor: "rgba(255,77,77,0.10)", alignItems: "center", justifyContent: "center", marginTop: 12 },
   settingsDangerText: { color: colors.danger, fontWeight: "900" },
+  settingsError: { color: colors.danger, fontSize: 14, fontWeight: "800", lineHeight: 20, marginTop: 12 },
+  integrationBox: { marginTop: 16, borderTopWidth: 1, borderTopColor: colors.line, paddingTop: 16 },
+  integrationLabel: { color: colors.muted, fontSize: 12, fontWeight: "900", letterSpacing: 1.2, textTransform: "uppercase" },
+  integrationValue: { color: colors.text, fontSize: 22, fontWeight: "900", marginTop: 4, marginBottom: 8 },
   privacyRow: { minHeight: 56, borderBottomWidth: 1, borderBottomColor: colors.line, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   privacyLabel: { color: colors.text, fontSize: 16, fontWeight: "800", textTransform: "capitalize", flex: 1 },
   privacyValue: { color: colors.accent, fontSize: 14, fontWeight: "900", textTransform: "capitalize" },

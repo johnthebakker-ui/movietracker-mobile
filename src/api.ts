@@ -78,6 +78,12 @@ export type MobileSeasonPayload = {
   imdbRatings: Array<{ episode: number; title: string; released?: string; imdbRating: number | null; imdbId?: string }>;
 };
 
+export type MobileTraktStatus = {
+  databaseReady: boolean;
+  environmentReady: boolean;
+  connection: { trakt_username?: string | null; sync_enabled?: boolean; last_synced_at?: string | null; last_error?: string | null; updated_at?: string | null } | null;
+};
+
 function queryString(values: Record<string, string | number | boolean | undefined>) {
   const params = new URLSearchParams();
   Object.entries(values).forEach(([key, value]) => {
@@ -177,6 +183,22 @@ export async function fetchRecommendations(filters: RecommendationFilters, token
     cursor
   });
   return normalizeRecommendations(await request(`/api/recommendations?${query}`, token));
+}
+
+export async function fetchTraktStatus(token: string): Promise<MobileTraktStatus> {
+  return request<MobileTraktStatus>("/api/mobile/integrations/trakt", token);
+}
+
+export async function startTraktConnect(token: string, redirectTo: string): Promise<{ url: string; redirectTo: string }> {
+  return request<{ url: string; redirectTo: string }>("/api/mobile/integrations/trakt/connect", token, { method: "POST", body: JSON.stringify({ redirectTo }) });
+}
+
+export async function syncTrakt(token: string): Promise<{ skipped?: boolean; history?: number; ratings?: number; watchlist?: number; error?: string }> {
+  return request("/api/mobile/integrations/trakt/sync?force=1", token, { method: "POST" });
+}
+
+export async function disconnectTrakt(token: string): Promise<{ success: boolean }> {
+  return request("/api/mobile/integrations/trakt/disconnect", token, { method: "POST" });
 }
 
 export async function fetchMobileTitle(kind: MediaSummary["kind"], id: number, token?: string) {
