@@ -41,7 +41,7 @@ type ProgressCounts = { planned: number; watching: number; completed: number; pa
 type Profile = { id: string; username: string | null; display_name: string | null; avatar_url: string | null; banner_url: string | null; bio: string | null; region: string | null; created_at?: string | null };
 type MfaState = { required: boolean; factorId?: string; challengeId?: string; code: string; error?: string };
 type LibraryFilter = "all" | "planned" | "watching" | "completed" | "paused" | "dropped" | "favorites" | "lists";
-type ListGroup = "none" | "collections" | "studios";
+type ListGroup = "none" | "collections";
 type CalendarMode = "upcoming" | "watched";
 type ProfilePanel = "overview" | "activity" | "lists" | "reviews" | "history" | "statistics";
 type ProfileView = "profile" | "recommendations" | "settings" | "history" | "reviews" | "statistics";
@@ -972,6 +972,8 @@ export default function App() {
     if (event.item) openItem(event.item);
   }
 
+  const selectedListFranchiseGroups = useMemo(() => availableListFranchiseGroups(selectedListFeed.items), [selectedListFeed.items]);
+
   function renderHeader() {
     if (searchMode) {
       return (
@@ -1148,7 +1150,7 @@ export default function App() {
       {loading ? <View pointerEvents="none" style={styles.loading}><ActivityIndicator color={colors.accent} size="large" /></View> : null}
       <BottomNav tab={tab} onTab={goTab} />
       <PickerSheet title={picker?.title ?? ""} visible={Boolean(picker)} options={picker?.options ?? []} value={picker?.value ?? ""} multiValues={picker?.multiValues} anchor={picker?.anchor} onPick={value => picker?.onPick(value)} onApply={values => picker?.onApply?.(values)} onClose={() => setPicker(null)} />
-      <MovieActionSheet item={actionItem} visible={Boolean(actionItem)} session={usableSession} currentList={selectedList} allowNotInterested={tab === "profile" && profileView === "recommendations" && !selectedList && !selected} onClose={() => setActionItem(null)} onOpen={openItem} onNotInterested={hideRecommendation} onChanged={refreshAfterAction} />
+      <MovieActionSheet item={actionItem} visible={Boolean(actionItem)} session={usableSession} currentList={selectedList} franchiseGroups={selectedListFranchiseGroups} allowNotInterested={tab === "profile" && profileView === "recommendations" && !selectedList && !selected} onClose={() => setActionItem(null)} onOpen={openItem} onNotInterested={hideRecommendation} onChanged={refreshAfterAction} />
     </SafeAreaView>
   );
 }
@@ -1260,10 +1262,6 @@ function ListDetailHeader({ list, groupBy, onGroupBy, onBack }: { list: UserList
         <Pressable onPress={() => onGroupBy("collections")} style={[styles.groupChip, groupBy === "collections" && styles.groupChipActive]}>
           <Ionicons name="git-branch-outline" size={15} color={groupBy === "collections" ? colors.text : colors.muted} />
           <Text style={[styles.groupChipText, groupBy === "collections" && styles.groupChipTextActive]}>Group franchises</Text>
-        </Pressable>
-        <Pressable onPress={() => onGroupBy("studios")} style={[styles.groupChip, groupBy === "studios" && styles.groupChipActive]}>
-          <Ionicons name="business-outline" size={15} color={groupBy === "studios" ? colors.text : colors.muted} />
-          <Text style={[styles.groupChipText, groupBy === "studios" && styles.groupChipTextActive]}>Group studios</Text>
         </Pressable>
       </View>
     </View>
@@ -1859,8 +1857,6 @@ function groupedListItems(items: MediaSummary[], groupBy: ListGroup) {
       }
     }
     if (other.length) groups.set("Other titles", other);
-  } else {
-    ordered.forEach(item => listStudioNames(item).forEach(name => groups.set(name, [...(groups.get(name) ?? []), item])));
   }
   return [...groups.entries()]
     .map(([title, groupItems]) => ({ title, items: groupItems }))
@@ -1868,6 +1864,8 @@ function groupedListItems(items: MediaSummary[], groupBy: ListGroup) {
 }
 
 function listFranchiseName(item: MediaSummary): { name: string; explicit: boolean } | null {
+  const manual = item.franchiseGroup?.trim();
+  if (manual) return { name: manual, explicit: true };
   if (item.collectionName) return { name: item.collectionName, explicit: false };
   const title = item.title.toLowerCase().replace(/[-_]/g, " ");
   if (title.includes("attack on titan")) return { name: "Attack on Titan Collection", explicit: true };
@@ -1880,10 +1878,11 @@ function listFranchiseName(item: MediaSummary): { name: string; explicit: boolea
   return null;
 }
 
-function listStudioNames(item: MediaSummary) {
-  const companies = item.companies?.length ? item.companies : Array.isArray(item.raw?.production_companies) ? item.raw.production_companies : [];
-  const names = companies.map((company: any) => company?.name).filter(Boolean);
-  return names.length ? [...new Set(names)] : ["Other studios"];
+function availableListFranchiseGroups(items: MediaSummary[]) {
+  return [...new Set(items.flatMap(item => {
+    const name = listFranchiseName(item)?.name;
+    return name ? [name] : [];
+  }))].sort((a, b) => a.localeCompare(b));
 }
 
 function GroupedListContent({ groups, onOpen, onMenu }: { groups: Array<{ title: string; items: MediaSummary[] }>; onOpen: (item: MediaSummary) => void; onMenu: (item: MediaSummary) => void }) {
@@ -1959,12 +1958,14 @@ function MfaPanel({ code, error, busy, onCode, onVerify }: { code: string; error
   );
 }
 
-function MovieActionSheet({ item, visible, session, currentList, allowNotInterested, onClose, onOpen, onNotInterested, onChanged }: { item: MediaSummary | null; visible: boolean; session: Session | null; currentList?: UserList | null; allowNotInterested?: boolean; onClose: () => void; onOpen: (item: MediaSummary) => void; onNotInterested: (item: MediaSummary) => void; onChanged: () => Promise<void> }) {
+function MovieActionSheet({ item, visible, session, currentList, franchiseGroups = [], allowNotInterested, onClose, onOpen, onNotInterested, onChanged }: { item: MediaSummary | null; visible: boolean; session: Session | null; currentList?: UserList | null; franchiseGroups?: string[]; allowNotInterested?: boolean; onClose: () => void; onOpen: (item: MediaSummary) => void; onNotInterested: (item: MediaSummary) => void; onChanged: () => Promise<void> }) {
   const [dbId, setDbId] = useState<number | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [favorite, setFavorite] = useState(false);
   const [lists, setLists] = useState<ListMembership[]>([]);
   const [listQuery, setListQuery] = useState("");
+  const [manualGroup, setManualGroup] = useState("");
+  const [newManualGroup, setNewManualGroup] = useState("");
   const [busy, setBusy] = useState(false);
   const poster = tmdbImage(item?.posterPath ?? item?.backdropPath ?? null, "w342");
   const filteredLists = lists.filter(list => list.name.toLowerCase().includes(listQuery.trim().toLowerCase()));
@@ -1990,6 +1991,12 @@ function MovieActionSheet({ item, visible, session, currentList, allowNotInteres
   useEffect(() => {
     loadState().catch(() => undefined);
   }, [loadState]);
+
+  useEffect(() => {
+    if (!visible) return;
+    setManualGroup(item?.franchiseGroup?.trim() ?? "");
+    setNewManualGroup("");
+  }, [item?.franchiseGroup, visible]);
 
   async function updateStatus(nextStatus: string) {
     if (!session?.user.id || !supabase || !dbId) return Alert.alert("Unavailable", "Open this title on the website once before editing it in the app.");
@@ -2045,6 +2052,21 @@ function MovieActionSheet({ item, visible, session, currentList, allowNotInteres
     }
   }
 
+  async function saveFranchiseGroup() {
+    const mediaId = item?.listMediaId ?? dbId;
+    if (!supabase || !currentList?.id || !mediaId) return Alert.alert("Unavailable", "Open this title on the website once before editing it in the app.");
+    const group = (newManualGroup || manualGroup).trim();
+    setBusy(true);
+    try {
+      await supabase.from("list_items").update({ franchise_group: group || null }).eq("list_id", currentList.id).eq("media_id", mediaId);
+      setManualGroup(group);
+      setNewManualGroup("");
+      await onChanged();
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <Modal visible={visible && Boolean(item)} transparent animationType="slide" onRequestClose={onClose}>
       <Pressable style={styles.modalScrim} onPress={onClose} />
@@ -2080,6 +2102,21 @@ function MovieActionSheet({ item, visible, session, currentList, allowNotInteres
                 </Pressable>
               )) : <Text style={styles.actionSub}>{lists.length ? "No lists match that search." : "No lists yet."}</Text>}
             </ScrollView>
+            {currentList && lists.some(list => list.id === currentList.id && list.contains) ? (
+              <View style={styles.currentListSection}>
+                <Text style={styles.actionSectionLabel}>Franchise group</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.franchiseGroupChips}>
+                  <Pressable disabled={busy} onPress={() => setManualGroup("")} style={[styles.groupChip, !manualGroup && styles.groupChipActive]}><Text style={[styles.groupChipText, !manualGroup && styles.groupChipTextActive]}>Auto / none</Text></Pressable>
+                  {franchiseGroups.map(group => (
+                    <Pressable disabled={busy} key={group} onPress={() => setManualGroup(group)} style={[styles.groupChip, manualGroup === group && styles.groupChipActive]}><Text style={[styles.groupChipText, manualGroup === group && styles.groupChipTextActive]} numberOfLines={1}>{group}</Text></Pressable>
+                  ))}
+                </ScrollView>
+                <View style={styles.franchiseGroupCreateRow}>
+                  <TextInput value={newManualGroup} onChangeText={setNewManualGroup} placeholder="Create group" placeholderTextColor={colors.muted} style={styles.franchiseGroupInput} />
+                  <Pressable disabled={busy} onPress={saveFranchiseGroup} style={styles.franchiseGroupSave}><Text style={styles.franchiseGroupSaveText}>Save</Text></Pressable>
+                </View>
+              </View>
+            ) : null}
             {currentList && lists.some(list => list.id === currentList.id && list.contains) ? (
               <View style={styles.currentListSection}>
                 <Text style={styles.actionSectionLabel}>Current list</Text>
@@ -3244,13 +3281,15 @@ async function loadListFeed(listId: string): Promise<FeedResult> {
   if (!client) return emptyFeed;
   const { data, error } = await client
     .from("list_items")
-    .select("position,media(*)")
+    .select("position,franchise_group,media(*)")
     .eq("list_id", listId)
     .order("position", { ascending: true });
   if (error) throw error;
   return { items: (data ?? []).flatMap((row: any) => {
     const media = firstRow(row.media);
-    return media ? [fromDbMedia(media)] : [];
+    if (!media) return [];
+    const item = fromDbMedia(media);
+    return [{ ...item, listMediaId: media.id, franchiseGroup: row.franchise_group ?? null }];
   }) };
 }
 
@@ -3760,6 +3799,11 @@ const styles = StyleSheet.create({
   listActionText: { color: colors.muted, fontSize: 13, fontWeight: "900" },
   listActionTextActive: { color: "#6ee7a8" },
   currentListSection: { borderTopWidth: 1, borderTopColor: colors.line, marginTop: 10, paddingTop: 12 },
+  franchiseGroupChips: { gap: 8, paddingBottom: 8 },
+  franchiseGroupCreateRow: { flexDirection: "row", gap: 8 },
+  franchiseGroupInput: { flex: 1, minHeight: 46, borderRadius: 14, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel2, color: colors.text, paddingHorizontal: 12, fontSize: 15, fontWeight: "700" },
+  franchiseGroupSave: { minHeight: 46, borderRadius: 14, backgroundColor: colors.accent, alignItems: "center", justifyContent: "center", paddingHorizontal: 18 },
+  franchiseGroupSaveText: { color: colors.text, fontSize: 14, fontWeight: "900" },
   currentListRemove: { minHeight: 54, borderRadius: 16, backgroundColor: "rgba(255,77,77,0.12)", flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 },
   currentListRemoveText: { color: "#ff8585", fontSize: 15, fontWeight: "900" },
   episodeHero: { minHeight: 640, backgroundColor: colors.panel, justifyContent: "flex-end", overflow: "hidden" },

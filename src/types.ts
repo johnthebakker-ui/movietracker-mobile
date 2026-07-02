@@ -30,6 +30,8 @@ export interface MediaSummary {
   companies?: Array<{ id?: number; name: string; logo_path?: string | null }>;
   raw?: Record<string, any> | null;
   reason?: string;
+  listMediaId?: number;
+  franchiseGroup?: string | null;
 }
 
 export interface FeedResult {
