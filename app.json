@@ -16,6 +16,14 @@
       "backgroundColor": "#050706",
       "barStyle": "light-content"
     },
+    "plugins": [
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "MovieTracker uses your photos to update your profile picture and banner."
+        }
+      ]
+    ],
     "ios": {
       "supportsTablet": true
     },

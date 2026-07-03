@@ -1,4 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
+import * as ImagePicker from "expo-image-picker";
 import { StatusBar } from "expo-status-bar";
 import * as WebBrowser from "expo-web-browser";
 import type { Session } from "@supabase/supabase-js";
@@ -40,6 +41,7 @@ type PickerState = { title: string; value: string; options: Array<{ value: strin
 type HomeSection = { title: string; kicker: string; items: MediaSummary[] };
 type ProgressCounts = { planned: number; watching: number; completed: number; paused: number; dropped: number; favorites: number };
 type Profile = { id: string; username: string | null; display_name: string | null; avatar_url: string | null; banner_url: string | null; bio: string | null; region: string | null; created_at?: string | null };
+type ProfileImageSelection = { uri: string; fileName?: string | null; mimeType?: string | null; changed: boolean };
 type MfaState = { required: boolean; factorId?: string; challengeId?: string; code: string; error?: string };
 type WatchTimePoint = "start" | "end";
 type WatchDateMode = "now" | "release" | "unknown" | "custom";
@@ -3257,8 +3259,8 @@ function SettingsScreen({ session, profile, tab, onTab, onBack, onSignOut, onSav
   const [username, setUsername] = useState(profile?.username ?? "");
   const [bio, setBio] = useState(profile?.bio ?? "");
   const [region, setRegion] = useState(profile?.region ?? "US");
-  const [avatarUrl, setAvatarUrl] = useState(resolveRemoteImageUri(profile?.avatar_url ?? ""));
-  const [bannerUrl, setBannerUrl] = useState(resolveRemoteImageUri(profile?.banner_url ?? ""));
+  const [avatarImage, setAvatarImage] = useState<ProfileImageSelection>({ uri: resolveRemoteImageUri(profile?.avatar_url ?? ""), changed: false });
+  const [bannerImage, setBannerImage] = useState<ProfileImageSelection>({ uri: resolveRemoteImageUri(profile?.banner_url ?? ""), changed: false });
   const [privacy, setPrivacy] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   const [traktStatus, setTraktStatus] = useState<MobileTraktStatus | null>(null);
@@ -3268,7 +3270,6 @@ function SettingsScreen({ session, profile, tab, onTab, onBack, onSignOut, onSav
   const [mfaFactors, setMfaFactors] = useState<Array<{ id: string; friendlyName: string; status: string }>>([]);
   const [pendingMfa, setPendingMfa] = useState<{ id: string; secret: string } | null>(null);
   const [mfaCode, setMfaCode] = useState("");
-  const [newPassword, setNewPassword] = useState("");
   const [securityBusy, setSecurityBusy] = useState(false);
   const [securityMessage, setSecurityMessage] = useState("");
   const identities = session.user.identities ?? [];
@@ -3281,8 +3282,8 @@ function SettingsScreen({ session, profile, tab, onTab, onBack, onSignOut, onSav
     setUsername(profile?.username ?? "");
     setBio(profile?.bio ?? "");
     setRegion(profile?.region ?? "US");
-    setAvatarUrl(resolveRemoteImageUri(profile?.avatar_url ?? ""));
-    setBannerUrl(resolveRemoteImageUri(profile?.banner_url ?? ""));
+    setAvatarImage({ uri: resolveRemoteImageUri(profile?.avatar_url ?? ""), changed: false });
+    setBannerImage({ uri: resolveRemoteImageUri(profile?.banner_url ?? ""), changed: false });
   }, [profile]);
 
   useEffect(() => {
@@ -3318,25 +3319,27 @@ function SettingsScreen({ session, profile, tab, onTab, onBack, onSignOut, onSav
       status: factor.status
     }));
     setMfaFactors(verified);
-    setMfaSummary(verified.length ? `${verified.length} authenticator ${verified.length === 1 ? "factor is" : "factors are"} enabled.` : "No authenticator factor is enabled for this account.");
+    setMfaSummary(verified.length ? "Authenticator is enabled." : "No authenticator factor is enabled for this account.");
   }, [tab]);
 
   useEffect(() => {
     loadSecurity().catch(reason => setMfaSummary(reason instanceof Error ? reason.message : "Could not check two-factor status in the app."));
   }, [loadSecurity]);
 
-  async function updatePassword() {
-    if (!supabase) return;
-    if (newPassword.trim().length < 8) return Alert.alert("Password too short", "Use at least 8 characters.");
+  async function requestSecurityEmail(action: "delete_account" | "remove_mfa", factorId?: string) {
     setSecurityBusy(true);
     setSecurityMessage("");
     try {
-      const { error } = await supabase.auth.updateUser({ password: newPassword.trim() });
-      if (error) throw error;
-      setNewPassword("");
-      setSecurityMessage("Password updated.");
+      const response = await fetch(`${API_URL}/api/account/security-action`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ action, factorId })
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error ?? "Could not send confirmation email.");
+      setSecurityMessage(action === "delete_account" ? "Check your email to confirm account deletion." : "Check your email to confirm removing the authenticator.");
     } catch (reason) {
-      setSecurityMessage(reason instanceof Error ? reason.message : "Could not update password.");
+      setSecurityMessage(reason instanceof Error ? reason.message : "Could not send confirmation email.");
     } finally {
       setSecurityBusy(false);
     }
@@ -3359,6 +3362,10 @@ function SettingsScreen({ session, profile, tab, onTab, onBack, onSignOut, onSav
 
   async function startMfaEnrollment() {
     if (!supabase) return;
+    if (mfaFactors.length) {
+      setSecurityMessage("Only one authenticator is supported. Remove the current one first.");
+      return;
+    }
     const client = supabase;
     setSecurityBusy(true);
     setSecurityMessage("");
@@ -3400,30 +3407,53 @@ function SettingsScreen({ session, profile, tab, onTab, onBack, onSignOut, onSav
   }
 
   async function removeMfa(factorId: string) {
-    if (!supabase) return;
-    setSecurityBusy(true);
-    setSecurityMessage("");
-    try {
-      const assurance = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
-      if (assurance.error) throw assurance.error;
-      if (assurance.data?.currentLevel !== "aal2") throw new Error("Verify your authenticator during sign-in before removing this factor.");
-      const { error } = await supabase.auth.mfa.unenroll({ factorId });
-      if (error) throw error;
-      setSecurityMessage("Authenticator removed.");
-      await loadSecurity();
-    } catch (reason) {
-      setSecurityMessage(reason instanceof Error ? reason.message : "Could not remove authenticator.");
-    } finally {
-      setSecurityBusy(false);
+    await requestSecurityEmail("remove_mfa", factorId);
+  }
+
+  async function pickProfileImage(kind: "avatar" | "banner") {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert("Photos permission needed", "Allow photo access to choose a profile image.");
+      return;
     }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      aspect: kind === "avatar" ? [1, 1] : [16, 9],
+      quality: 0.9
+    });
+    if (result.canceled || !result.assets[0]) return;
+    const asset = result.assets[0];
+    const next = { uri: asset.uri, fileName: asset.fileName ?? `${kind}.jpg`, mimeType: asset.mimeType ?? "image/jpeg", changed: true };
+    if (kind === "avatar") setAvatarImage(next);
+    else setBannerImage(next);
+  }
+
+  async function uploadProfileImage(kind: "avatar" | "banner", image: ProfileImageSelection) {
+    if (!supabase) throw new Error("Supabase is not configured.");
+    if (!image.changed) return resolveRemoteImageUri(image.uri) || null;
+    const client = supabase;
+    const response = await fetch(image.uri);
+    const blob = await response.blob();
+    const mimeType = image.mimeType || blob.type || "image/jpeg";
+    if (!["image/jpeg", "image/png", "image/webp"].includes(mimeType)) throw new Error("Images must be JPEG, PNG, or WebP.");
+    if (blob.size > 5_242_880) throw new Error("Images must be under 5 MB.");
+    const extension = mimeType === "image/png" ? "png" : mimeType === "image/webp" ? "webp" : "jpg";
+    const path = `${session.user.id}/${kind}.${extension}`;
+    const { error } = await client.storage.from("profile-media").upload(path, blob, { upsert: true, contentType: mimeType, cacheControl: "3600" });
+    if (error) throw error;
+    return `${client.storage.from("profile-media").getPublicUrl(path).data.publicUrl}?v=${Date.now()}`;
   }
 
   async function saveProfile() {
     if (!supabase) return;
     setSaving(true);
     try {
-      const { error } = await supabase.from("profiles").update({ display_name: displayName.trim(), username: username.trim(), bio: bio.trim(), region: region.trim().toUpperCase().slice(0, 2), avatar_url: resolveRemoteImageUri(avatarUrl) || null, banner_url: resolveRemoteImageUri(bannerUrl) || null, updated_at: new Date().toISOString() }).eq("id", session.user.id);
+      const [avatarUrl, bannerUrl] = await Promise.all([uploadProfileImage("avatar", avatarImage), uploadProfileImage("banner", bannerImage)]);
+      const { error } = await supabase.from("profiles").update({ display_name: displayName.trim(), username: username.trim(), bio: bio.trim(), region: region.trim().toUpperCase().slice(0, 2), avatar_url: avatarUrl, banner_url: bannerUrl, updated_at: new Date().toISOString() }).eq("id", session.user.id);
       if (error) throw error;
+      setAvatarImage({ uri: avatarUrl ?? "", changed: false });
+      setBannerImage({ uri: bannerUrl ?? "", changed: false });
       Alert.alert("Profile saved", "Your profile settings were updated.");
       await onSaved();
     } catch (reason) {
@@ -3510,14 +3540,15 @@ function SettingsScreen({ session, profile, tab, onTab, onBack, onSignOut, onSav
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.settingsTabs}>
         {(["profile", "privacy", "security", "notifications", "integrations"] as SettingsTab[]).map(item => <Pressable key={item} onPress={() => onTab(item)} style={[styles.settingsTab, tab === item && styles.settingsTabActive]}><Text style={[styles.settingsTabText, tab === item && styles.settingsTabTextActive]}>{item[0].toUpperCase() + item.slice(1)}</Text></Pressable>)}
       </ScrollView>
-      {tab === "profile" ? <View style={styles.settingsPanel}><Text style={styles.settingsTitle}>Profile</Text><SettingsInput label="Display name" value={displayName} onChange={setDisplayName} /><SettingsInput label="Username" value={username} onChange={setUsername} autoCapitalize="none" /><SettingsInput label="Bio" value={bio} onChange={setBio} multiline /><SettingsInput label="Avatar image URL" value={avatarUrl} onChange={setAvatarUrl} autoCapitalize="none" /><SettingsInput label="Banner image URL" value={bannerUrl} onChange={setBannerUrl} autoCapitalize="none" /><SettingsInput label="Country" value={region} onChange={setRegion} autoCapitalize="characters" /><Pressable disabled={saving} onPress={saveProfile} style={styles.settingsSave}><Text style={styles.settingsSaveText}>Save profile</Text></Pressable></View> : null}
+      {tab === "profile" ? <View style={styles.settingsPanel}><Text style={styles.settingsTitle}>Profile</Text><SettingsInput label="Display name" value={displayName} onChange={setDisplayName} /><SettingsInput label="Username" value={username} onChange={setUsername} autoCapitalize="none" /><SettingsInput label="Bio" value={bio} onChange={setBio} multiline /><ProfileImagePicker label="Profile picture" imageUri={avatarImage.uri} shape="avatar" onPick={() => pickProfileImage("avatar")} /><ProfileImagePicker label="Banner image" imageUri={bannerImage.uri} shape="banner" onPick={() => pickProfileImage("banner")} /><SettingsInput label="Country" value={region} onChange={setRegion} autoCapitalize="characters" /><Pressable disabled={saving} onPress={saveProfile} style={styles.settingsSave}>{saving ? <ActivityIndicator color={colors.text} /> : <Text style={styles.settingsSaveText}>Save profile</Text>}</Pressable></View> : null}
       {tab === "privacy" ? <View style={styles.settingsPanel}><Text style={styles.settingsTitle}>Privacy</Text>{["profile", "activity", "history", "ratings", "favorites", "statistics"].map(key => <PrivacyRow key={key} label={key} value={privacy[key] ?? "public"} onChange={value => setPrivacy(current => ({ ...current, [key]: value }))} />)}<Pressable disabled={saving} onPress={savePrivacy} style={styles.settingsSave}><Text style={styles.settingsSaveText}>Save privacy</Text></Pressable></View> : null}
       {tab === "security" ? <View style={styles.settingsPanel}><Text style={styles.settingsTitle}>Security</Text><Text style={styles.settingsBody}>Signed in with {providerLabel}. {mfaSummary}</Text>{securityMessage ? <Text style={styles.settingsBody}>{securityMessage}</Text> : null}
-        <View style={styles.integrationBox}><Text style={styles.integrationLabel}>Password</Text>{hasEmailPassword ? <><TextInput value={newPassword} onChangeText={setNewPassword} secureTextEntry placeholder="New password" placeholderTextColor="#6f7477" style={styles.settingsInput} /><View style={styles.securityButtonRow}><Pressable disabled={securityBusy} onPress={updatePassword} style={styles.securitySmallButton}><Text style={styles.securitySmallButtonText}>Update password</Text></Pressable><Pressable disabled={securityBusy} onPress={sendPasswordReset} style={styles.securitySmallButtonGhost}><Text style={styles.settingsGhostText}>Reset email</Text></Pressable></View></> : <Text style={styles.settingsBody}>This account uses Google sign-in, so password changes and account recovery are handled by Google.</Text>}</View>
+        <View style={styles.integrationBox}><Text style={styles.integrationLabel}>Password</Text>{hasEmailPassword ? <><Text style={styles.settingsBody}>Password changes happen through a reset email, so someone with the open app cannot silently change it.</Text><Pressable disabled={securityBusy} onPress={sendPasswordReset} style={styles.securitySmallButtonGhost}><Text style={styles.settingsGhostText}>Send password reset email</Text></Pressable></> : <Text style={styles.settingsBody}>This account uses Google sign-in, so password changes and account recovery are handled by Google.</Text>}</View>
         <View style={styles.integrationBox}><Text style={styles.integrationLabel}>Authenticator app</Text>{mfaFactors.map(factor => <View key={factor.id} style={styles.securityFactorRow}><View style={styles.securityFactorCopy}><Ionicons name="shield-checkmark-outline" size={19} color="#6ee7a8" /><View><Text style={styles.securityFactorTitle}>{factor.friendlyName}</Text><Text style={styles.securityFactorSub}>Verified and required on new sessions</Text></View></View><Pressable disabled={securityBusy} onPress={() => removeMfa(factor.id)} style={styles.securityRemoveButton}><Text style={styles.securityRemoveText}>Remove</Text></Pressable></View>)}
-          {pendingMfa ? <View style={styles.securityEnrollBox}><Text style={styles.settingsBody}>Manual setup key</Text><Text selectable style={styles.securitySecretText}>{pendingMfa.secret}</Text><TextInput value={mfaCode} onChangeText={setMfaCode} keyboardType="number-pad" maxLength={8} placeholder="6-digit code" placeholderTextColor="#6f7477" style={styles.settingsInput} /><Pressable disabled={securityBusy} onPress={verifyMfa} style={styles.settingsSave}><Text style={styles.settingsSaveText}>Verify authenticator</Text></Pressable></View> : <Pressable disabled={securityBusy} onPress={startMfaEnrollment} style={styles.settingsGhost}><Text style={styles.settingsGhostText}>{mfaFactors.length ? "Add another authenticator" : "Set up authenticator"}</Text></Pressable>}
+          {pendingMfa ? <View style={styles.securityEnrollBox}><Text style={styles.settingsBody}>Manual setup key</Text><Text selectable style={styles.securitySecretText}>{pendingMfa.secret}</Text><TextInput value={mfaCode} onChangeText={setMfaCode} keyboardType="number-pad" maxLength={8} placeholder="6-digit code" placeholderTextColor="#6f7477" style={styles.settingsInput} /><Pressable disabled={securityBusy} onPress={verifyMfa} style={styles.settingsSave}><Text style={styles.settingsSaveText}>Verify authenticator</Text></Pressable></View> : !mfaFactors.length ? <Pressable disabled={securityBusy} onPress={startMfaEnrollment} style={styles.settingsGhost}><Text style={styles.settingsGhostText}>Set up authenticator</Text></Pressable> : <Text style={styles.settingsBody}>Only one authenticator can be active. Remove it first if you want to replace it.</Text>}
         </View>
-        <Pressable onPress={onSignOut} style={styles.settingsDanger}><Text style={styles.settingsDangerText}>Sign out</Text></Pressable></View> : null}
+        <Pressable disabled={securityBusy} onPress={() => Alert.alert("Delete account?", "We'll email a confirmation link before anything is deleted.", [{ text: "Cancel", style: "cancel" }, { text: "Email link", style: "destructive", onPress: () => requestSecurityEmail("delete_account") }])} style={styles.settingsDanger}><Text style={styles.settingsDangerText}>Email deletion link</Text></Pressable>
+        <Pressable onPress={onSignOut} style={styles.settingsGhost}><Text style={styles.settingsGhostText}>Sign out</Text></Pressable></View> : null}
       {tab === "notifications" ? <View style={styles.settingsPanel}><Text style={styles.settingsTitle}>Notifications</Text>{["Follow requests and approvals", "Review and list interactions", "Release reminders", "Recommendation digest"].map(label => <ToggleRow key={label} label={label} />)}</View> : null}
       {tab === "integrations" ? <View style={styles.settingsPanel}><Text style={styles.settingsTitle}>Integrations</Text><Text style={styles.settingsBody}>Connect Trakt once and MovieTracker will keep your viewing diary synced across the app and website.</Text>
         {!traktStatus ? <ActivityIndicator color={colors.accent} style={{ marginTop: 18 }} /> : !traktStatus.databaseReady ? <Text style={styles.settingsError}>Trakt database migration is not ready yet.</Text> : !traktStatus.environmentReady ? <Text style={styles.settingsError}>Trakt server credentials are not configured yet.</Text> : traktStatus.connection ? (
@@ -3538,6 +3569,23 @@ function SettingsScreen({ session, profile, tab, onTab, onBack, onSignOut, onSav
 
 function SettingsInput({ label, value, onChange, multiline, autoCapitalize }: { label: string; value: string; onChange: (value: string) => void; multiline?: boolean; autoCapitalize?: "none" | "sentences" | "words" | "characters" }) {
   return <View style={styles.settingsField}><Text style={styles.settingsLabel}>{label}</Text><TextInput value={value} onChangeText={onChange} multiline={multiline} autoCapitalize={autoCapitalize} placeholderTextColor="#6f7477" style={[styles.settingsInput, multiline && styles.settingsTextArea]} /></View>;
+}
+
+function ProfileImagePicker({ label, imageUri, shape, onPick }: { label: string; imageUri: string; shape: "avatar" | "banner"; onPick: () => void }) {
+  return (
+    <View style={styles.settingsField}>
+      <Text style={styles.settingsLabel}>{label}</Text>
+      <View style={styles.profileMediaRow}>
+        <View style={[styles.profileMediaPreview, shape === "avatar" ? styles.profileMediaAvatar : styles.profileMediaBanner]}>
+          {imageUri ? <RemoteImage uri={imageUri} style={styles.profileMediaImage} resizeMode="cover" /> : <Ionicons name="image-outline" size={24} color={colors.muted} />}
+        </View>
+        <Pressable onPress={onPick} style={styles.profileMediaButton}>
+          <Ionicons name="image-outline" size={18} color={colors.text} />
+          <Text style={styles.profileMediaButtonText}>{imageUri ? "Change image" : "Choose from phone"}</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
 }
 
 function PrivacyRow({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
@@ -4412,6 +4460,13 @@ const styles = StyleSheet.create({
   settingsField: { marginTop: 12 },
   settingsLabel: { color: colors.muted, fontSize: 12, fontWeight: "900", letterSpacing: 1.2, textTransform: "uppercase", marginBottom: 6 },
   settingsInput: { minHeight: 52, borderRadius: 14, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel2, color: colors.text, fontSize: 16, paddingHorizontal: 12 },
+  profileMediaRow: { minHeight: 82, borderRadius: 18, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel2, padding: 10, flexDirection: "row", alignItems: "center", gap: 12 },
+  profileMediaPreview: { overflow: "hidden", backgroundColor: colors.panel, alignItems: "center", justifyContent: "center" },
+  profileMediaAvatar: { width: 62, height: 62, borderRadius: 31 },
+  profileMediaBanner: { width: 110, height: 62, borderRadius: 14 },
+  profileMediaImage: { width: "100%", height: "100%" },
+  profileMediaButton: { flex: 1, minHeight: 48, borderRadius: 16, borderWidth: 1, borderColor: colors.line, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 8, paddingHorizontal: 12 },
+  profileMediaButtonText: { color: colors.text, fontSize: 14, fontWeight: "900", textAlign: "center" },
   settingsTextArea: { minHeight: 112, paddingTop: 12, textAlignVertical: "top" },
   settingsSave: { height: 56, borderRadius: 20, backgroundColor: colors.accent, alignItems: "center", justifyContent: "center", marginTop: 18 },
   settingsSaveText: { color: colors.text, fontSize: 17, fontWeight: "900" },
