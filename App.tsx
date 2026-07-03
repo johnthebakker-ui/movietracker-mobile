@@ -40,6 +40,9 @@ type HomeSection = { title: string; kicker: string; items: MediaSummary[] };
 type ProgressCounts = { planned: number; watching: number; completed: number; paused: number; dropped: number; favorites: number };
 type Profile = { id: string; username: string | null; display_name: string | null; avatar_url: string | null; banner_url: string | null; bio: string | null; region: string | null; created_at?: string | null };
 type MfaState = { required: boolean; factorId?: string; challengeId?: string; code: string; error?: string };
+type WatchTimePoint = "start" | "end";
+type WatchDateMode = "now" | "release" | "unknown" | "custom";
+type WatchLogValues = { mode: WatchDateMode; date?: string; time?: string; timePoint: WatchTimePoint };
 type LibraryFilter = "all" | "planned" | "watching" | "completed" | "paused" | "dropped" | "favorites" | "lists";
 type ListGroup = "none" | "collections";
 type CalendarMode = "upcoming" | "watched";
@@ -93,6 +96,7 @@ type DetailData = {
   communityRating: number | null;
   externalRatings: Array<{ label: string; value: string }>;
   progressStatus: string | null;
+  watched: boolean;
   favorite: boolean;
   lists: ListMembership[];
   cast: DetailPerson[];
@@ -1061,7 +1065,7 @@ export default function App() {
                 <View style={styles.afterFilters} />
               </>
             ) : usableSession && profileView === "history" ? (
-              <FullHistoryPage data={profileData} onOpen={openItem} onBack={() => openProfileView("profile")} onRemove={removeHistoryEvent} />
+              <FullHistoryPage data={profileData} onOpen={openItem} onMenu={setActionItem} onBack={() => openProfileView("profile")} onRemove={removeHistoryEvent} />
             ) : usableSession && profileView === "reviews" ? (
               <FullReviewsPage reviews={profileData.reviews} onBack={() => openProfileView("profile")} onOpen={openItem} />
             ) : usableSession && profileView === "statistics" ? (
@@ -1077,7 +1081,7 @@ export default function App() {
                   else setProfilePanel(next);
                 }} />
                 {(profilePanel === "overview" || profilePanel === "statistics") ? <ProfileStatBand data={profileData} /> : null}
-                {(profilePanel === "overview" || profilePanel === "history" || profilePanel === "activity") ? <ProfileHistorySection items={profileData.history} onOpen={openItem} onHistory={() => openProfileView("history")} /> : null}
+                {(profilePanel === "overview" || profilePanel === "history" || profilePanel === "activity") ? <ProfileHistorySection items={profileData.history} onOpen={openItem} onMenu={setActionItem} onHistory={() => openProfileView("history")} /> : null}
                 {(profilePanel === "overview" || profilePanel === "statistics") ? <ProfileProgressSection data={profileData} onLibrary={() => { setLibraryFilter("all"); goTab("library"); }} onOpen={openItem} onMenu={setActionItem} /> : null}
                 {(profilePanel === "overview" || profilePanel === "reviews") ? <ReviewSection reviews={profileData.reviews} onAll={() => openProfileView("reviews")} onOpen={openItem} /> : null}
                 {profilePanel === "overview" ? <><ProfileMediaSection kicker="Personal canon" title="Favorites" action="See all favorites ->" items={profileData.favorites.slice(0, 6)} onAction={() => { setLibraryFilter("favorites"); goTab("library"); }} onOpen={openItem} onMenu={setActionItem} /><ProfileListsSection owner={profile?.display_name || profile?.username || "you"} lists={profileData.lists} onOpenLists={() => { setLibraryFilter("lists"); goTab("library"); }} onOpenList={openList} /></> : null}
@@ -1392,12 +1396,12 @@ function ProfileNav({ value, onChange }: { value: ProfilePanel; onChange: (value
   );
 }
 
-function ProfileHistorySection({ items, onOpen, onHistory }: { items: HistoryItem[]; onOpen: (item: MediaSummary) => void; onHistory: () => void }) {
+function ProfileHistorySection({ items, onOpen, onMenu, onHistory }: { items: HistoryItem[]; onOpen: (item: MediaSummary) => void; onMenu: (item: MediaSummary) => void; onHistory: () => void }) {
   if (!items.length) return null;
-  return <View style={styles.profileSection}><SectionTitle kicker="A dated viewing diary" title="Recent history" action="See complete history ->" onAction={onHistory} /><View style={styles.historyGrid}>{items.slice(0, 6).map(item => <HistoryCard key={item.id} item={item} onOpen={onOpen} />)}</View></View>;
+  return <View style={styles.profileSection}><SectionTitle kicker="A dated viewing diary" title="Recent history" action="See complete history ->" onAction={onHistory} /><View style={styles.historyGrid}>{items.slice(0, 6).map(item => <HistoryCard key={item.id} item={item} onOpen={onOpen} onMenu={onMenu} />)}</View></View>;
 }
 
-function FullHistoryPage({ data, onOpen, onBack, onRemove }: { data: ProfileData; onOpen: (item: MediaSummary) => void; onBack: () => void; onRemove: (id: string, title: string) => void }) {
+function FullHistoryPage({ data, onOpen, onMenu, onBack, onRemove }: { data: ProfileData; onOpen: (item: MediaSummary) => void; onMenu: (item: MediaSummary) => void; onBack: () => void; onRemove: (id: string, title: string) => void }) {
   const items = data.history;
   const [visibleGroups, setVisibleGroups] = useState(8);
   const groups = useMemo(() => {
@@ -1429,7 +1433,7 @@ function FullHistoryPage({ data, onOpen, onBack, onRemove }: { data: ProfileData
             <HistorySummary icon="film-outline" value={data.historyUniqueTitles} label="unique titles" last />
           </View>
           <View style={styles.historyTimeline}>
-            {visible.map(group => <MemoHistoryDay key={group.dateKey} group={group} onOpen={onOpen} onRemove={onRemove} />)}
+            {visible.map(group => <MemoHistoryDay key={group.dateKey} group={group} onOpen={onOpen} onMenu={onMenu} onRemove={onRemove} />)}
           </View>
         </>
       ) : <EmptyPanel title="No watch history yet" body="Your watched movies and episodes will appear here." />}
@@ -1441,19 +1445,19 @@ function HistorySummary({ icon, value, label, last }: { icon: keyof typeof Ionic
   return <View style={[styles.historySummaryCell, last && styles.historySummaryCellLast]}><Ionicons name={icon} size={18} color={colors.accent} /><Text style={styles.historySummaryValue}>{value}</Text><Text style={styles.historySummaryLabel}>{label}</Text></View>;
 }
 
-function HistoryDay({ group, onOpen, onRemove }: { group: { dateTitle: string; dateSubtitle: string; items: HistoryItem[] }; onOpen: (item: MediaSummary) => void; onRemove: (id: string, title: string) => void }) {
+function HistoryDay({ group, onOpen, onMenu, onRemove }: { group: { dateTitle: string; dateSubtitle: string; items: HistoryItem[] }; onOpen: (item: MediaSummary) => void; onMenu: (item: MediaSummary) => void; onRemove: (id: string, title: string) => void }) {
   return (
     <View style={styles.historyDay}>
       <View style={styles.historyDayDate}><Text style={styles.historyDayTitle}>{group.dateTitle}</Text><Text style={styles.historyDaySub}>{group.dateSubtitle}</Text></View>
-      <View style={styles.historyEventList}>{group.items.map(item => <MemoHistoryEventRow key={item.id} item={item} onOpen={onOpen} onRemove={onRemove} />)}</View>
+      <View style={styles.historyEventList}>{group.items.map(item => <MemoHistoryEventRow key={item.id} item={item} onOpen={onOpen} onMenu={onMenu} onRemove={onRemove} />)}</View>
     </View>
   );
 }
 
-function HistoryEventRow({ item, onOpen, onRemove }: { item: HistoryItem; onOpen: (item: MediaSummary) => void; onRemove: (id: string, title: string) => void }) {
+function HistoryEventRow({ item, onOpen, onMenu, onRemove }: { item: HistoryItem; onOpen: (item: MediaSummary) => void; onMenu: (item: MediaSummary) => void; onRemove: (id: string, title: string) => void }) {
   const image = tmdbImage(item.artwork, "w500");
   return (
-    <Pressable onPress={() => item.item && onOpen(item.item)} style={styles.historyEvent}>
+    <Pressable onPress={() => item.item && onOpen(item.item)} onLongPress={() => item.item && onMenu(item.item)} delayLongPress={280} style={styles.historyEvent}>
       <View style={styles.historyEventArt}>{image ? <RemoteImage uri={image} style={styles.posterImage} resizeMode="cover" /> : <Ionicons name="film-outline" size={22} color={colors.muted} />}{item.rating != null ? <Text style={styles.historyRating}>{item.rating.toFixed(1)}<Text style={styles.historyRatingSmall}>/10</Text></Text> : null}</View>
       <View style={styles.historyEventCopy}>
         <Text style={styles.historyEventKicker}>{item.metaLabel}</Text>
@@ -1474,9 +1478,9 @@ function HistoryEventRow({ item, onOpen, onRemove }: { item: HistoryItem; onOpen
 const MemoHistoryDay = React.memo(HistoryDay);
 const MemoHistoryEventRow = React.memo(HistoryEventRow);
 
-function HistoryCard({ item, onOpen }: { item: HistoryItem; onOpen: (item: MediaSummary) => void }) {
+function HistoryCard({ item, onOpen, onMenu }: { item: HistoryItem; onOpen: (item: MediaSummary) => void; onMenu: (item: MediaSummary) => void }) {
   const image = tmdbImage(item.artwork, "w500");
-  return <Pressable onPress={() => item.item && onOpen(item.item)} style={styles.historyCard}><View style={styles.historyArt}>{image ? <RemoteImage uri={image} style={styles.posterImage} resizeMode="cover" /> : null}{item.rating != null ? <Text style={styles.historyRating}>{item.rating.toFixed(1)}/10</Text> : null}<Text style={styles.historyDate}>{formatShortDate(item.date)}</Text></View><Text style={styles.historyTitle} numberOfLines={1}>{item.title}</Text><Text style={styles.historySub} numberOfLines={1}>{item.subtitle}</Text></Pressable>;
+  return <Pressable onPress={() => item.item && onOpen(item.item)} onLongPress={() => item.item && onMenu(item.item)} delayLongPress={280} style={styles.historyCard}><View style={styles.historyArt}>{image ? <RemoteImage uri={image} style={styles.posterImage} resizeMode="cover" /> : null}{item.rating != null ? <Text style={styles.historyRating}>{item.rating.toFixed(1)}/10</Text> : null}<Text style={styles.historyDate}>{formatShortDate(item.date)}</Text></View><Text style={styles.historyTitle} numberOfLines={1}>{item.title}</Text><Text style={styles.historySub} numberOfLines={1}>{item.subtitle}</Text></Pressable>;
 }
 
 function ProfileProgressSection({ data, onLibrary, onOpen, onMenu }: { data: ProfileData; onLibrary: () => void; onOpen: (item: MediaSummary) => void; onMenu: (item: MediaSummary) => void }) {
@@ -2091,19 +2095,15 @@ function MovieActionSheet({ item, visible, session, currentList, franchiseGroups
               <Pressable disabled={busy} style={styles.contextPrimaryButton} onPress={toggleFavorite}><Ionicons name={favorite ? "heart" : "heart-outline"} size={22} color={colors.text} /><Text style={styles.contextPrimaryText}>{favorite ? "Unfavorite" : "Favorite"}</Text></Pressable>
             </View>
             <View style={styles.actionDivider} />
-            <Text style={styles.actionSectionLabel}>Custom lists</Text>
-            {lists.length ? <View style={styles.contextListSearch}><Ionicons name="search-outline" size={18} color={colors.muted} /><TextInput value={listQuery} onChangeText={setListQuery} placeholder="Find a list" placeholderTextColor={colors.muted} style={styles.contextListInput} /></View> : null}
-            <ScrollView style={[styles.actionListScroll, isCurrentListItem && styles.actionListScrollCompact]} nestedScrollEnabled showsVerticalScrollIndicator>
-              {filteredLists.length ? filteredLists.map(list => (
-                <Pressable disabled={busy} key={list.id} onPress={() => toggleList(list)} style={[styles.listActionRow, list.contains && styles.listActionRowActive]}>
-                  <Text style={[styles.listActionName, list.contains && styles.listActionNameActive]} numberOfLines={1}>{list.name}</Text>
-                  <View style={styles.listActionState}>
-                    <Ionicons name={list.contains ? "checkmark" : "list-outline"} size={16} color={list.contains ? "#6ee7a8" : colors.muted} />
-                    <Text style={[styles.listActionText, list.contains && styles.listActionTextActive]}>{list.contains ? "Added" : "Add"}</Text>
-                  </View>
-                </Pressable>
-              )) : <Text style={styles.actionSub}>{lists.length ? "No lists match that search." : "No lists yet."}</Text>}
-            </ScrollView>
+            {activeCurrentList ? (
+              <View style={styles.currentListSection}>
+                <Text style={styles.actionSectionLabel}>Current list</Text>
+                <Pressable disabled={busy} onPress={() => {
+                  const list = lists.find(candidate => candidate.id === activeCurrentList.id);
+                  if (list) toggleList(list);
+                }} style={styles.currentListRemove}><Ionicons name="trash-outline" size={17} color={colors.danger} /><Text style={styles.currentListRemoveText}>Remove from {activeCurrentList.name}</Text></Pressable>
+              </View>
+            ) : null}
             {isCurrentListItem ? (
               <View style={styles.currentListSection}>
                 <Text style={styles.actionSectionLabel}>Franchise group</Text>
@@ -2119,15 +2119,19 @@ function MovieActionSheet({ item, visible, session, currentList, franchiseGroups
                 </View>
               </View>
             ) : null}
-            {activeCurrentList ? (
-              <View style={styles.currentListSection}>
-                <Text style={styles.actionSectionLabel}>Current list</Text>
-                <Pressable disabled={busy} onPress={() => {
-                  const list = lists.find(candidate => candidate.id === activeCurrentList.id);
-                  if (list) toggleList(list);
-                }} style={styles.currentListRemove}><Ionicons name="trash-outline" size={17} color={colors.danger} /><Text style={styles.currentListRemoveText}>Remove from {activeCurrentList.name}</Text></Pressable>
-              </View>
-            ) : null}
+            <Text style={styles.actionSectionLabel}>Custom lists</Text>
+            {lists.length ? <View style={styles.contextListSearch}><Ionicons name="search-outline" size={18} color={colors.muted} /><TextInput value={listQuery} onChangeText={setListQuery} placeholder="Find a list" placeholderTextColor={colors.muted} style={styles.contextListInput} /></View> : null}
+            <ScrollView style={[styles.actionListScroll, isCurrentListItem && styles.actionListScrollCompact]} nestedScrollEnabled showsVerticalScrollIndicator>
+              {filteredLists.length ? filteredLists.map(list => (
+                <Pressable disabled={busy} key={list.id} onPress={() => toggleList(list)} style={[styles.listActionRow, list.contains && styles.listActionRowActive]}>
+                  <Text style={[styles.listActionName, list.contains && styles.listActionNameActive]} numberOfLines={1}>{list.name}</Text>
+                  <View style={styles.listActionState}>
+                    <Ionicons name={list.contains ? "checkmark" : "list-outline"} size={16} color={list.contains ? "#6ee7a8" : colors.muted} />
+                    <Text style={[styles.listActionText, list.contains && styles.listActionTextActive]}>{list.contains ? "Added" : "Add"}</Text>
+                  </View>
+                </Pressable>
+              )) : <Text style={styles.actionSub}>{lists.length ? "No lists match that search." : "No lists yet."}</Text>}
+            </ScrollView>
             {allowNotInterested && item ? <><View style={styles.actionDivider} /><ActionRow icon="ban-outline" label="Not interested" danger onPress={() => onNotInterested(item)} /></> : null}
           </>
         ) : item ? <ActionRow icon="open-outline" label="Details" onPress={() => { onClose(); onOpen(item); }} /> : null}
@@ -2437,6 +2441,7 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
   const [busy, setBusy] = useState(false);
   const [listsExpanded, setListsExpanded] = useState(false);
   const [ratingSheetVisible, setRatingSheetVisible] = useState(false);
+  const [watchSheetVisible, setWatchSheetVisible] = useState(false);
   const backdrop = tmdbImage(item.backdropPath || item.posterPath, "w780");
   const poster = tmdbImage(item.posterPath, "w500");
   const director = detail?.crew.find(person => person.job === "Director" || person.job === "Creator");
@@ -2468,6 +2473,7 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
         communityRating: mobileDetail.communityRating ?? item.communityRating ?? null,
         externalRatings: mobileDetail.externalRatings ?? [],
         progressStatus: mobileDetail.progressStatus ?? null,
+        watched: Boolean(mobileDetail.watched ?? mobileDetail.progressStatus === "completed"),
         favorite: Boolean(mobileDetail.favorite),
         lists: (mobileDetail.lists ?? []).map(list => ({
           id: list.id,
@@ -2508,7 +2514,7 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
     const externalRatings = websiteMetadata.ratings;
     const media = mediaResult.data;
     if (!media) {
-      setDetail({ dbId: null, overview: websiteOverview || item.overview || null, tagline: null, releaseDate: item.releaseDate ?? null, endDate: item.endDate ?? null, genres: item.genres ?? [], voteAverage: item.voteAverage ?? null, runtime: null, originalLanguage: item.originalLanguage ?? null, status: item.status ?? null, userRating: item.userRating ?? null, communityRating: item.communityRating ?? null, externalRatings, progressStatus: null, favorite: false, lists: [], cast: [], crew: [], companies: [], videos: [], images: [], seasons: [], reviews: [], myReview: null, collectionName: item.collectionName ?? null, collection: [], recommendations: [] });
+      setDetail({ dbId: null, overview: websiteOverview || item.overview || null, tagline: null, releaseDate: item.releaseDate ?? null, endDate: item.endDate ?? null, genres: item.genres ?? [], voteAverage: item.voteAverage ?? null, runtime: null, originalLanguage: item.originalLanguage ?? null, status: item.status ?? null, userRating: item.userRating ?? null, communityRating: item.communityRating ?? null, externalRatings, progressStatus: null, watched: false, favorite: false, lists: [], cast: [], crew: [], companies: [], videos: [], images: [], seasons: [], reviews: [], myReview: null, collectionName: item.collectionName ?? null, collection: [], recommendations: [] });
       return;
     }
     const client = supabase!;
@@ -2574,6 +2580,7 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
       communityRating: communityRows.length ? communityRows.reduce((sum: number, row: any) => sum + Number(row.score), 0) / communityRows.length : item.communityRating ?? null,
       externalRatings,
       progressStatus: progress.data?.status ?? null,
+      watched: progress.data?.status === "completed",
       favorite: Boolean(favorite.data),
       lists: (lists as UserList[]).map(list => ({ ...list, contains: containing.has(list.id) })),
       cast: (media.credits?.cast ?? raw.credits?.cast ?? []).slice(0, 18),
@@ -2661,12 +2668,13 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
     Alert.alert(detail.myReview ? "Review updated" : "Review published", "Your take is saved.");
   }
 
-  async function addWatch() {
+  async function saveWatchLog(values: WatchLogValues) {
     if (!session?.user.id || !supabase || !detail?.dbId) return Alert.alert("Unavailable", "Open this title on the website once before editing it in the app.");
+    const watchedAt = resolveWatchLogDate(values, detail.releaseDate || item.releaseDate, detail.runtime ?? 0);
     await withBusy(async () => {
-      await supabase!.from("watch_events").insert({ user_id: session.user.id, media_id: detail.dbId, watched_at: new Date().toISOString() });
-      await supabase!.from("progress").upsert({ user_id: session.user.id, media_id: detail.dbId, status: "completed", completed_at: new Date().toISOString(), updated_at: new Date().toISOString() });
-      setDetail(current => current ? { ...current, progressStatus: "completed" } : current);
+      await supabase!.from("watch_events").insert({ user_id: session.user.id, media_id: detail.dbId, watched_at: watchedAt });
+      await supabase!.from("progress").upsert({ user_id: session.user.id, media_id: detail.dbId, status: "completed", completed_at: watchedAt, updated_at: new Date().toISOString() });
+      setDetail(current => current ? { ...current, progressStatus: "completed", watched: true } : current);
       Alert.alert("Watch added", "Your watch history was updated.");
     });
   }
@@ -2721,10 +2729,11 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
             </View>
             <Ionicons name="chevron-forward" size={18} color={colors.muted} />
           </Pressable>
-          <View style={styles.detailQuickActions}><Pressable disabled={busy} onPress={toggleFavorite} style={styles.quickAction}><Ionicons name={detail?.favorite ? "heart" : "heart-outline"} size={19} color={colors.text} /><Text style={styles.quickActionText}>{detail?.favorite ? "Favorited" : "Favorite"}</Text></Pressable><Pressable disabled={busy} onPress={() => session?.access_token ? onHide(item) : Alert.alert("Sign in needed", "Sign in before changing recommendations.")} style={styles.quickAction}><Ionicons name="ban-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>Not interested</Text></Pressable><Pressable disabled={busy} onPress={addWatch} style={styles.quickAction}><Ionicons name={item.kind === "show" ? "checkmark" : "calendar-outline"} size={19} color={colors.text} /><Text style={styles.quickActionText}>{item.kind === "show" ? "Mark entire series watched" : "Add another watch"}</Text></Pressable></View>
+          <View style={styles.detailQuickActions}><Pressable disabled={busy} onPress={toggleFavorite} style={styles.quickAction}><Ionicons name={detail?.favorite ? "heart" : "heart-outline"} size={19} color={colors.text} /><Text style={styles.quickActionText}>{detail?.favorite ? "Favorited" : "Favorite"}</Text></Pressable><Pressable disabled={busy} onPress={() => session?.access_token ? onHide(item) : Alert.alert("Sign in needed", "Sign in before changing recommendations.")} style={styles.quickAction}><Ionicons name="ban-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>Not interested</Text></Pressable><Pressable disabled={busy} onPress={() => setWatchSheetVisible(true)} style={styles.quickAction}><Ionicons name="calendar-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>{detail?.watched ? "Add another watch" : "First watch"}</Text></Pressable></View>
           {detail?.lists.length ? <View style={styles.detailLists}><Pressable disabled={busy} onPress={() => setListsExpanded(current => !current)} style={styles.addToListButton}><Ionicons name="list-outline" size={21} color={colors.text} /><Text style={styles.addToListText}>Add to list</Text><Ionicons name={listsExpanded ? "chevron-up" : "chevron-down"} size={18} color={colors.muted} /></Pressable>{listsExpanded ? detail.lists.map(list => <Pressable disabled={busy} key={list.id} onPress={() => toggleDetailList(list)} style={[styles.detailListRow, list.contains && styles.detailListRowActive]}><Text style={styles.detailListName}>{list.name}</Text><Text style={[styles.detailListState, list.contains && styles.detailListStateActive]}>{list.contains ? "Remove selected" : "Add to list"}</Text></Pressable>) : null}</View> : null}
         </View>
         <RatingSheet visible={ratingSheetVisible} value={detail?.userRating ?? null} busy={busy} onClose={() => setRatingSheetVisible(false)} onSave={saveUserRating} />
+        <WatchLogSheet visible={watchSheetVisible} title={item.title} releaseDate={detail?.releaseDate || item.releaseDate} runtime={detail?.runtime ?? null} busy={busy} watched={Boolean(detail?.watched)} onClose={() => setWatchSheetVisible(false)} onSave={saveWatchLog} />
         <View style={styles.factGrid}><Fact label="Released" value={detail?.releaseDate || item.releaseDate || "TBA"} /><Fact label={director?.job ?? "Director"} value={director?.name ?? "TBA"} /><Fact label="Original language" value={(detail?.originalLanguage || item.originalLanguage || "Unknown").toUpperCase()} /><Fact label="Genres" value={detailGenres.map(genre => genre.name).join(", ") || "Unknown"} /></View>
         {item.kind === "show" && detail?.seasons.length ? <SeasonsSection seasons={detail.seasons} onOpenSeason={onOpenSeason} onOpenAllSeasons={onOpenAllSeasons} /> : null}
         {detail?.images.length || trailer ? <TitleMediaPreview trailer={trailer} images={detail?.images ?? []} /> : null}
@@ -2889,6 +2898,67 @@ function RatingSheet({ visible, value, busy, onClose, onSave }: { visible: boole
   );
 }
 
+function WatchLogSheet({ visible, title, releaseDate, runtime, busy, watched, onClose, onSave }: { visible: boolean; title: string; releaseDate?: string | null; runtime?: number | null; busy: boolean; watched?: boolean; onClose: () => void; onSave: (values: WatchLogValues) => Promise<void> }) {
+  const now = new Date();
+  const [mode, setMode] = useState<WatchDateMode>("now");
+  const [date, setDate] = useState(now.toISOString().slice(0, 10));
+  const [time, setTime] = useState(`${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`);
+  const [timePoint, setTimePoint] = useState<WatchTimePoint>("end");
+
+  useEffect(() => {
+    if (!visible) return;
+    const fresh = new Date();
+    setMode("now");
+    setDate(fresh.toISOString().slice(0, 10));
+    setTime(`${String(fresh.getHours()).padStart(2, "0")}:${String(fresh.getMinutes()).padStart(2, "0")}`);
+    setTimePoint("end");
+  }, [visible]);
+
+  async function submit(nextMode = mode) {
+    try {
+      await onSave({ mode: nextMode, date, time, timePoint });
+      onClose();
+    } catch (error) {
+      Alert.alert("Could not add watch", error instanceof Error ? error.message : "Try again.");
+    }
+  }
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <Pressable style={styles.modalScrim} onPress={onClose} />
+      <View style={styles.watchLogSheet}>
+        <View style={styles.grabber} />
+        <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+          <View style={styles.actionHeader}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.actionTitle}>{watched ? "Add another watch" : "Mark watched"}</Text>
+              <Text style={styles.actionSub} numberOfLines={1}>{title}</Text>
+            </View>
+            <Pressable onPress={onClose} style={styles.closeButton}><Ionicons name="close" size={20} color={colors.text} /></Pressable>
+          </View>
+          <View style={styles.watchQuickGrid}>
+            <Pressable disabled={busy} onPress={() => submit("now")} style={styles.watchQuickButton}><Ionicons name="time-outline" size={21} color={colors.accent} /><Text style={styles.watchQuickTitle}>Right now</Text><Text style={styles.watchQuickSub}>Use current time</Text></Pressable>
+            <Pressable disabled={busy || !releaseDate} onPress={() => releaseDate && submit("release")} style={[styles.watchQuickButton, !releaseDate && styles.disabledButton]}><Ionicons name="calendar-outline" size={21} color={colors.accent} /><Text style={styles.watchQuickTitle}>Release date</Text><Text style={styles.watchQuickSub}>{releaseDate ?? "Unknown"}</Text></Pressable>
+            <Pressable disabled={busy} onPress={() => submit("unknown")} style={styles.watchQuickButton}><Ionicons name="help-circle-outline" size={21} color={colors.accent} /><Text style={styles.watchQuickTitle}>Date unknown</Text><Text style={styles.watchQuickSub}>No calendar entry</Text></Pressable>
+          </View>
+          <View style={styles.watchCustomBox}>
+            <Text style={styles.actionSectionLabel}>Custom date and time</Text>
+            <View style={styles.watchInputsRow}>
+              <TextInput value={date} onChangeText={setDate} placeholder="YYYY-MM-DD" placeholderTextColor={colors.muted} style={[styles.settingsInput, styles.watchInput]} />
+              <TextInput value={time} onChangeText={setTime} placeholder="HH:mm" placeholderTextColor={colors.muted} style={[styles.settingsInput, styles.watchTimeInput]} />
+            </View>
+            <View style={styles.timePointRow}>
+              {(["end", "start"] as WatchTimePoint[]).map(value => <Pressable key={value} onPress={() => setTimePoint(value)} style={[styles.timePointButton, timePoint === value && styles.timePointButtonActive]}><Text style={[styles.timePointText, timePoint === value && styles.timePointTextActive]}>{value === "end" ? "End time" : "Start time"}</Text></Pressable>)}
+            </View>
+            {timePoint === "start" && runtime ? <Text style={styles.watchHint}>The app will add {minutesToLabel(runtime)} and store the finished-at time, just like the website.</Text> : null}
+            <Pressable disabled={busy} onPress={() => submit("custom")} style={styles.settingsSave}>{busy ? <ActivityIndicator color={colors.text} /> : <Text style={styles.settingsSaveText}>Save watch</Text>}</Pressable>
+          </View>
+        </ScrollView>
+      </View>
+    </Modal>
+  );
+}
+
 function ReviewComposerPanel({ existingReview, currentRating, busy, onSubmit }: { existingReview: ReviewItem | null; currentRating: number | null; busy: boolean; onSubmit: (values: { score: number | null; title: string; body: string; containsSpoilers: boolean }) => Promise<void> }) {
   const [score, setScore] = useState<number | null>(existingReview?.score ?? currentRating ?? null);
   const [title, setTitle] = useState(existingReview?.title === "Review" ? "" : existingReview?.title ?? "");
@@ -2963,6 +3033,20 @@ function ScoreControl({ value, onChange }: { value: number; onChange: (value: nu
 
 function clampRating(value: number) {
   return Math.max(1, Math.min(10, Math.round(value * 10) / 10));
+}
+
+function resolveWatchLogDate(values: WatchLogValues, releaseDate?: string | null, runtimeMinutes = 0) {
+  if (values.mode === "unknown") return null;
+  if (values.mode === "now") return new Date().toISOString();
+  const sourceDate = values.mode === "release" ? releaseDate : values.date;
+  if (!sourceDate) throw new Error(values.mode === "release" ? "This title has no known release date." : "Choose a watch date.");
+  const sourceTime = values.mode === "custom" ? values.time || "12:00" : "12:00";
+  const value = new Date(`${sourceDate}T${sourceTime}:00`);
+  if (Number.isNaN(value.getTime())) throw new Error("Choose a valid watch date.");
+  const completedAt = values.timePoint === "start" && runtimeMinutes > 0 ? new Date(value.getTime() + runtimeMinutes * 60_000) : value;
+  const dateToValidate = values.timePoint === "start" ? value : completedAt;
+  if (dateToValidate.getTime() > Date.now() + 60_000) throw new Error("Choose a watch date that is not in the future.");
+  return completedAt.toISOString();
 }
 
 function DetailMediaSection({ kicker, title, items, onOpen }: { kicker: string; title: string; items: MediaSummary[]; onOpen: (item: MediaSummary) => void }) {
@@ -3045,17 +3129,26 @@ function SettingsScreen({ session, profile, tab, onTab, onBack, onSignOut, onSav
   const [username, setUsername] = useState(profile?.username ?? "");
   const [bio, setBio] = useState(profile?.bio ?? "");
   const [region, setRegion] = useState(profile?.region ?? "US");
+  const [avatarUrl, setAvatarUrl] = useState(profile?.avatar_url ?? "");
+  const [bannerUrl, setBannerUrl] = useState(profile?.banner_url ?? "");
   const [privacy, setPrivacy] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   const [traktStatus, setTraktStatus] = useState<MobileTraktStatus | null>(null);
   const [traktBusy, setTraktBusy] = useState(false);
   const [traktMessage, setTraktMessage] = useState("");
+  const [mfaSummary, setMfaSummary] = useState("Checking two-factor status...");
+  const identities = session.user.identities ?? [];
+  const providers = identities.map(identity => identity.provider).filter(Boolean);
+  const hasEmailPassword = providers.includes("email") || session.user.app_metadata?.provider === "email";
+  const providerLabel = providers.length ? [...new Set(providers)].join(", ") : String(session.user.app_metadata?.provider ?? "email");
 
   useEffect(() => {
     setDisplayName(profile?.display_name ?? "");
     setUsername(profile?.username ?? "");
     setBio(profile?.bio ?? "");
     setRegion(profile?.region ?? "US");
+    setAvatarUrl(profile?.avatar_url ?? "");
+    setBannerUrl(profile?.banner_url ?? "");
   }, [profile]);
 
   useEffect(() => {
@@ -3078,11 +3171,24 @@ function SettingsScreen({ session, profile, tab, onTab, onBack, onSignOut, onSav
     loadTrakt().catch(() => undefined);
   }, [loadTrakt]);
 
+  useEffect(() => {
+    if (tab !== "security" || !supabase) return;
+    let active = true;
+    supabase.auth.mfa.listFactors().then(({ data }) => {
+      if (!active) return;
+      const verified = data?.totp?.filter(factor => factor.status === "verified").length ?? 0;
+      setMfaSummary(verified ? `${verified} authenticator ${verified === 1 ? "factor is" : "factors are"} enabled.` : "No authenticator factor is enabled for this account.");
+    }).catch(() => {
+      if (active) setMfaSummary("Could not check two-factor status in the app.");
+    });
+    return () => { active = false; };
+  }, [tab]);
+
   async function saveProfile() {
     if (!supabase) return;
     setSaving(true);
     try {
-      const { error } = await supabase.from("profiles").update({ display_name: displayName.trim(), username: username.trim(), bio: bio.trim(), region: region.trim().toUpperCase().slice(0, 2), updated_at: new Date().toISOString() }).eq("id", session.user.id);
+      const { error } = await supabase.from("profiles").update({ display_name: displayName.trim(), username: username.trim(), bio: bio.trim(), region: region.trim().toUpperCase().slice(0, 2), avatar_url: avatarUrl.trim() || null, banner_url: bannerUrl.trim() || null, updated_at: new Date().toISOString() }).eq("id", session.user.id);
       if (error) throw error;
       Alert.alert("Profile saved", "Your profile settings were updated.");
       await onSaved();
@@ -3170,9 +3276,9 @@ function SettingsScreen({ session, profile, tab, onTab, onBack, onSignOut, onSav
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.settingsTabs}>
         {(["profile", "privacy", "security", "notifications", "integrations"] as SettingsTab[]).map(item => <Pressable key={item} onPress={() => onTab(item)} style={[styles.settingsTab, tab === item && styles.settingsTabActive]}><Text style={[styles.settingsTabText, tab === item && styles.settingsTabTextActive]}>{item[0].toUpperCase() + item.slice(1)}</Text></Pressable>)}
       </ScrollView>
-      {tab === "profile" ? <View style={styles.settingsPanel}><Text style={styles.settingsTitle}>Profile</Text><SettingsInput label="Display name" value={displayName} onChange={setDisplayName} /><SettingsInput label="Username" value={username} onChange={setUsername} autoCapitalize="none" /><SettingsInput label="Bio" value={bio} onChange={setBio} multiline /><SettingsInput label="Country" value={region} onChange={setRegion} autoCapitalize="characters" /><Pressable disabled={saving} onPress={saveProfile} style={styles.settingsSave}><Text style={styles.settingsSaveText}>Save profile</Text></Pressable></View> : null}
+      {tab === "profile" ? <View style={styles.settingsPanel}><Text style={styles.settingsTitle}>Profile</Text><SettingsInput label="Display name" value={displayName} onChange={setDisplayName} /><SettingsInput label="Username" value={username} onChange={setUsername} autoCapitalize="none" /><SettingsInput label="Bio" value={bio} onChange={setBio} multiline /><SettingsInput label="Avatar image URL" value={avatarUrl} onChange={setAvatarUrl} autoCapitalize="none" /><SettingsInput label="Banner image URL" value={bannerUrl} onChange={setBannerUrl} autoCapitalize="none" /><SettingsInput label="Country" value={region} onChange={setRegion} autoCapitalize="characters" /><Pressable disabled={saving} onPress={saveProfile} style={styles.settingsSave}><Text style={styles.settingsSaveText}>Save profile</Text></Pressable></View> : null}
       {tab === "privacy" ? <View style={styles.settingsPanel}><Text style={styles.settingsTitle}>Privacy</Text>{["profile", "activity", "history", "ratings", "favorites", "statistics"].map(key => <PrivacyRow key={key} label={key} value={privacy[key] ?? "public"} onChange={value => setPrivacy(current => ({ ...current, [key]: value }))} />)}<Pressable disabled={saving} onPress={savePrivacy} style={styles.settingsSave}><Text style={styles.settingsSaveText}>Save privacy</Text></Pressable></View> : null}
-      {tab === "security" ? <View style={styles.settingsPanel}><Text style={styles.settingsTitle}>Security</Text><Text style={styles.settingsBody}>Two-factor authentication is enforced when your account requires it. Password reset uses your account email.</Text><Pressable onPress={() => supabase?.auth.resetPasswordForEmail(session.user.email ?? "")} style={styles.settingsGhost}><Text style={styles.settingsGhostText}>Send password reset email</Text></Pressable><Pressable onPress={onSignOut} style={styles.settingsDanger}><Text style={styles.settingsDangerText}>Sign out</Text></Pressable></View> : null}
+      {tab === "security" ? <View style={styles.settingsPanel}><Text style={styles.settingsTitle}>Security</Text><Text style={styles.settingsBody}>Signed in with {providerLabel}. {mfaSummary}</Text>{hasEmailPassword ? <Pressable onPress={() => supabase?.auth.resetPasswordForEmail(session.user.email ?? "")} style={styles.settingsGhost}><Text style={styles.settingsGhostText}>Send password reset email</Text></Pressable> : <View style={styles.integrationBox}><Text style={styles.integrationLabel}>Password</Text><Text style={styles.settingsBody}>This account uses Google sign-in, so password changes and account recovery are handled by Google.</Text></View>}<Pressable onPress={() => WebBrowser.openBrowserAsync(`${API_URL}/settings/security`)} style={styles.settingsGhost}><Text style={styles.settingsGhostText}>Manage advanced security on website</Text></Pressable><Pressable onPress={onSignOut} style={styles.settingsDanger}><Text style={styles.settingsDangerText}>Sign out</Text></Pressable></View> : null}
       {tab === "notifications" ? <View style={styles.settingsPanel}><Text style={styles.settingsTitle}>Notifications</Text>{["Follow requests and approvals", "Review and list interactions", "Release reminders", "Recommendation digest"].map(label => <ToggleRow key={label} label={label} />)}</View> : null}
       {tab === "integrations" ? <View style={styles.settingsPanel}><Text style={styles.settingsTitle}>Integrations</Text><Text style={styles.settingsBody}>Connect Trakt once and MovieTracker will keep your viewing diary synced across the app and website.</Text>
         {!traktStatus ? <ActivityIndicator color={colors.accent} style={{ marginTop: 18 }} /> : !traktStatus.databaseReady ? <Text style={styles.settingsError}>Trakt database migration is not ready yet.</Text> : !traktStatus.environmentReady ? <Text style={styles.settingsError}>Trakt server credentials are not configured yet.</Text> : traktStatus.connection ? (
@@ -3588,7 +3694,7 @@ function formatShortDate(value: string) {
 
 function isEditedReview(review: Pick<ReviewItem, "created_at" | "updated_at">) {
   if (!review.updated_at) return false;
-  return new Date(review.updated_at).getTime() - new Date(review.created_at).getTime() > 1000;
+  return new Date(review.updated_at).getTime() - new Date(review.created_at).getTime() > 60_000;
 }
 
 function formatHistoryDay(value: string) {
@@ -3952,6 +4058,21 @@ const styles = StyleSheet.create({
   detailListState: { color: colors.muted, fontSize: 13, fontWeight: "900" },
   detailListStateActive: { color: colors.accent },
   ratingSheet: { position: "absolute", left: 14, right: 14, bottom: 92, borderRadius: 26, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel, padding: 16 },
+  watchLogSheet: { position: "absolute", left: 14, right: 14, bottom: 18, maxHeight: "86%", borderRadius: 28, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel, padding: 16 },
+  watchQuickGrid: { flexDirection: "row", gap: 8, marginTop: 10 },
+  watchQuickButton: { flex: 1, minHeight: 92, borderRadius: 16, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel2, padding: 10, justifyContent: "center", gap: 4 },
+  watchQuickTitle: { color: colors.text, fontSize: 13, fontWeight: "900" },
+  watchQuickSub: { color: colors.muted, fontSize: 11, fontWeight: "700" },
+  watchCustomBox: { marginTop: 14, borderTopWidth: 1, borderTopColor: colors.line, paddingTop: 12 },
+  watchInputsRow: { flexDirection: "row", gap: 8, marginTop: 8 },
+  watchInput: { flex: 1, marginTop: 0 },
+  watchTimeInput: { width: 98, marginTop: 0 },
+  timePointRow: { flexDirection: "row", gap: 8, marginTop: 10 },
+  timePointButton: { flex: 1, minHeight: 44, borderRadius: 14, borderWidth: 1, borderColor: colors.line, alignItems: "center", justifyContent: "center", backgroundColor: colors.panel2 },
+  timePointButtonActive: { borderColor: colors.accent, backgroundColor: colors.accentSoft },
+  timePointText: { color: colors.muted, fontSize: 13, fontWeight: "900" },
+  timePointTextActive: { color: colors.text },
+  watchHint: { color: colors.muted, fontSize: 12, lineHeight: 18, marginTop: 9 },
   ratingSheetActions: { flexDirection: "row", gap: 10, marginTop: 14 },
   ratingGhostButton: { flex: 1, height: 52, borderRadius: 18, borderWidth: 1, borderColor: colors.line, alignItems: "center", justifyContent: "center" },
   ratingGhostText: { color: colors.text, fontWeight: "900" },
