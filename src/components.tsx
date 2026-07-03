@@ -4,7 +4,7 @@ import type { Session } from "@supabase/supabase-js";
 import React, { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Dimensions, Image, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { colors, shadow } from "./theme";
-import { countries, excludeGenreOptions, genres, ratingLabel, titleYear, tmdbImage, userRatingLabel } from "./config";
+import { countries, excludeGenreOptions, genres, ratingLabel, SUPABASE_URL, titleYear, tmdbImage, userRatingLabel } from "./config";
 import type { AppTab, DiscoverFilters, MediaSummary, RecommendationFilters } from "./types";
 
 const logoIcon = require("../assets/logo.png");
@@ -19,13 +19,25 @@ const tabIcons: Record<AppTab, keyof typeof Ionicons.glyphMap> = {
 
 export type PickerAnchor = { x: number; y: number; width: number; height: number };
 
+export function resolveRemoteImageUri(uri: string | null | undefined) {
+  const value = uri?.trim();
+  if (!value) return "";
+  if (/^(https?:|file:|data:)/i.test(value)) return value;
+  if (!SUPABASE_URL) return value;
+  const [pathPart, query = ""] = value.replace(/^\/+/, "").split("?");
+  if (!pathPart) return value;
+  const encodedPath = pathPart.split("/").map(encodeURIComponent).join("/");
+  return `${SUPABASE_URL.replace(/\/$/, "")}/storage/v1/object/public/profile-media/${encodedPath}${query ? `?${query}` : ""}`;
+}
+
 export function RemoteImage({ uri, style, resizeMode = "cover" }: { uri: string; style: any; resizeMode?: "cover" | "contain" | "stretch" | "repeat" | "center" }) {
   const [attempt, setAttempt] = useState(0);
-  useEffect(() => setAttempt(0), [uri]);
-  const retryUri = attempt ? `${uri}${uri.includes("?") ? "&" : "?"}retry=${attempt}` : uri;
+  const resolvedUri = resolveRemoteImageUri(uri);
+  useEffect(() => setAttempt(0), [resolvedUri]);
+  const retryUri = attempt ? `${resolvedUri}${resolvedUri.includes("?") ? "&" : "?"}retry=${attempt}` : resolvedUri;
   return (
     <Image
-      key={`${uri}-${attempt}`}
+      key={`${resolvedUri}-${attempt}`}
       source={{ uri: retryUri }}
       style={style}
       resizeMode={resizeMode}
@@ -48,7 +60,7 @@ export function AppHeader({ session, onProfile, onSearch, onNotifications }: { s
       <HeaderButton icon="notifications-outline" onPress={onNotifications} />
       <Pressable onPress={onProfile} style={styles.avatar} hitSlop={8}>
         {avatarUrl ? (
-          <Image source={{ uri: avatarUrl }} style={styles.avatarImage} />
+          <RemoteImage uri={avatarUrl} style={styles.avatarImage} />
         ) : (
           <Ionicons name={session ? "person" : "person-outline"} size={22} color={session ? colors.text : colors.muted} />
         )}

@@ -16,6 +16,7 @@ import {
   RefreshControl,
   SafeAreaView,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -24,7 +25,7 @@ import {
   View
 } from "react-native";
 
-import { AppHeader, BottomNav, DiscoverFiltersCard, Hero, PickerSheet, RecommendationFiltersCard, RemoteImage, SectionTitle, TitleCard, type PickerAnchor } from "./src/components";
+import { AppHeader, BottomNav, DiscoverFiltersCard, Hero, PickerSheet, RecommendationFiltersCard, RemoteImage, resolveRemoteImageUri, SectionTitle, TitleCard, type PickerAnchor } from "./src/components";
 import { disconnectTrakt, fetchDiscover, fetchMobileCompany, fetchMobileEpisode, fetchMobilePerson, fetchMobileSeason, fetchMobileTitle, fetchRecommendations, fetchSearch, fetchTraktStatus, fetchWebsiteEntityMetadata, fetchWebsiteHome, fetchWebsiteTitleMetadata, refreshRecommendations, setNotInterested, startTraktConnect, syncTrakt, type MobileTraktStatus } from "./src/api";
 import { API_URL, countries, excludeGenreOptions, genres, HAS_SUPABASE, ratingLabel, titleYear, tmdbImage, userRatingLabel } from "./src/config";
 import { supabase } from "./src/supabase";
@@ -785,7 +786,10 @@ export default function App() {
         : await supabase.auth.signUp(credentials);
       if (authError) throw authError;
       if (authMode === "sign-up") {
-        Alert.alert("Account created", "Check your email if confirmation is required.");
+        await supabase.auth.signOut();
+        setSession(null);
+        Alert.alert("Verify your email", "Check your inbox and verify your account before signing in.");
+        setAuthMode("sign-in");
       }
       setPassword("");
     } catch (reason) {
@@ -1577,10 +1581,44 @@ function genreStatusColor(status: TrackedStatus) {
   return "#9b78b8";
 }
 
+function ratingCellStyle(score: number | null, colorized: boolean) {
+  if (score == null) return { backgroundColor: "#aeb0b2", color: "#151515" };
+  if (!colorized) return { backgroundColor: "#f5c20b", color: "#151515" };
+  if (score >= 9.5) return { backgroundColor: "#28a8f4", color: "#06131b" };
+  if (score >= 8) return { backgroundColor: "#24bf74", color: "#06170e" };
+  if (score >= 7) return { backgroundColor: "#f2cf3c", color: "#17130a" };
+  if (score >= 6) return { backgroundColor: "#f39b19", color: "#17130a" };
+  if (score >= 5) return { backgroundColor: "#e8584f", color: "#ffffff" };
+  return { backgroundColor: "#8151a8", color: "#ffffff" };
+}
+
+function RatingLegend() {
+  const buckets = [
+    ["Absolute", "#28a8f4"],
+    ["Great", "#24bf74"],
+    ["Good", "#f2cf3c"],
+    ["Regular", "#f39b19"],
+    ["Bad", "#e8584f"],
+    ["Garbage", "#8151a8"]
+  ];
+  return <View style={styles.ratingLegend}>{buckets.map(([label, color]) => <View key={label} style={styles.ratingLegendItem}><View style={[styles.ratingLegendDot, { backgroundColor: color }]} /><Text style={styles.ratingLegendText}>{label}</Text></View>)}</View>;
+}
+
+async function sharePublicTitle(path: string, title: string, text?: string | null) {
+  const url = `${API_URL}${path}`;
+  const message = text ? `${title}\n${text}\n${url}` : `${title}\n${url}`;
+  try {
+    await Share.share({ title, message, url });
+  } catch {
+    // Native share sheets reject when the user cancels.
+  }
+}
+
 function SeasonDetailScreen({ target, session, onBack, onOpenEpisode }: { target: SeasonTarget; session: Session | null; onBack: () => void; onOpenEpisode: (episode: any) => void }) {
   const [payload, setPayload] = useState<any | null>(null);
   const [loadingSeason, setLoadingSeason] = useState(false);
   const [source, setSource] = useState<"tmdb" | "imdb">("tmdb");
+  const [colorized, setColorized] = useState(false);
   const [busy, setBusy] = useState(false);
   const [ratingSheetVisible, setRatingSheetVisible] = useState(false);
   const season = payload?.season ?? target.season;
@@ -1674,6 +1712,9 @@ function SeasonDetailScreen({ target, session, onBack, onOpenEpisode }: { target
           <Text style={styles.detailTitleV2}>{season.name ?? target.season.name}</Text>
           <Text style={styles.detailMeta}>{episodes.length || target.season.episodeCount || "?"} episodes - {season.air_date?.slice(0, 4) ?? season.airDate?.slice(0, 4) ?? target.season.airDate?.slice(0, 4) ?? "TBA"}</Text>
           <Text style={styles.detailOverview}>{season.overview || target.season.overview || "No season overview has been published yet."}</Text>
+          <View style={styles.detailQuickActions}>
+            <Pressable onPress={() => sharePublicTitle(`/title/show/${target.show.id}/season/${target.season.seasonNumber}`, `${target.show.title} - ${season.name ?? target.season.name}`, season.overview || target.season.overview || target.show.overview)} style={styles.quickAction}><Ionicons name="share-social-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>Share</Text></Pressable>
+          </View>
         </View>
       </View>
       <View style={styles.detailBody}>
@@ -1693,15 +1734,20 @@ function SeasonDetailScreen({ target, session, onBack, onOpenEpisode }: { target
           <Pressable disabled={!imdbAvailable} onPress={() => setSource("imdb")} style={[styles.sourceTab, source === "imdb" && styles.sourceTabActive, !imdbAvailable && styles.sourceTabDisabled]}><Text style={styles.sourceTabText}>IMDb</Text></Pressable>
           <View style={[styles.sourceTab, styles.sourceTabDisabled]}><Text style={styles.sourceTabText}>Rotten Tomatoes</Text></View>
         </View>
+        <View style={styles.ratingGraphControls}>
+          <Pressable onPress={() => setColorized(value => !value)} style={[styles.ratingGraphToggle, colorized && styles.ratingGraphToggleActive]}><Text style={styles.ratingGraphToggleText}>Colored scores</Text><Switch value={colorized} onValueChange={setColorized} trackColor={{ false: "#343a3d", true: colors.accent }} thumbColor={colors.text} /></Pressable>
+        </View>
+        {colorized ? <RatingLegend /> : null}
         {loadingSeason ? <ActivityIndicator color={colors.accent} style={{ marginVertical: 18 }} /> : null}
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.seasonEpisodeGrid}>
           {episodes.map(episode => {
             const score = episodeScore(episode);
             const episodeNumber = Number(episode.episode_number ?? episode.episodeNumber ?? 0);
+            const cellColors = ratingCellStyle(score, colorized);
             return (
-              <Pressable key={`${episode.id ?? episodeNumber}`} onPress={() => onOpenEpisode(episode)} style={styles.seasonEpisodeCell}>
-                <Text style={styles.seasonEpisodeCode}>E{episodeNumber}</Text>
-                <Text style={styles.seasonEpisodeScore}>{score != null ? score.toFixed(1) : "-"}</Text>
+              <Pressable key={`${episode.id ?? episodeNumber}`} onPress={() => onOpenEpisode(episode)} style={[styles.seasonEpisodeCell, { backgroundColor: cellColors.backgroundColor }]}>
+                <Text style={[styles.seasonEpisodeCode, { color: cellColors.color }]}>E{episodeNumber}</Text>
+                <Text style={[styles.seasonEpisodeScore, { color: cellColors.color }]}>{score != null ? score.toFixed(1) : "?"}</Text>
               </Pressable>
             );
           })}
@@ -1731,9 +1777,17 @@ function SeriesEpisodesScreen({ target, session, onBack, onOpenSeason, onOpenEpi
   const [payloads, setPayloads] = useState<any[]>([]);
   const [loadingAll, setLoadingAll] = useState(false);
   const [source, setSource] = useState<"tmdb" | "imdb">("tmdb");
+  const [colorized, setColorized] = useState(false);
+  const [inverted, setInverted] = useState(false);
   const seasons = useMemo(() => [...target.seasons].sort((a, b) => a.seasonNumber - b.seasonNumber), [target.seasons]);
   const payloadBySeason = useMemo(() => new Map(payloads.map(payload => [Number(payload?.season?.season_number ?? payload?.season?.seasonNumber ?? payload?.seasonNumber ?? 0), payload])), [payloads]);
   const hasImdb = payloads.some(payload => (payload?.imdbRatings ?? []).some((rating: any) => typeof rating.imdbRating === "number"));
+  const seasonRows = useMemo(() => seasons.map(season => {
+    const payload = payloadBySeason.get(season.seasonNumber);
+    const episodes = [...(payload?.episodes ?? [])].sort((a, b) => Number(a.episode_number ?? a.episodeNumber ?? 0) - Number(b.episode_number ?? b.episodeNumber ?? 0));
+    return { season, payload, episodes };
+  }), [payloadBySeason, seasons]);
+  const maxEpisodes = Math.max(0, ...seasonRows.map(row => row.episodes.length));
 
   useEffect(() => {
     let alive = true;
@@ -1766,10 +1820,35 @@ function SeriesEpisodesScreen({ target, session, onBack, onOpenSeason, onOpenEpi
         <Pressable disabled={!hasImdb} onPress={() => setSource("imdb")} style={[styles.sourceTab, source === "imdb" && styles.sourceTabActive, !hasImdb && styles.sourceTabDisabled]}><Text style={styles.sourceTabText}>IMDb</Text></Pressable>
         <View style={[styles.sourceTab, styles.sourceTabDisabled]}><Text style={styles.sourceTabText}>Rotten Tomatoes</Text></View>
       </View>
+      <View style={styles.ratingGraphControls}>
+        <Pressable onPress={() => setColorized(value => !value)} style={[styles.ratingGraphToggle, colorized && styles.ratingGraphToggleActive]}><Text style={styles.ratingGraphToggleText}>Colored scores</Text><Switch value={colorized} onValueChange={setColorized} trackColor={{ false: "#343a3d", true: colors.accent }} thumbColor={colors.text} /></Pressable>
+        <Pressable onPress={() => setInverted(value => !value)} style={[styles.ratingGraphToggle, inverted && styles.ratingGraphToggleActive]}><Text style={styles.ratingGraphToggleText}>Inverted axes</Text><Switch value={inverted} onValueChange={setInverted} trackColor={{ false: "#343a3d", true: colors.accent }} thumbColor={colors.text} /></Pressable>
+      </View>
+      {colorized ? <RatingLegend /> : null}
       {loadingAll ? <ActivityIndicator color={colors.accent} style={{ marginVertical: 18 }} /> : null}
-      {seasons.map(season => {
-        const payload = payloadBySeason.get(season.seasonNumber);
-        const episodes = [...(payload?.episodes ?? [])].sort((a, b) => Number(a.episode_number ?? a.episodeNumber ?? 0) - Number(b.episode_number ?? b.episodeNumber ?? 0));
+      {seasonRows.length && maxEpisodes ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.fullMatrixScroll}><View style={styles.fullEpisodeMatrix}>
+        {!inverted ? <>
+          <View style={styles.matrixRow}><Text style={styles.matrixAxisCell}>Season</Text>{Array.from({ length: maxEpisodes }, (_, index) => <Text key={index} style={styles.matrixHeaderCell}>E{index + 1}</Text>)}</View>
+          {seasonRows.map(({ season, payload, episodes }) => <View key={`matrix-${season.seasonNumber}`} style={styles.matrixRow}><Text style={styles.matrixAxisCell}>S{season.seasonNumber}</Text>{Array.from({ length: maxEpisodes }, (_, index) => {
+            const episode = episodes[index];
+            if (!episode) return <View key={index} style={styles.matrixEmptyCell} />;
+            const score = episodeScore(payload, episode);
+            const cellColors = ratingCellStyle(score, colorized);
+            const episodeNumber = Number(episode.episode_number ?? episode.episodeNumber ?? 0);
+            return <Pressable key={`${season.seasonNumber}-${episode.id ?? index}`} onPress={() => onOpenEpisode(season, episode)} style={[styles.matrixCell, { backgroundColor: cellColors.backgroundColor }]}><Text style={[styles.matrixCellText, { color: cellColors.color }]}>{score != null ? score.toFixed(1) : "?"}</Text></Pressable>;
+          })}</View>)}
+        </> : <>
+          <View style={styles.matrixRow}><Text style={styles.matrixAxisCell}>Episode</Text>{seasonRows.map(({ season }) => <Text key={season.seasonNumber} style={styles.matrixHeaderCell}>S{season.seasonNumber}</Text>)}</View>
+          {Array.from({ length: maxEpisodes }, (_, index) => <View key={`episode-row-${index}`} style={styles.matrixRow}><Text style={styles.matrixAxisCell}>E{index + 1}</Text>{seasonRows.map(({ season, payload, episodes }) => {
+            const episode = episodes[index];
+            if (!episode) return <View key={season.seasonNumber} style={styles.matrixEmptyCell} />;
+            const score = episodeScore(payload, episode);
+            const cellColors = ratingCellStyle(score, colorized);
+            return <Pressable key={`${season.seasonNumber}-${episode.id ?? index}`} onPress={() => onOpenEpisode(season, episode)} style={[styles.matrixCell, { backgroundColor: cellColors.backgroundColor }]}><Text style={[styles.matrixCellText, { color: cellColors.color }]}>{score != null ? score.toFixed(1) : "?"}</Text></Pressable>;
+          })}</View>)}
+        </>}
+      </View></ScrollView> : null}
+      {seasonRows.map(({ season, payload, episodes }) => {
         return (
           <View key={`${season.id ?? season.seasonNumber}`} style={styles.detailSection}>
             <SectionTitle kicker={`Season ${season.seasonNumber}`} title={season.name || `Season ${season.seasonNumber}`} action="Open season ->" onAction={() => onOpenSeason(season)} />
@@ -1777,7 +1856,8 @@ function SeriesEpisodesScreen({ target, session, onBack, onOpenSeason, onOpenEpi
               {episodes.map(episode => {
                 const episodeNumber = Number(episode.episode_number ?? episode.episodeNumber ?? 0);
                 const score = episodeScore(payload, episode);
-                return <Pressable key={`${season.seasonNumber}-${episode.id ?? episodeNumber}`} onPress={() => onOpenEpisode(season, episode)} style={styles.seasonEpisodeCell}><Text style={styles.seasonEpisodeCode}>E{episodeNumber}</Text><Text style={styles.seasonEpisodeScore}>{score != null ? score.toFixed(1) : "-"}</Text></Pressable>;
+                const cellColors = ratingCellStyle(score, colorized);
+                return <Pressable key={`${season.seasonNumber}-${episode.id ?? episodeNumber}`} onPress={() => onOpenEpisode(season, episode)} style={[styles.seasonEpisodeCell, { backgroundColor: cellColors.backgroundColor }]}><Text style={[styles.seasonEpisodeCode, { color: cellColors.color }]}>E{episodeNumber}</Text><Text style={[styles.seasonEpisodeScore, { color: cellColors.color }]}>{score != null ? score.toFixed(1) : "?"}</Text></Pressable>;
               })}
             </ScrollView>
             <View style={styles.seasonList}>
@@ -2310,6 +2390,7 @@ function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity }: 
             <Pressable onPress={() => onOpen(show)} style={styles.quickAction}><Ionicons name="albums-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>Open show</Text></Pressable>
             <Pressable disabled={busy || watched} onPress={markWatched} style={styles.quickAction}><Ionicons name={watched ? "checkmark" : "calendar-outline"} size={19} color={colors.text} /><Text style={styles.quickActionText}>{watched ? "Watched" : "Mark watched"}</Text></Pressable>
             <Pressable disabled={busy || !episodeId} onPress={() => setRatingSheetVisible(true)} style={styles.quickAction}><Ionicons name="speedometer-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>{userRating != null ? `${userRating.toFixed(1)}/10` : "Rate"}</Text></Pressable>
+            <Pressable onPress={() => sharePublicTitle(`/title/show/${show.id}/season/${target.seasonNumber}/episode/${target.episodeNumber}`, `${show.title} - ${title}`, episode?.overview || show.overview)} style={styles.quickAction}><Ionicons name="share-social-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>Share</Text></Pressable>
           </View>
         </View>
       </View>
@@ -2439,7 +2520,7 @@ function EntityScreen({ target, session, onBack, onOpen, onMenu }: { target: Ent
 function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSeason, onOpenAllSeasons, onHide, onChanged }: { item: MediaSummary; session: Session | null; onBack: () => void; onOpen: (item: MediaSummary) => void; onOpenEntity: (entity: EntityTarget) => void; onOpenSeason: (season: DetailSeason) => void; onOpenAllSeasons: (seasons: DetailSeason[]) => void; onHide: (item: MediaSummary) => void; onChanged: () => Promise<void> }) {
   const [detail, setDetail] = useState<DetailData | null>(null);
   const [busy, setBusy] = useState(false);
-  const [listsExpanded, setListsExpanded] = useState(false);
+  const [listSheetVisible, setListSheetVisible] = useState(false);
   const [ratingSheetVisible, setRatingSheetVisible] = useState(false);
   const [watchSheetVisible, setWatchSheetVisible] = useState(false);
   const backdrop = tmdbImage(item.backdropPath || item.posterPath, "w780");
@@ -2729,11 +2810,12 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
             </View>
             <Ionicons name="chevron-forward" size={18} color={colors.muted} />
           </Pressable>
-          <View style={styles.detailQuickActions}><Pressable disabled={busy} onPress={toggleFavorite} style={styles.quickAction}><Ionicons name={detail?.favorite ? "heart" : "heart-outline"} size={19} color={colors.text} /><Text style={styles.quickActionText}>{detail?.favorite ? "Favorited" : "Favorite"}</Text></Pressable><Pressable disabled={busy} onPress={() => session?.access_token ? onHide(item) : Alert.alert("Sign in needed", "Sign in before changing recommendations.")} style={styles.quickAction}><Ionicons name="ban-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>Not interested</Text></Pressable><Pressable disabled={busy} onPress={() => setWatchSheetVisible(true)} style={styles.quickAction}><Ionicons name="calendar-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>{detail?.watched ? "Add another watch" : "First watch"}</Text></Pressable></View>
-          {detail?.lists.length ? <View style={styles.detailLists}><Pressable disabled={busy} onPress={() => setListsExpanded(current => !current)} style={styles.addToListButton}><Ionicons name="list-outline" size={21} color={colors.text} /><Text style={styles.addToListText}>Add to list</Text><Ionicons name={listsExpanded ? "chevron-up" : "chevron-down"} size={18} color={colors.muted} /></Pressable>{listsExpanded ? detail.lists.map(list => <Pressable disabled={busy} key={list.id} onPress={() => toggleDetailList(list)} style={[styles.detailListRow, list.contains && styles.detailListRowActive]}><Text style={styles.detailListName}>{list.name}</Text><Text style={[styles.detailListState, list.contains && styles.detailListStateActive]}>{list.contains ? "Remove selected" : "Add to list"}</Text></Pressable>) : null}</View> : null}
+          <View style={styles.detailQuickActions}><Pressable disabled={busy} onPress={toggleFavorite} style={styles.quickAction}><Ionicons name={detail?.favorite ? "heart" : "heart-outline"} size={19} color={colors.text} /><Text style={styles.quickActionText}>{detail?.favorite ? "Favorited" : "Favorite"}</Text></Pressable><Pressable disabled={busy} onPress={() => session?.access_token ? onHide(item) : Alert.alert("Sign in needed", "Sign in before changing recommendations.")} style={styles.quickAction}><Ionicons name="ban-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>Not interested</Text></Pressable><Pressable disabled={busy} onPress={() => setWatchSheetVisible(true)} style={styles.quickAction}><Ionicons name="calendar-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>{detail?.watched ? "Add another watch" : "First watch"}</Text></Pressable><Pressable onPress={() => sharePublicTitle(`/title/${item.kind}/${item.id}`, item.title, detailOverview)} style={styles.quickAction}><Ionicons name="share-social-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>Share</Text></Pressable></View>
+          {detail?.lists.length ? <View style={styles.detailLists}><Pressable disabled={busy} onPress={() => setListSheetVisible(true)} style={styles.addToListButton}><Ionicons name="list-outline" size={21} color={colors.text} /><Text style={styles.addToListText}>Add to list</Text><Ionicons name="chevron-up" size={18} color={colors.muted} /></Pressable></View> : null}
         </View>
         <RatingSheet visible={ratingSheetVisible} value={detail?.userRating ?? null} busy={busy} onClose={() => setRatingSheetVisible(false)} onSave={saveUserRating} />
         <WatchLogSheet visible={watchSheetVisible} title={item.title} releaseDate={detail?.releaseDate || item.releaseDate} runtime={detail?.runtime ?? null} busy={busy} watched={Boolean(detail?.watched)} onClose={() => setWatchSheetVisible(false)} onSave={saveWatchLog} />
+        <DetailListSheet visible={listSheetVisible} lists={detail?.lists ?? []} busy={busy} onClose={() => setListSheetVisible(false)} onToggle={toggleDetailList} />
         <View style={styles.factGrid}><Fact label="Released" value={detail?.releaseDate || item.releaseDate || "TBA"} /><Fact label={director?.job ?? "Director"} value={director?.name ?? "TBA"} /><Fact label="Original language" value={(detail?.originalLanguage || item.originalLanguage || "Unknown").toUpperCase()} /><Fact label="Genres" value={detailGenres.map(genre => genre.name).join(", ") || "Unknown"} /></View>
         {item.kind === "show" && detail?.seasons.length ? <SeasonsSection seasons={detail.seasons} onOpenSeason={onOpenSeason} onOpenAllSeasons={onOpenAllSeasons} /> : null}
         {detail?.images.length || trailer ? <TitleMediaPreview trailer={trailer} images={detail?.images ?? []} /> : null}
@@ -2745,6 +2827,52 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
         {detail?.recommendations.length ? <DetailMediaSection kicker="If this stayed with you" title="More like this" items={detail.recommendations} onOpen={onOpen} /> : null}
       </View>
     </ScrollView>
+  );
+}
+
+function DetailListSheet({ visible, lists, busy, onClose, onToggle }: { visible: boolean; lists: ListMembership[]; busy: boolean; onClose: () => void; onToggle: (list: ListMembership) => Promise<void> }) {
+  const [query, setQuery] = useState("");
+  useEffect(() => {
+    if (!visible) setQuery("");
+  }, [visible]);
+  const filtered = lists.filter(list => list.name.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <Pressable style={styles.modalScrim} onPress={onClose} />
+      <View style={styles.listPickerSheet}>
+        <View style={styles.grabber} />
+        <View style={styles.sheetHeaderRow}>
+          <View>
+            <Text style={styles.sheetTitleText}>Add to list</Text>
+            <Text style={styles.sheetSubText}>{lists.length} custom lists</Text>
+          </View>
+          <Pressable onPress={onClose} style={styles.sheetCloseButton} hitSlop={8}>
+            <Ionicons name="close" size={24} color={colors.text} />
+          </Pressable>
+        </View>
+        <View style={styles.listPickerSearch}>
+          <Ionicons name="search" size={18} color={colors.muted} />
+          <TextInput value={query} onChangeText={setQuery} placeholder="Find a list" placeholderTextColor={colors.muted} style={styles.listPickerInput} />
+        </View>
+        <ScrollView style={styles.listPickerScroll} contentContainerStyle={styles.listPickerContent} keyboardShouldPersistTaps="handled">
+          {filtered.map(list => (
+            <Pressable
+              disabled={busy}
+              key={list.id}
+              onPress={async () => {
+                await onToggle(list);
+              }}
+              style={[styles.detailListSheetRow, list.contains && styles.detailListRowActive]}
+            >
+              <Text style={styles.detailListName}>{list.name}</Text>
+              <Text style={[styles.detailListState, list.contains && styles.detailListStateActive]}>{list.contains ? "Remove" : "Add"}</Text>
+            </Pressable>
+          ))}
+          {!filtered.length ? <Text style={styles.emptyMiniText}>No lists found.</Text> : null}
+        </ScrollView>
+      </View>
+    </Modal>
   );
 }
 
@@ -3129,14 +3257,20 @@ function SettingsScreen({ session, profile, tab, onTab, onBack, onSignOut, onSav
   const [username, setUsername] = useState(profile?.username ?? "");
   const [bio, setBio] = useState(profile?.bio ?? "");
   const [region, setRegion] = useState(profile?.region ?? "US");
-  const [avatarUrl, setAvatarUrl] = useState(profile?.avatar_url ?? "");
-  const [bannerUrl, setBannerUrl] = useState(profile?.banner_url ?? "");
+  const [avatarUrl, setAvatarUrl] = useState(resolveRemoteImageUri(profile?.avatar_url ?? ""));
+  const [bannerUrl, setBannerUrl] = useState(resolveRemoteImageUri(profile?.banner_url ?? ""));
   const [privacy, setPrivacy] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   const [traktStatus, setTraktStatus] = useState<MobileTraktStatus | null>(null);
   const [traktBusy, setTraktBusy] = useState(false);
   const [traktMessage, setTraktMessage] = useState("");
   const [mfaSummary, setMfaSummary] = useState("Checking two-factor status...");
+  const [mfaFactors, setMfaFactors] = useState<Array<{ id: string; friendlyName: string; status: string }>>([]);
+  const [pendingMfa, setPendingMfa] = useState<{ id: string; secret: string } | null>(null);
+  const [mfaCode, setMfaCode] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [securityBusy, setSecurityBusy] = useState(false);
+  const [securityMessage, setSecurityMessage] = useState("");
   const identities = session.user.identities ?? [];
   const providers = identities.map(identity => identity.provider).filter(Boolean);
   const hasEmailPassword = providers.includes("email") || session.user.app_metadata?.provider === "email";
@@ -3147,8 +3281,8 @@ function SettingsScreen({ session, profile, tab, onTab, onBack, onSignOut, onSav
     setUsername(profile?.username ?? "");
     setBio(profile?.bio ?? "");
     setRegion(profile?.region ?? "US");
-    setAvatarUrl(profile?.avatar_url ?? "");
-    setBannerUrl(profile?.banner_url ?? "");
+    setAvatarUrl(resolveRemoteImageUri(profile?.avatar_url ?? ""));
+    setBannerUrl(resolveRemoteImageUri(profile?.banner_url ?? ""));
   }, [profile]);
 
   useEffect(() => {
@@ -3171,24 +3305,124 @@ function SettingsScreen({ session, profile, tab, onTab, onBack, onSignOut, onSav
     loadTrakt().catch(() => undefined);
   }, [loadTrakt]);
 
-  useEffect(() => {
+  const loadSecurity = useCallback(async () => {
     if (tab !== "security" || !supabase) return;
-    let active = true;
-    supabase.auth.mfa.listFactors().then(({ data }) => {
-      if (!active) return;
-      const verified = data?.totp?.filter(factor => factor.status === "verified").length ?? 0;
-      setMfaSummary(verified ? `${verified} authenticator ${verified === 1 ? "factor is" : "factors are"} enabled.` : "No authenticator factor is enabled for this account.");
-    }).catch(() => {
-      if (active) setMfaSummary("Could not check two-factor status in the app.");
-    });
-    return () => { active = false; };
+    const { data, error } = await supabase.auth.mfa.listFactors();
+    if (error) {
+      setMfaSummary(error.message);
+      return;
+    }
+    const verified = (data?.totp ?? []).filter((factor: any) => factor.status === "verified").map((factor: any) => ({
+      id: factor.id,
+      friendlyName: factor.friendly_name || "MovieTracker authenticator",
+      status: factor.status
+    }));
+    setMfaFactors(verified);
+    setMfaSummary(verified.length ? `${verified.length} authenticator ${verified.length === 1 ? "factor is" : "factors are"} enabled.` : "No authenticator factor is enabled for this account.");
   }, [tab]);
+
+  useEffect(() => {
+    loadSecurity().catch(reason => setMfaSummary(reason instanceof Error ? reason.message : "Could not check two-factor status in the app."));
+  }, [loadSecurity]);
+
+  async function updatePassword() {
+    if (!supabase) return;
+    if (newPassword.trim().length < 8) return Alert.alert("Password too short", "Use at least 8 characters.");
+    setSecurityBusy(true);
+    setSecurityMessage("");
+    try {
+      const { error } = await supabase.auth.updateUser({ password: newPassword.trim() });
+      if (error) throw error;
+      setNewPassword("");
+      setSecurityMessage("Password updated.");
+    } catch (reason) {
+      setSecurityMessage(reason instanceof Error ? reason.message : "Could not update password.");
+    } finally {
+      setSecurityBusy(false);
+    }
+  }
+
+  async function sendPasswordReset() {
+    if (!supabase || !session.user.email) return;
+    setSecurityBusy(true);
+    setSecurityMessage("");
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(session.user.email, { redirectTo: `${API_URL}/settings/security` });
+      if (error) throw error;
+      setSecurityMessage("Password reset email sent.");
+    } catch (reason) {
+      setSecurityMessage(reason instanceof Error ? reason.message : "Could not send password reset.");
+    } finally {
+      setSecurityBusy(false);
+    }
+  }
+
+  async function startMfaEnrollment() {
+    if (!supabase) return;
+    const client = supabase;
+    setSecurityBusy(true);
+    setSecurityMessage("");
+    try {
+      const existing = await client.auth.mfa.listFactors();
+      await Promise.allSettled((existing.data?.totp ?? []).filter((factor: any) => factor.status !== "verified").map((factor: any) => client.auth.mfa.unenroll({ factorId: factor.id })));
+      const { data, error } = await client.auth.mfa.enroll({ factorType: "totp", friendlyName: "MovieTracker authenticator" });
+      if (error) throw error;
+      if (!data || data.type !== "totp") throw new Error("Could not start authenticator setup.");
+      setPendingMfa({ id: data.id, secret: data.totp.secret });
+      setMfaCode("");
+      setSecurityMessage("Add this secret to your authenticator app, then enter the 6-digit code.");
+    } catch (reason) {
+      setSecurityMessage(reason instanceof Error ? reason.message : "Could not start authenticator setup.");
+    } finally {
+      setSecurityBusy(false);
+    }
+  }
+
+  async function verifyMfa() {
+    if (!supabase || !pendingMfa) return;
+    if (mfaCode.trim().length < 6) return Alert.alert("Code needed", "Enter the 6-digit authenticator code.");
+    setSecurityBusy(true);
+    setSecurityMessage("");
+    try {
+      const challenge = await supabase.auth.mfa.challenge({ factorId: pendingMfa.id });
+      if (challenge.error) throw challenge.error;
+      const verified = await supabase.auth.mfa.verify({ factorId: pendingMfa.id, challengeId: challenge.data.id, code: mfaCode.trim() });
+      if (verified.error) throw verified.error;
+      setPendingMfa(null);
+      setMfaCode("");
+      setSecurityMessage("Authenticator enabled.");
+      await loadSecurity();
+    } catch (reason) {
+      setSecurityMessage(reason instanceof Error ? reason.message : "Could not verify authenticator code.");
+    } finally {
+      setSecurityBusy(false);
+    }
+  }
+
+  async function removeMfa(factorId: string) {
+    if (!supabase) return;
+    setSecurityBusy(true);
+    setSecurityMessage("");
+    try {
+      const assurance = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+      if (assurance.error) throw assurance.error;
+      if (assurance.data?.currentLevel !== "aal2") throw new Error("Verify your authenticator during sign-in before removing this factor.");
+      const { error } = await supabase.auth.mfa.unenroll({ factorId });
+      if (error) throw error;
+      setSecurityMessage("Authenticator removed.");
+      await loadSecurity();
+    } catch (reason) {
+      setSecurityMessage(reason instanceof Error ? reason.message : "Could not remove authenticator.");
+    } finally {
+      setSecurityBusy(false);
+    }
+  }
 
   async function saveProfile() {
     if (!supabase) return;
     setSaving(true);
     try {
-      const { error } = await supabase.from("profiles").update({ display_name: displayName.trim(), username: username.trim(), bio: bio.trim(), region: region.trim().toUpperCase().slice(0, 2), avatar_url: avatarUrl.trim() || null, banner_url: bannerUrl.trim() || null, updated_at: new Date().toISOString() }).eq("id", session.user.id);
+      const { error } = await supabase.from("profiles").update({ display_name: displayName.trim(), username: username.trim(), bio: bio.trim(), region: region.trim().toUpperCase().slice(0, 2), avatar_url: resolveRemoteImageUri(avatarUrl) || null, banner_url: resolveRemoteImageUri(bannerUrl) || null, updated_at: new Date().toISOString() }).eq("id", session.user.id);
       if (error) throw error;
       Alert.alert("Profile saved", "Your profile settings were updated.");
       await onSaved();
@@ -3278,7 +3512,12 @@ function SettingsScreen({ session, profile, tab, onTab, onBack, onSignOut, onSav
       </ScrollView>
       {tab === "profile" ? <View style={styles.settingsPanel}><Text style={styles.settingsTitle}>Profile</Text><SettingsInput label="Display name" value={displayName} onChange={setDisplayName} /><SettingsInput label="Username" value={username} onChange={setUsername} autoCapitalize="none" /><SettingsInput label="Bio" value={bio} onChange={setBio} multiline /><SettingsInput label="Avatar image URL" value={avatarUrl} onChange={setAvatarUrl} autoCapitalize="none" /><SettingsInput label="Banner image URL" value={bannerUrl} onChange={setBannerUrl} autoCapitalize="none" /><SettingsInput label="Country" value={region} onChange={setRegion} autoCapitalize="characters" /><Pressable disabled={saving} onPress={saveProfile} style={styles.settingsSave}><Text style={styles.settingsSaveText}>Save profile</Text></Pressable></View> : null}
       {tab === "privacy" ? <View style={styles.settingsPanel}><Text style={styles.settingsTitle}>Privacy</Text>{["profile", "activity", "history", "ratings", "favorites", "statistics"].map(key => <PrivacyRow key={key} label={key} value={privacy[key] ?? "public"} onChange={value => setPrivacy(current => ({ ...current, [key]: value }))} />)}<Pressable disabled={saving} onPress={savePrivacy} style={styles.settingsSave}><Text style={styles.settingsSaveText}>Save privacy</Text></Pressable></View> : null}
-      {tab === "security" ? <View style={styles.settingsPanel}><Text style={styles.settingsTitle}>Security</Text><Text style={styles.settingsBody}>Signed in with {providerLabel}. {mfaSummary}</Text>{hasEmailPassword ? <Pressable onPress={() => supabase?.auth.resetPasswordForEmail(session.user.email ?? "")} style={styles.settingsGhost}><Text style={styles.settingsGhostText}>Send password reset email</Text></Pressable> : <View style={styles.integrationBox}><Text style={styles.integrationLabel}>Password</Text><Text style={styles.settingsBody}>This account uses Google sign-in, so password changes and account recovery are handled by Google.</Text></View>}<Pressable onPress={() => WebBrowser.openBrowserAsync(`${API_URL}/settings/security`)} style={styles.settingsGhost}><Text style={styles.settingsGhostText}>Manage advanced security on website</Text></Pressable><Pressable onPress={onSignOut} style={styles.settingsDanger}><Text style={styles.settingsDangerText}>Sign out</Text></Pressable></View> : null}
+      {tab === "security" ? <View style={styles.settingsPanel}><Text style={styles.settingsTitle}>Security</Text><Text style={styles.settingsBody}>Signed in with {providerLabel}. {mfaSummary}</Text>{securityMessage ? <Text style={styles.settingsBody}>{securityMessage}</Text> : null}
+        <View style={styles.integrationBox}><Text style={styles.integrationLabel}>Password</Text>{hasEmailPassword ? <><TextInput value={newPassword} onChangeText={setNewPassword} secureTextEntry placeholder="New password" placeholderTextColor="#6f7477" style={styles.settingsInput} /><View style={styles.securityButtonRow}><Pressable disabled={securityBusy} onPress={updatePassword} style={styles.securitySmallButton}><Text style={styles.securitySmallButtonText}>Update password</Text></Pressable><Pressable disabled={securityBusy} onPress={sendPasswordReset} style={styles.securitySmallButtonGhost}><Text style={styles.settingsGhostText}>Reset email</Text></Pressable></View></> : <Text style={styles.settingsBody}>This account uses Google sign-in, so password changes and account recovery are handled by Google.</Text>}</View>
+        <View style={styles.integrationBox}><Text style={styles.integrationLabel}>Authenticator app</Text>{mfaFactors.map(factor => <View key={factor.id} style={styles.securityFactorRow}><View style={styles.securityFactorCopy}><Ionicons name="shield-checkmark-outline" size={19} color="#6ee7a8" /><View><Text style={styles.securityFactorTitle}>{factor.friendlyName}</Text><Text style={styles.securityFactorSub}>Verified and required on new sessions</Text></View></View><Pressable disabled={securityBusy} onPress={() => removeMfa(factor.id)} style={styles.securityRemoveButton}><Text style={styles.securityRemoveText}>Remove</Text></Pressable></View>)}
+          {pendingMfa ? <View style={styles.securityEnrollBox}><Text style={styles.settingsBody}>Manual setup key</Text><Text selectable style={styles.securitySecretText}>{pendingMfa.secret}</Text><TextInput value={mfaCode} onChangeText={setMfaCode} keyboardType="number-pad" maxLength={8} placeholder="6-digit code" placeholderTextColor="#6f7477" style={styles.settingsInput} /><Pressable disabled={securityBusy} onPress={verifyMfa} style={styles.settingsSave}><Text style={styles.settingsSaveText}>Verify authenticator</Text></Pressable></View> : <Pressable disabled={securityBusy} onPress={startMfaEnrollment} style={styles.settingsGhost}><Text style={styles.settingsGhostText}>{mfaFactors.length ? "Add another authenticator" : "Set up authenticator"}</Text></Pressable>}
+        </View>
+        <Pressable onPress={onSignOut} style={styles.settingsDanger}><Text style={styles.settingsDangerText}>Sign out</Text></Pressable></View> : null}
       {tab === "notifications" ? <View style={styles.settingsPanel}><Text style={styles.settingsTitle}>Notifications</Text>{["Follow requests and approvals", "Review and list interactions", "Release reminders", "Recommendation digest"].map(label => <ToggleRow key={label} label={label} />)}</View> : null}
       {tab === "integrations" ? <View style={styles.settingsPanel}><Text style={styles.settingsTitle}>Integrations</Text><Text style={styles.settingsBody}>Connect Trakt once and MovieTracker will keep your viewing diary synced across the app and website.</Text>
         {!traktStatus ? <ActivityIndicator color={colors.accent} style={{ marginTop: 18 }} /> : !traktStatus.databaseReady ? <Text style={styles.settingsError}>Trakt database migration is not ready yet.</Text> : !traktStatus.environmentReady ? <Text style={styles.settingsError}>Trakt server credentials are not configured yet.</Text> : traktStatus.connection ? (
@@ -4052,6 +4291,17 @@ const styles = StyleSheet.create({
   detailLists: { marginTop: 12 },
   addToListButton: { minHeight: 50, borderRadius: 12, backgroundColor: colors.panel, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingHorizontal: 14, marginBottom: 8 },
   addToListText: { color: colors.text, fontSize: 15, fontWeight: "900", flex: 1 },
+  listPickerSheet: { position: "absolute", left: 14, right: 14, bottom: 18, maxHeight: "88%", borderRadius: 28, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel, padding: 16 },
+  sheetHeaderRow: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: 12 },
+  sheetTitleText: { color: colors.text, fontFamily: "serif", fontSize: 30, lineHeight: 34 },
+  sheetSubText: { color: colors.muted, fontSize: 13, fontWeight: "800", marginTop: 3 },
+  sheetCloseButton: { width: 38, height: 38, borderRadius: 19, backgroundColor: colors.panel2, alignItems: "center", justifyContent: "center" },
+  listPickerSearch: { height: 50, borderRadius: 15, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel2, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 12, marginTop: 14 },
+  listPickerInput: { flex: 1, color: colors.text, fontSize: 16 },
+  listPickerScroll: { marginTop: 10, maxHeight: 430 },
+  listPickerContent: { paddingBottom: 10, gap: 8 },
+  detailListSheetRow: { minHeight: 58, borderRadius: 16, borderWidth: 1, borderColor: colors.line, flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 14 },
+  emptyMiniText: { color: colors.muted, fontSize: 14, fontWeight: "800", textAlign: "center", paddingVertical: 22 },
   detailListRow: { minHeight: 52, borderRadius: 14, borderWidth: 1, borderColor: colors.line, flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 12, marginBottom: 8 },
   detailListRowActive: { backgroundColor: colors.panel2, borderColor: colors.accent },
   detailListName: { color: colors.text, fontSize: 15, fontWeight: "900", flex: 1 },
@@ -4106,6 +4356,22 @@ const styles = StyleSheet.create({
   sourceTabActive: { borderColor: colors.accent, backgroundColor: "rgba(255,84,57,0.18)" },
   sourceTabDisabled: { opacity: 0.42 },
   sourceTabText: { color: colors.text, fontWeight: "900" },
+  ratingGraphControls: { flexDirection: "row", flexWrap: "wrap", gap: 8, paddingHorizontal: 18, marginTop: 12 },
+  ratingGraphToggle: { minHeight: 42, borderRadius: 14, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel, paddingHorizontal: 12, flexDirection: "row", alignItems: "center", gap: 8 },
+  ratingGraphToggleActive: { borderColor: colors.accent, backgroundColor: "rgba(255,84,57,0.16)" },
+  ratingGraphToggleText: { color: colors.text, fontSize: 13, fontWeight: "900" },
+  ratingLegend: { flexDirection: "row", flexWrap: "wrap", gap: 8, paddingHorizontal: 18, marginTop: 10 },
+  ratingLegendItem: { flexDirection: "row", alignItems: "center", gap: 5 },
+  ratingLegendDot: { width: 9, height: 9, borderRadius: 5 },
+  ratingLegendText: { color: colors.muted, fontSize: 11, fontWeight: "800" },
+  fullMatrixScroll: { paddingHorizontal: 18, paddingVertical: 12 },
+  fullEpisodeMatrix: { gap: 6 },
+  matrixRow: { flexDirection: "row", alignItems: "center", gap: 6 },
+  matrixAxisCell: { width: 64, color: colors.muted, fontSize: 12, fontWeight: "900" },
+  matrixHeaderCell: { width: 48, textAlign: "center", color: colors.muted, fontSize: 12, fontWeight: "900" },
+  matrixEmptyCell: { width: 48, height: 42, borderRadius: 8, backgroundColor: "rgba(255,255,255,0.05)" },
+  matrixCell: { width: 48, height: 42, borderRadius: 8, alignItems: "center", justifyContent: "center" },
+  matrixCellText: { fontSize: 14, fontWeight: "900" },
   mutedBody: { color: colors.muted, fontSize: 13, lineHeight: 20, paddingHorizontal: 18 },
   seasonEpisodeGrid: { paddingHorizontal: 18, paddingVertical: 14, gap: 8 },
   seasonEpisodeCell: { width: 62, height: 54, borderRadius: 9, backgroundColor: "#f5c20b", alignItems: "center", justifyContent: "center" },
@@ -4157,6 +4423,18 @@ const styles = StyleSheet.create({
   integrationBox: { marginTop: 16, borderTopWidth: 1, borderTopColor: colors.line, paddingTop: 16 },
   integrationLabel: { color: colors.muted, fontSize: 12, fontWeight: "900", letterSpacing: 1.2, textTransform: "uppercase" },
   integrationValue: { color: colors.text, fontSize: 22, fontWeight: "900", marginTop: 4, marginBottom: 8 },
+  securityButtonRow: { flexDirection: "row", gap: 8, marginTop: 10 },
+  securitySmallButton: { flex: 1, minHeight: 48, borderRadius: 16, backgroundColor: colors.accent, alignItems: "center", justifyContent: "center", paddingHorizontal: 10 },
+  securitySmallButtonGhost: { flex: 1, minHeight: 48, borderRadius: 16, borderWidth: 1, borderColor: colors.line, alignItems: "center", justifyContent: "center", paddingHorizontal: 10 },
+  securitySmallButtonText: { color: colors.text, fontSize: 14, fontWeight: "900", textAlign: "center" },
+  securityFactorRow: { minHeight: 72, borderRadius: 16, borderWidth: 1, borderColor: "rgba(110,231,168,0.36)", backgroundColor: "rgba(110,231,168,0.08)", flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10, padding: 12, marginTop: 10 },
+  securityFactorCopy: { flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", gap: 10 },
+  securityFactorTitle: { color: colors.text, fontSize: 14, fontWeight: "900" },
+  securityFactorSub: { color: colors.muted, fontSize: 12, marginTop: 2 },
+  securityRemoveButton: { minHeight: 38, borderRadius: 14, borderWidth: 1, borderColor: colors.line, alignItems: "center", justifyContent: "center", paddingHorizontal: 12 },
+  securityRemoveText: { color: colors.text, fontSize: 13, fontWeight: "900" },
+  securityEnrollBox: { marginTop: 12, gap: 10 },
+  securitySecretText: { color: colors.text, backgroundColor: colors.panel2, borderRadius: 14, borderWidth: 1, borderColor: colors.line, padding: 12, fontSize: 14, fontWeight: "900", lineHeight: 20 },
   privacyRow: { minHeight: 56, borderBottomWidth: 1, borderBottomColor: colors.line, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   privacyLabel: { color: colors.text, fontSize: 16, fontWeight: "800", textTransform: "capitalize", flex: 1 },
   privacyValue: { color: colors.accent, fontSize: 14, fontWeight: "900", textTransform: "capitalize" },
