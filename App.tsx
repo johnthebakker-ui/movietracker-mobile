@@ -549,6 +549,7 @@ export default function App() {
       return;
     }
     const userId = usableSession.user.id;
+    const accessToken = usableSession.access_token;
     if (!force && profileDataLoadedFor.current === userId && Date.now() - profileDataLoadedAt.current < 30000) return;
     const [followers, following, progressCount, progressStatuses, ratings, reviews, reviewCount, favorites, lists, listCount, history, streakEvents, watchCount] = await Promise.all([
       supabase.from("follows").select("*", { count: "exact", head: true }).eq("following_id", userId).eq("status", "accepted"),
@@ -576,6 +577,16 @@ export default function App() {
       const media = firstRow(row.media);
       return media && (row.status === "watching" || row.status === "paused") ? [fromDbMedia(media, ratingByMedia)] : [];
     });
+    async function enrichShowRuns(items: MediaSummary[]) {
+      const shows = [...new Map(items.filter(item => item.kind === "show").map(item => [item.id, item])).values()].slice(0, 16);
+      const details = await Promise.allSettled(shows.map(item => fetchMobileTitle("show", item.id, accessToken).then(detail => ({ id: item.id, detail }))));
+      const detailById = new Map(details.flatMap(result => result.status === "fulfilled" ? [[result.value.id, result.value.detail]] : []));
+      return items.map(item => {
+        const detail = detailById.get(item.id);
+        return item.kind === "show" && detail ? { ...item, releaseDate: detail.releaseDate ?? item.releaseDate, endDate: detail.endDate ?? item.endDate, status: detail.status ?? item.status } : item;
+      });
+    }
+    const [favoriteItemsWithRuns, currentWithRuns] = await Promise.all([enrichShowRuns(favoriteItems), enrichShowRuns(current)]);
     const progressGroups = [
       { key: "completed" as const, label: "Completed", rows: statusRows.filter((row: any) => row.status === "completed") },
       { key: "active" as const, label: "In progress", rows: statusRows.filter((row: any) => row.status === "watching" || row.status === "paused") },
@@ -675,12 +686,12 @@ export default function App() {
       listCount: listCount.count ?? 0,
       history: historyItems,
       reviews: reviewItems,
-      favorites: favoriteItems,
+      favorites: favoriteItemsWithRuns,
       lists: lists,
       progressGroups,
       currentStreak,
       longestStreak,
-      currentlyWatching: current.slice(0, 8),
+      currentlyWatching: currentWithRuns.slice(0, 8),
       genreStats
     });
     profileDataLoadedFor.current = userId;
