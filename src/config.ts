@@ -54,8 +54,9 @@ export function titleYear(item: Pick<MediaSummary, "releaseDate" | "endDate" | "
   const start = item.releaseDate?.slice(0, 4);
   const end = item.endDate?.slice(0, 4);
   const status = item.status?.toLowerCase() ?? "";
-  if (item.kind === "show" && start && end && end !== start) return `${start}-${end} - Ended`;
-  if (item.kind === "show" && start && (status.includes("return") || status.includes("production"))) return `${start}-present`;
+  const ended = status.includes("ended") || status.includes("canceled") || status.includes("cancelled");
+  if (item.kind === "show" && start && ended) return `${start}${end && end !== start ? `-${end}` : ""} - Ended`;
+  if (item.kind === "show" && start) return `${start}-present`;
   return start || "TBA";
 }
 

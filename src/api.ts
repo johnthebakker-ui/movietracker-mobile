@@ -372,9 +372,7 @@ function extractCards(html: string) {
       overview: "",
       posterPath: stripImageHost(decodeHtml(match[3])),
       backdropPath: null,
-      releaseDate: yearToDate(match[5]),
-      endDate: null,
-      status: null,
+      ...runLabelToDates(match[5], kind),
       voteAverage: 0,
       voteCount: 0,
       popularity: 0,
@@ -404,8 +402,15 @@ function stripTags(value: string) {
   return value.replace(/<[^>]+>/g, "");
 }
 
-function yearToDate(value: string) {
-  return /^\d{4}$/.test(value) ? `${value}-01-01` : null;
+function runLabelToDates(value: string, kind: MediaSummary["kind"]) {
+  const start = value.match(/\b(\d{4})\b/)?.[1] ?? null;
+  const ended = /\bended\b/i.test(value);
+  const range = value.match(/\b(\d{4})-(\d{4})\b/);
+  return {
+    releaseDate: start ? `${start}-01-01` : null,
+    endDate: kind === "show" && range?.[2] ? `${range[2]}-01-01` : null,
+    status: kind === "show" ? ended ? "Ended" : start ? "Returning Series" : null : null
+  };
 }
 
 function decodeHtml(value: string) {

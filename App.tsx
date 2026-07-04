@@ -76,6 +76,7 @@ type HistoryItem = {
   rating?: number | null;
   rewatchNumber?: number;
   item?: MediaSummary | null;
+  episodeTarget?: EpisodeTarget | null;
 };
 type ListMembership = UserList & { contains: boolean };
 type SettingsTab = "profile" | "privacy" | "security" | "notifications" | "integrations";
@@ -641,7 +642,8 @@ export default function App() {
         artwork: episode?.still_path ?? media.backdrop_path ?? media.poster_path ?? null,
         rating: ratingByMedia.get(media.id) ?? null,
         rewatchNumber: Math.max(0, watchNumber - 1),
-        item: fromDbMedia(media, ratingByMedia)
+        item: fromDbMedia(media, ratingByMedia),
+        episodeTarget: episode ? { show: fromDbMedia(media, ratingByMedia), episodeId: Number(event.episode_id ?? episode.id), seasonNumber: Number(season?.season_number ?? 1), episodeNumber: Number(episode.episode_number), title: episode.name, artwork: episode.still_path ?? media.backdrop_path ?? media.poster_path ?? null } : null
       }];
     });
     const reviewItems = (reviews.data ?? []).flatMap((review: any) => {
@@ -982,6 +984,19 @@ export default function App() {
     if (event.item) openItem(event.item);
   }
 
+  function openHistoryItem(item: HistoryItem) {
+    if (item.episodeTarget) {
+      setSelected(null);
+      setSelectedStack([]);
+      setSelectedEntity(null);
+      setSelectedSeason(null);
+      setSelectedSeriesEpisodes(null);
+      setSelectedEpisode(item.episodeTarget);
+      return;
+    }
+    if (item.item) openItem(item.item);
+  }
+
   const selectedListFranchiseGroups = useMemo(() => availableListFranchiseGroups(selectedListFeed.items), [selectedListFeed.items]);
 
   function renderHeader() {
@@ -1071,7 +1086,7 @@ export default function App() {
                 <View style={styles.afterFilters} />
               </>
             ) : usableSession && profileView === "history" ? (
-              <FullHistoryPage data={profileData} onOpen={openItem} onMenu={setActionItem} onBack={() => openProfileView("profile")} onRemove={removeHistoryEvent} />
+              <FullHistoryPage data={profileData} onOpen={openHistoryItem} onMenu={setActionItem} onBack={() => openProfileView("profile")} onRemove={removeHistoryEvent} />
             ) : usableSession && profileView === "reviews" ? (
               <FullReviewsPage reviews={profileData.reviews} onBack={() => openProfileView("profile")} onOpen={openItem} />
             ) : usableSession && profileView === "statistics" ? (
@@ -1087,7 +1102,7 @@ export default function App() {
                   else setProfilePanel(next);
                 }} />
                 {(profilePanel === "overview" || profilePanel === "statistics") ? <ProfileStatBand data={profileData} /> : null}
-                {(profilePanel === "overview" || profilePanel === "history" || profilePanel === "activity") ? <ProfileHistorySection items={profileData.history} onOpen={openItem} onMenu={setActionItem} onHistory={() => openProfileView("history")} /> : null}
+                {(profilePanel === "overview" || profilePanel === "history" || profilePanel === "activity") ? <ProfileHistorySection items={profileData.history} onOpen={openHistoryItem} onMenu={setActionItem} onHistory={() => openProfileView("history")} /> : null}
                 {(profilePanel === "overview" || profilePanel === "statistics") ? <ProfileProgressSection data={profileData} onLibrary={() => { setLibraryFilter("all"); goTab("library"); }} onOpen={openItem} onMenu={setActionItem} /> : null}
                 {(profilePanel === "overview" || profilePanel === "reviews") ? <ReviewSection reviews={profileData.reviews} onAll={() => openProfileView("reviews")} onOpen={openItem} /> : null}
                 {profilePanel === "overview" ? <><ProfileMediaSection kicker="Personal canon" title="Favorites" action="See all favorites ->" items={profileData.favorites.slice(0, 6)} onAction={() => { setLibraryFilter("favorites"); goTab("library"); }} onOpen={openItem} onMenu={setActionItem} /><ProfileListsSection owner={profile?.display_name || profile?.username || "you"} lists={profileData.lists} onOpenLists={() => { setLibraryFilter("lists"); goTab("library"); }} onOpenList={openList} /></> : null}
@@ -1115,7 +1130,7 @@ export default function App() {
         {selectedEntity ? (
           <EntityScreen target={selectedEntity} session={usableSession} onBack={() => setSelectedEntity(null)} onOpen={openItem} onMenu={setActionItem} />
         ) : selectedEpisode ? (
-          <EpisodeDetailScreen target={selectedEpisode} session={usableSession} onBack={() => setSelectedEpisode(null)} onOpen={openItem} onOpenEntity={openEntity} />
+          <EpisodeDetailScreen target={selectedEpisode} session={usableSession} onBack={() => setSelectedEpisode(null)} onOpen={openItem} onOpenMenu={setActionItem} onOpenEntity={openEntity} />
         ) : selectedSeriesEpisodes ? (
           <SeriesEpisodesScreen target={selectedSeriesEpisodes} session={usableSession} onBack={() => setSelectedSeriesEpisodes(null)} onOpenSeason={season => {
             setSelectedSeriesEpisodes(null);
@@ -1402,12 +1417,12 @@ function ProfileNav({ value, onChange }: { value: ProfilePanel; onChange: (value
   );
 }
 
-function ProfileHistorySection({ items, onOpen, onMenu, onHistory }: { items: HistoryItem[]; onOpen: (item: MediaSummary) => void; onMenu: (item: MediaSummary) => void; onHistory: () => void }) {
+function ProfileHistorySection({ items, onOpen, onMenu, onHistory }: { items: HistoryItem[]; onOpen: (item: HistoryItem) => void; onMenu: (item: MediaSummary) => void; onHistory: () => void }) {
   if (!items.length) return null;
   return <View style={styles.profileSection}><SectionTitle kicker="A dated viewing diary" title="Recent history" action="See complete history ->" onAction={onHistory} /><View style={styles.historyGrid}>{items.slice(0, 6).map(item => <HistoryCard key={item.id} item={item} onOpen={onOpen} onMenu={onMenu} />)}</View></View>;
 }
 
-function FullHistoryPage({ data, onOpen, onMenu, onBack, onRemove }: { data: ProfileData; onOpen: (item: MediaSummary) => void; onMenu: (item: MediaSummary) => void; onBack: () => void; onRemove: (id: string, title: string) => void }) {
+function FullHistoryPage({ data, onOpen, onMenu, onBack, onRemove }: { data: ProfileData; onOpen: (item: HistoryItem) => void; onMenu: (item: MediaSummary) => void; onBack: () => void; onRemove: (id: string, title: string) => void }) {
   const items = data.history;
   const [visibleGroups, setVisibleGroups] = useState(8);
   const groups = useMemo(() => {
@@ -1451,7 +1466,7 @@ function HistorySummary({ icon, value, label, last }: { icon: keyof typeof Ionic
   return <View style={[styles.historySummaryCell, last && styles.historySummaryCellLast]}><Ionicons name={icon} size={18} color={colors.accent} /><Text style={styles.historySummaryValue}>{value}</Text><Text style={styles.historySummaryLabel}>{label}</Text></View>;
 }
 
-function HistoryDay({ group, onOpen, onMenu, onRemove }: { group: { dateTitle: string; dateSubtitle: string; items: HistoryItem[] }; onOpen: (item: MediaSummary) => void; onMenu: (item: MediaSummary) => void; onRemove: (id: string, title: string) => void }) {
+function HistoryDay({ group, onOpen, onMenu, onRemove }: { group: { dateTitle: string; dateSubtitle: string; items: HistoryItem[] }; onOpen: (item: HistoryItem) => void; onMenu: (item: MediaSummary) => void; onRemove: (id: string, title: string) => void }) {
   return (
     <View style={styles.historyDay}>
       <View style={styles.historyDayDate}><Text style={styles.historyDayTitle}>{group.dateTitle}</Text><Text style={styles.historyDaySub}>{group.dateSubtitle}</Text></View>
@@ -1460,10 +1475,10 @@ function HistoryDay({ group, onOpen, onMenu, onRemove }: { group: { dateTitle: s
   );
 }
 
-function HistoryEventRow({ item, onOpen, onMenu, onRemove }: { item: HistoryItem; onOpen: (item: MediaSummary) => void; onMenu: (item: MediaSummary) => void; onRemove: (id: string, title: string) => void }) {
+function HistoryEventRow({ item, onOpen, onMenu, onRemove }: { item: HistoryItem; onOpen: (item: HistoryItem) => void; onMenu: (item: MediaSummary) => void; onRemove: (id: string, title: string) => void }) {
   const image = tmdbImage(item.artwork, "w500");
   return (
-    <Pressable onPress={() => item.item && onOpen(item.item)} onLongPress={() => item.item && onMenu(item.item)} delayLongPress={280} style={styles.historyEvent}>
+    <Pressable onPress={() => onOpen(item)} onLongPress={() => item.item && onMenu(item.item)} delayLongPress={280} style={styles.historyEvent}>
       <View style={styles.historyEventArt}>{image ? <RemoteImage uri={image} style={styles.posterImage} resizeMode="cover" /> : <Ionicons name="film-outline" size={22} color={colors.muted} />}{item.rating != null ? <Text style={styles.historyRating}>{item.rating.toFixed(1)}<Text style={styles.historyRatingSmall}>/10</Text></Text> : null}</View>
       <View style={styles.historyEventCopy}>
         <Text style={styles.historyEventKicker}>{item.metaLabel}</Text>
@@ -1484,9 +1499,9 @@ function HistoryEventRow({ item, onOpen, onMenu, onRemove }: { item: HistoryItem
 const MemoHistoryDay = React.memo(HistoryDay);
 const MemoHistoryEventRow = React.memo(HistoryEventRow);
 
-function HistoryCard({ item, onOpen, onMenu }: { item: HistoryItem; onOpen: (item: MediaSummary) => void; onMenu: (item: MediaSummary) => void }) {
+function HistoryCard({ item, onOpen, onMenu }: { item: HistoryItem; onOpen: (item: HistoryItem) => void; onMenu: (item: MediaSummary) => void }) {
   const image = tmdbImage(item.artwork, "w500");
-  return <Pressable onPress={() => item.item && onOpen(item.item)} onLongPress={() => item.item && onMenu(item.item)} delayLongPress={280} style={styles.historyCard}><View style={styles.historyArt}>{image ? <RemoteImage uri={image} style={styles.posterImage} resizeMode="cover" /> : null}{item.rating != null ? <Text style={styles.historyRating}>{item.rating.toFixed(1)}/10</Text> : null}<Text style={styles.historyDate}>{formatShortDate(item.date)}</Text></View><Text style={styles.historyTitle} numberOfLines={1}>{item.title}</Text><Text style={styles.historySub} numberOfLines={1}>{item.subtitle}</Text></Pressable>;
+  return <Pressable onPress={() => onOpen(item)} onLongPress={() => item.item && onMenu(item.item)} delayLongPress={280} style={styles.historyCard}><View style={styles.historyArt}>{image ? <RemoteImage uri={image} style={styles.posterImage} resizeMode="cover" /> : null}{item.rating != null ? <Text style={styles.historyRating}>{item.rating.toFixed(1)}/10</Text> : null}<Text style={styles.historyDate}>{formatShortDate(item.date)}</Text></View><Text style={styles.historyTitle} numberOfLines={1}>{item.title}</Text><Text style={styles.historySub} numberOfLines={1}>{item.subtitle}</Text></Pressable>;
 }
 
 function ProfileProgressSection({ data, onLibrary, onOpen, onMenu }: { data: ProfileData; onLibrary: () => void; onOpen: (item: MediaSummary) => void; onMenu: (item: MediaSummary) => void }) {
@@ -1619,14 +1634,16 @@ async function sharePublicTitle(path: string, title: string, text?: string | nul
 function SeasonDetailScreen({ target, session, onBack, onOpenEpisode }: { target: SeasonTarget; session: Session | null; onBack: () => void; onOpenEpisode: (episode: any) => void }) {
   const [payload, setPayload] = useState<any | null>(null);
   const [loadingSeason, setLoadingSeason] = useState(false);
-  const [source, setSource] = useState<"tmdb" | "imdb">("tmdb");
+  const [source, setSource] = useState<"movietracker" | "tmdb" | "imdb">("tmdb");
   const [colorized, setColorized] = useState(false);
   const [busy, setBusy] = useState(false);
   const [ratingSheetVisible, setRatingSheetVisible] = useState(false);
   const season = payload?.season ?? target.season;
   const episodes = [...(payload?.episodes ?? [])].sort((a, b) => Number(a.episode_number ?? a.episodeNumber ?? 0) - Number(b.episode_number ?? b.episodeNumber ?? 0));
   const imdbRatings = new Map<number, number | null>((payload?.imdbRatings ?? []).map((rating: any) => [Number(rating.episode), typeof rating.imdbRating === "number" ? rating.imdbRating : null]));
+  const movieTrackerRatings = new Map<number, number | null>((payload?.episodeRatings ?? []).map((rating: any) => [Number(rating.episode), typeof rating.score === "number" ? rating.score : null]));
   const imdbAvailable = [...imdbRatings.values()].some(value => typeof value === "number");
+  const movieTrackerAvailable = [...movieTrackerRatings.values()].some(value => typeof value === "number");
   const poster = tmdbImage(season.poster_path ?? season.posterPath ?? target.season.posterPath ?? target.show.posterPath, "w500");
   const backdrop = tmdbImage(target.show.backdropPath || target.show.posterPath, "w780");
 
@@ -1642,6 +1659,7 @@ function SeasonDetailScreen({ target, session, onBack, onOpenEpisode }: { target
 
   function episodeScore(episode: any): number | null {
     const episodeNumber = Number(episode.episode_number ?? episode.episodeNumber ?? 0);
+    if (source === "movietracker") return movieTrackerRatings.get(episodeNumber) ?? null;
     if (source === "imdb") return imdbRatings.get(episodeNumber) ?? null;
     const tmdbScore = Number(episode.vote_average ?? episode.voteAverage);
     return Number.isFinite(tmdbScore) && tmdbScore > 0 ? tmdbScore : null;
@@ -1732,6 +1750,7 @@ function SeasonDetailScreen({ target, session, onBack, onOpenEpisode }: { target
         <RatingSheet visible={ratingSheetVisible} value={payload?.userRating ?? null} busy={busy} onClose={() => setRatingSheetVisible(false)} onSave={saveSeasonRating} />
         {session?.user.id && payload?.seasonId ? <ReviewComposerPanel existingReview={payload.myReview} currentRating={payload.userRating} busy={busy} onSubmit={saveSeasonReview} /> : null}
         <View style={styles.sourceTabs}>
+          <Pressable disabled={!movieTrackerAvailable} onPress={() => setSource("movietracker")} style={[styles.sourceTab, source === "movietracker" && styles.sourceTabActive, !movieTrackerAvailable && styles.sourceTabDisabled]}><Text style={styles.sourceTabText}>MovieTracker</Text></Pressable>
           <Pressable onPress={() => setSource("tmdb")} style={[styles.sourceTab, source === "tmdb" && styles.sourceTabActive]}><Text style={styles.sourceTabText}>TMDB</Text></Pressable>
           <Pressable disabled={!imdbAvailable} onPress={() => setSource("imdb")} style={[styles.sourceTab, source === "imdb" && styles.sourceTabActive, !imdbAvailable && styles.sourceTabDisabled]}><Text style={styles.sourceTabText}>IMDb</Text></Pressable>
           <View style={[styles.sourceTab, styles.sourceTabDisabled]}><Text style={styles.sourceTabText}>Rotten Tomatoes</Text></View>
@@ -1749,7 +1768,7 @@ function SeasonDetailScreen({ target, session, onBack, onOpenEpisode }: { target
             return (
               <Pressable key={`${episode.id ?? episodeNumber}`} onPress={() => onOpenEpisode(episode)} style={[styles.seasonEpisodeCell, { backgroundColor: cellColors.backgroundColor }]}>
                 <Text style={[styles.seasonEpisodeCode, { color: cellColors.color }]}>E{episodeNumber}</Text>
-                <Text style={[styles.seasonEpisodeScore, { color: cellColors.color }]}>{score != null ? score.toFixed(1) : "?"}</Text>
+                <Text style={[styles.seasonEpisodeScore, { color: cellColors.color }]}>{score != null ? score.toFixed(1) : "-"}</Text>
               </Pressable>
             );
           })}
@@ -1778,12 +1797,13 @@ function SeasonDetailScreen({ target, session, onBack, onOpenEpisode }: { target
 function SeriesEpisodesScreen({ target, session, onBack, onOpenSeason, onOpenEpisode }: { target: SeriesEpisodesTarget; session: Session | null; onBack: () => void; onOpenSeason: (season: DetailSeason) => void; onOpenEpisode: (season: DetailSeason, episode: any) => void }) {
   const [payloads, setPayloads] = useState<any[]>([]);
   const [loadingAll, setLoadingAll] = useState(false);
-  const [source, setSource] = useState<"tmdb" | "imdb">("tmdb");
+  const [source, setSource] = useState<"movietracker" | "tmdb" | "imdb">("tmdb");
   const [colorized, setColorized] = useState(false);
   const [inverted, setInverted] = useState(false);
   const seasons = useMemo(() => [...target.seasons].sort((a, b) => a.seasonNumber - b.seasonNumber), [target.seasons]);
   const payloadBySeason = useMemo(() => new Map(payloads.map(payload => [Number(payload?.season?.season_number ?? payload?.season?.seasonNumber ?? payload?.seasonNumber ?? 0), payload])), [payloads]);
   const hasImdb = payloads.some(payload => (payload?.imdbRatings ?? []).some((rating: any) => typeof rating.imdbRating === "number"));
+  const hasMovieTracker = payloads.some(payload => (payload?.episodeRatings ?? []).some((rating: any) => typeof rating.score === "number"));
   const seasonRows = useMemo(() => seasons.map(season => {
     const payload = payloadBySeason.get(season.seasonNumber);
     const episodes = [...(payload?.episodes ?? [])].sort((a, b) => Number(a.episode_number ?? a.episodeNumber ?? 0) - Number(b.episode_number ?? b.episodeNumber ?? 0));
@@ -1802,6 +1822,10 @@ function SeriesEpisodesScreen({ target, session, onBack, onOpenSeason, onOpenEpi
 
   function episodeScore(payload: any, episode: any): number | null {
     const episodeNumber = Number(episode.episode_number ?? episode.episodeNumber ?? 0);
+    if (source === "movietracker") {
+      const rating = (payload?.episodeRatings ?? []).find((item: any) => Number(item.episode) === episodeNumber);
+      return typeof rating?.score === "number" ? rating.score : null;
+    }
     if (source === "imdb") {
       const rating = (payload?.imdbRatings ?? []).find((item: any) => Number(item.episode) === episodeNumber);
       return typeof rating?.imdbRating === "number" ? rating.imdbRating : null;
@@ -1818,6 +1842,7 @@ function SeriesEpisodesScreen({ target, session, onBack, onOpenSeason, onOpenEpi
         <Text style={styles.entityTitle}>All episodes & ratings</Text>
       </View>
       <View style={styles.sourceTabs}>
+        <Pressable disabled={!hasMovieTracker} onPress={() => setSource("movietracker")} style={[styles.sourceTab, source === "movietracker" && styles.sourceTabActive, !hasMovieTracker && styles.sourceTabDisabled]}><Text style={styles.sourceTabText}>MovieTracker</Text></Pressable>
         <Pressable onPress={() => setSource("tmdb")} style={[styles.sourceTab, source === "tmdb" && styles.sourceTabActive]}><Text style={styles.sourceTabText}>TMDB</Text></Pressable>
         <Pressable disabled={!hasImdb} onPress={() => setSource("imdb")} style={[styles.sourceTab, source === "imdb" && styles.sourceTabActive, !hasImdb && styles.sourceTabDisabled]}><Text style={styles.sourceTabText}>IMDb</Text></Pressable>
         <View style={[styles.sourceTab, styles.sourceTabDisabled]}><Text style={styles.sourceTabText}>Rotten Tomatoes</Text></View>
@@ -1837,7 +1862,7 @@ function SeriesEpisodesScreen({ target, session, onBack, onOpenSeason, onOpenEpi
             const score = episodeScore(payload, episode);
             const cellColors = ratingCellStyle(score, colorized);
             const episodeNumber = Number(episode.episode_number ?? episode.episodeNumber ?? 0);
-            return <Pressable key={`${season.seasonNumber}-${episode.id ?? index}`} onPress={() => onOpenEpisode(season, episode)} style={[styles.matrixCell, { backgroundColor: cellColors.backgroundColor }]}><Text style={[styles.matrixCellText, { color: cellColors.color }]}>{score != null ? score.toFixed(1) : "?"}</Text></Pressable>;
+            return <Pressable key={`${season.seasonNumber}-${episode.id ?? index}`} onPress={() => onOpenEpisode(season, episode)} style={[styles.matrixCell, { backgroundColor: cellColors.backgroundColor }]}><Text style={[styles.matrixCellText, { color: cellColors.color }]}>{score != null ? score.toFixed(1) : "-"}</Text></Pressable>;
           })}</View>)}
         </> : <>
           <View style={styles.matrixRow}><Text style={styles.matrixAxisCell}>Episode</Text>{seasonRows.map(({ season }) => <Text key={season.seasonNumber} style={styles.matrixHeaderCell}>S{season.seasonNumber}</Text>)}</View>
@@ -1846,7 +1871,7 @@ function SeriesEpisodesScreen({ target, session, onBack, onOpenSeason, onOpenEpi
             if (!episode) return <View key={season.seasonNumber} style={styles.matrixEmptyCell} />;
             const score = episodeScore(payload, episode);
             const cellColors = ratingCellStyle(score, colorized);
-            return <Pressable key={`${season.seasonNumber}-${episode.id ?? index}`} onPress={() => onOpenEpisode(season, episode)} style={[styles.matrixCell, { backgroundColor: cellColors.backgroundColor }]}><Text style={[styles.matrixCellText, { color: cellColors.color }]}>{score != null ? score.toFixed(1) : "?"}</Text></Pressable>;
+            return <Pressable key={`${season.seasonNumber}-${episode.id ?? index}`} onPress={() => onOpenEpisode(season, episode)} style={[styles.matrixCell, { backgroundColor: cellColors.backgroundColor }]}><Text style={[styles.matrixCellText, { color: cellColors.color }]}>{score != null ? score.toFixed(1) : "-"}</Text></Pressable>;
           })}</View>)}
         </>}
       </View></ScrollView> : null}
@@ -1859,7 +1884,7 @@ function SeriesEpisodesScreen({ target, session, onBack, onOpenSeason, onOpenEpi
                 const episodeNumber = Number(episode.episode_number ?? episode.episodeNumber ?? 0);
                 const score = episodeScore(payload, episode);
                 const cellColors = ratingCellStyle(score, colorized);
-                return <Pressable key={`${season.seasonNumber}-${episode.id ?? episodeNumber}`} onPress={() => onOpenEpisode(season, episode)} style={[styles.seasonEpisodeCell, { backgroundColor: cellColors.backgroundColor }]}><Text style={[styles.seasonEpisodeCode, { color: cellColors.color }]}>E{episodeNumber}</Text><Text style={[styles.seasonEpisodeScore, { color: cellColors.color }]}>{score != null ? score.toFixed(1) : "?"}</Text></Pressable>;
+                return <Pressable key={`${season.seasonNumber}-${episode.id ?? episodeNumber}`} onPress={() => onOpenEpisode(season, episode)} style={[styles.seasonEpisodeCell, { backgroundColor: cellColors.backgroundColor }]}><Text style={[styles.seasonEpisodeCode, { color: cellColors.color }]}>E{episodeNumber}</Text><Text style={[styles.seasonEpisodeScore, { color: cellColors.color }]}>{score != null ? score.toFixed(1) : "-"}</Text></Pressable>;
               })}
             </ScrollView>
             <View style={styles.seasonList}>
@@ -2231,7 +2256,7 @@ function ActionRow({ icon, label, danger, onPress }: { icon: keyof typeof Ionico
   );
 }
 
-function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity }: { target: EpisodeTarget; session: Session | null; onBack: () => void; onOpen: (item: MediaSummary) => void; onOpenEntity: (entity: EntityTarget) => void }) {
+function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenMenu, onOpenEntity }: { target: EpisodeTarget; session: Session | null; onBack: () => void; onOpen: (item: MediaSummary) => void; onOpenMenu: (item: MediaSummary) => void; onOpenEntity: (entity: EntityTarget) => void }) {
   const [episode, setEpisode] = useState<any | null>(null);
   const [watched, setWatched] = useState(false);
   const [userRating, setUserRating] = useState<number | null>(null);
@@ -2390,6 +2415,7 @@ function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity }: 
           <Text style={styles.detailOverview}>{episode?.overview || "No description has been released for this episode yet."}</Text>
           <View style={styles.detailQuickActions}>
             <Pressable onPress={() => onOpen(show)} style={styles.quickAction}><Ionicons name="albums-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>Open show</Text></Pressable>
+            <Pressable onPress={() => onOpenMenu(show)} style={styles.quickAction}><Ionicons name="ellipsis-horizontal-circle-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>Actions</Text></Pressable>
             <Pressable disabled={busy || watched} onPress={markWatched} style={styles.quickAction}><Ionicons name={watched ? "checkmark" : "calendar-outline"} size={19} color={colors.text} /><Text style={styles.quickActionText}>{watched ? "Watched" : "Mark watched"}</Text></Pressable>
             <Pressable disabled={busy || !episodeId} onPress={() => setRatingSheetVisible(true)} style={styles.quickAction}><Ionicons name="speedometer-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>{userRating != null ? `${userRating.toFixed(1)}/10` : "Rate"}</Text></Pressable>
             <Pressable onPress={() => sharePublicTitle(`/title/show/${show.id}/season/${target.seasonNumber}/episode/${target.episodeNumber}`, `${show.title} - ${title}`, episode?.overview || show.overview)} style={styles.quickAction}><Ionicons name="share-social-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>Share</Text></Pressable>
@@ -2529,7 +2555,7 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
   const poster = tmdbImage(item.posterPath, "w500");
   const director = detail?.crew.find(person => person.job === "Director" || person.job === "Creator");
   const trailer = detail?.videos.find(video => video.type === "Trailer" && video.official) ?? detail?.videos.find(video => video.type === "Trailer") ?? detail?.videos[0];
-  const detailYearItem = { ...item, releaseDate: detail?.releaseDate ?? item.releaseDate, endDate: detail?.endDate ?? item.endDate };
+  const detailYearItem = { ...item, releaseDate: detail?.releaseDate ?? item.releaseDate, endDate: detail?.endDate ?? item.endDate, status: detail?.status ?? item.status };
   const detailGenres = detail?.genres?.length ? detail.genres : item.genres ?? [];
   const detailOverview = detail?.overview || item.overview || "No overview has been published yet.";
   const ratingSources = [
@@ -3363,7 +3389,7 @@ function SettingsScreen({ session, profile, tab, onTab, onBack, onSignOut, onSav
   async function startMfaEnrollment() {
     if (!supabase) return;
     if (mfaFactors.length) {
-      setSecurityMessage("Only one authenticator is supported. Remove the current one first.");
+      setSecurityMessage("Remove the current authenticator before setting up a replacement.");
       return;
     }
     const client = supabase;
@@ -3545,10 +3571,10 @@ function SettingsScreen({ session, profile, tab, onTab, onBack, onSignOut, onSav
       {tab === "security" ? <View style={styles.settingsPanel}><Text style={styles.settingsTitle}>Security</Text><Text style={styles.settingsBody}>Signed in with {providerLabel}. {mfaSummary}</Text>{securityMessage ? <Text style={styles.settingsBody}>{securityMessage}</Text> : null}
         <View style={styles.integrationBox}><Text style={styles.integrationLabel}>Password</Text>{hasEmailPassword ? <><Text style={styles.settingsBody}>Password changes happen through a reset email, so someone with the open app cannot silently change it.</Text><Pressable disabled={securityBusy} onPress={sendPasswordReset} style={styles.securitySmallButtonGhost}><Text style={styles.settingsGhostText}>Send password reset email</Text></Pressable></> : <Text style={styles.settingsBody}>This account uses Google sign-in, so password changes and account recovery are handled by Google.</Text>}</View>
         <View style={styles.integrationBox}><Text style={styles.integrationLabel}>Authenticator app</Text>{mfaFactors.map(factor => <View key={factor.id} style={styles.securityFactorRow}><View style={styles.securityFactorCopy}><Ionicons name="shield-checkmark-outline" size={19} color="#6ee7a8" /><View><Text style={styles.securityFactorTitle}>{factor.friendlyName}</Text><Text style={styles.securityFactorSub}>Verified and required on new sessions</Text></View></View><Pressable disabled={securityBusy} onPress={() => removeMfa(factor.id)} style={styles.securityRemoveButton}><Text style={styles.securityRemoveText}>Remove</Text></Pressable></View>)}
-          {pendingMfa ? <View style={styles.securityEnrollBox}><Text style={styles.settingsBody}>Manual setup key</Text><Text selectable style={styles.securitySecretText}>{pendingMfa.secret}</Text><TextInput value={mfaCode} onChangeText={setMfaCode} keyboardType="number-pad" maxLength={8} placeholder="6-digit code" placeholderTextColor="#6f7477" style={styles.settingsInput} /><Pressable disabled={securityBusy} onPress={verifyMfa} style={styles.settingsSave}><Text style={styles.settingsSaveText}>Verify authenticator</Text></Pressable></View> : !mfaFactors.length ? <Pressable disabled={securityBusy} onPress={startMfaEnrollment} style={styles.settingsGhost}><Text style={styles.settingsGhostText}>Set up authenticator</Text></Pressable> : <Text style={styles.settingsBody}>Only one authenticator can be active. Remove it first if you want to replace it.</Text>}
+          {pendingMfa ? <View style={styles.securityEnrollBox}><Text style={styles.settingsBody}>Manual setup key</Text><Text selectable style={styles.securitySecretText}>{pendingMfa.secret}</Text><TextInput value={mfaCode} onChangeText={setMfaCode} keyboardType="number-pad" maxLength={8} placeholder="6-digit code" placeholderTextColor="#6f7477" style={styles.settingsInput} /><Pressable disabled={securityBusy} onPress={verifyMfa} style={styles.settingsSave}><Text style={styles.settingsSaveText}>Verify authenticator</Text></Pressable></View> : !mfaFactors.length ? <Pressable disabled={securityBusy} onPress={startMfaEnrollment} style={styles.settingsGhost}><Text style={styles.settingsGhostText}>Set up authenticator</Text></Pressable> : null}
         </View>
-        <Pressable disabled={securityBusy} onPress={() => Alert.alert("Delete account?", "We'll email a confirmation link before anything is deleted.", [{ text: "Cancel", style: "cancel" }, { text: "Email link", style: "destructive", onPress: () => requestSecurityEmail("delete_account") }])} style={styles.settingsDanger}><Text style={styles.settingsDangerText}>Email deletion link</Text></Pressable>
-        <Pressable onPress={onSignOut} style={styles.settingsGhost}><Text style={styles.settingsGhostText}>Sign out</Text></Pressable></View> : null}
+        <Pressable onPress={onSignOut} style={styles.settingsGhost}><Text style={styles.settingsGhostText}>Sign out</Text></Pressable>
+        <Pressable disabled={securityBusy} onPress={() => Alert.alert("Delete account?", "We'll email a confirmation link before anything is deleted.", [{ text: "Cancel", style: "cancel" }, { text: "Delete account", style: "destructive", onPress: () => requestSecurityEmail("delete_account") }])} style={styles.settingsDanger}><Text style={styles.settingsDangerText}>Delete account</Text></Pressable></View> : null}
       {tab === "notifications" ? <View style={styles.settingsPanel}><Text style={styles.settingsTitle}>Notifications</Text>{["Follow requests and approvals", "Review and list interactions", "Release reminders", "Recommendation digest"].map(label => <ToggleRow key={label} label={label} />)}</View> : null}
       {tab === "integrations" ? <View style={styles.settingsPanel}><Text style={styles.settingsTitle}>Integrations</Text><Text style={styles.settingsBody}>Connect Trakt once and MovieTracker will keep your viewing diary synced across the app and website.</Text>
         {!traktStatus ? <ActivityIndicator color={colors.accent} style={{ marginTop: 18 }} /> : !traktStatus.databaseReady ? <Text style={styles.settingsError}>Trakt database migration is not ready yet.</Text> : !traktStatus.environmentReady ? <Text style={styles.settingsError}>Trakt server credentials are not configured yet.</Text> : traktStatus.connection ? (
@@ -3773,23 +3799,32 @@ async function loadListFeed(listId: string): Promise<FeedResult> {
   }
   const { data, error } = result;
   if (error) throw error;
+  const mediaRows = (data ?? []).flatMap((row: any) => {
+    const media = firstRow(row.media);
+    return media?.id ? [media] : [];
+  });
+  const { data: userData } = await client.auth.getUser();
+  const mediaIds = mediaRows.map((media: any) => media.id);
+  const { data: ratingRows } = userData.user?.id && mediaIds.length ? await client.from("ratings").select("media_id,score").eq("user_id", userData.user.id).in("media_id", mediaIds) : { data: [] as any[] };
+  const ratingByMedia = new Map((ratingRows ?? []).map((row: any) => [row.media_id, Number(row.score)]));
   return { items: (data ?? []).flatMap((row: any) => {
     const media = firstRow(row.media);
     if (!media) return [];
-    const item = fromDbMedia(media);
+    const item = fromDbMedia(media, ratingByMedia);
     return [{ ...item, listMediaId: media.id, franchiseGroup: row.franchise_group ?? null }];
   }) };
 }
 
 async function hiddenRecommendationKeys(client: NonNullable<typeof supabase>, userId: string, filters: RecommendationFilters) {
   const hidden = new Set<string>();
-  const [progress, watched, listItems, dismissals] = await Promise.all([
+  const [progress, watched, listItems, planned, dismissals] = await Promise.all([
     filters.hideWatched ? client.from("progress").select("media(tmdb_id,kind)").eq("user_id", userId) : Promise.resolve({ data: [] }),
     filters.hideWatched ? client.from("watch_events").select("media(tmdb_id,kind)").eq("user_id", userId) : Promise.resolve({ data: [] }),
     filters.hideListed ? client.from("list_items").select("media(tmdb_id,kind),lists!inner(user_id)").eq("lists.user_id", userId) : Promise.resolve({ data: [] }),
+    filters.hideListed ? client.from("progress").select("media(tmdb_id,kind)").eq("user_id", userId).eq("status", "planned") : Promise.resolve({ data: [] }),
     client.from("recommendation_dismissals").select("media(tmdb_id,kind)").eq("user_id", userId)
   ]);
-  [...(progress.data ?? []), ...(watched.data ?? []), ...(listItems.data ?? []), ...(dismissals.data ?? [])].forEach((row: any) => {
+  [...(progress.data ?? []), ...(watched.data ?? []), ...(listItems.data ?? []), ...(planned.data ?? []), ...(dismissals.data ?? [])].forEach((row: any) => {
     const media = firstRow(row.media);
     if (media) hidden.add(`${media.kind}-${media.tmdb_id}`);
   });
@@ -3798,13 +3833,14 @@ async function hiddenRecommendationKeys(client: NonNullable<typeof supabase>, us
 
 async function hiddenRecommendationMediaIds(client: NonNullable<typeof supabase>, userId: string, filters: RecommendationFilters) {
   const hidden = new Set<number>();
-  const [progress, watched, listItems, dismissals] = await Promise.all([
+  const [progress, watched, listItems, planned, dismissals] = await Promise.all([
     filters.hideWatched ? client.from("progress").select("media_id").eq("user_id", userId) : Promise.resolve({ data: [] }),
     filters.hideWatched ? client.from("watch_events").select("media_id").eq("user_id", userId) : Promise.resolve({ data: [] }),
     filters.hideListed ? client.from("list_items").select("media_id,lists!inner(user_id)").eq("lists.user_id", userId) : Promise.resolve({ data: [] }),
+    filters.hideListed ? client.from("progress").select("media_id").eq("user_id", userId).eq("status", "planned") : Promise.resolve({ data: [] }),
     client.from("recommendation_dismissals").select("media_id").eq("user_id", userId)
   ]);
-  [...(progress.data ?? []), ...(watched.data ?? []), ...(listItems.data ?? []), ...(dismissals.data ?? [])].forEach((row: any) => {
+  [...(progress.data ?? []), ...(watched.data ?? []), ...(listItems.data ?? []), ...(planned.data ?? []), ...(dismissals.data ?? [])].forEach((row: any) => {
     if (typeof row.media_id === "number") hidden.add(row.media_id);
   });
   return hidden;
@@ -4465,7 +4501,7 @@ const styles = StyleSheet.create({
   profileMediaAvatar: { width: 62, height: 62, borderRadius: 31 },
   profileMediaBanner: { width: 110, height: 62, borderRadius: 14 },
   profileMediaImage: { width: "100%", height: "100%" },
-  profileMediaButton: { flex: 1, minHeight: 48, borderRadius: 16, borderWidth: 1, borderColor: colors.line, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 8, paddingHorizontal: 12 },
+  profileMediaButton: { width: 250, maxWidth: "72%", minHeight: 48, borderRadius: 16, borderWidth: 1, borderColor: colors.line, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 8, paddingHorizontal: 12 },
   profileMediaButtonText: { color: colors.text, fontSize: 14, fontWeight: "900", textAlign: "center" },
   settingsTextArea: { minHeight: 112, paddingTop: 12, textAlignVertical: "top" },
   settingsSave: { height: 56, borderRadius: 20, backgroundColor: colors.accent, alignItems: "center", justifyContent: "center", marginTop: 18 },
