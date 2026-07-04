@@ -472,8 +472,9 @@ export default function App() {
     const filteredTracked = libraryFilter === "all"
       ? trackedItems
       : trackedItems.filter(item => item.reason === progressLabel(libraryFilter));
-    setLibraryFeed({ items: dedupeMedia(libraryFilter === "favorites" ? favoriteItems : filteredTracked) });
-  }, [libraryFilter, usableSession?.user.id]);
+    const items = dedupeMedia(libraryFilter === "favorites" ? favoriteItems : filteredTracked);
+    setLibraryFeed({ items: await enrichShowRuns(items, usableSession.access_token, 60) });
+  }, [libraryFilter, usableSession?.access_token, usableSession?.user.id]);
 
   const loadCalendar = useCallback(async () => {
     if (!usableSession?.user.id || !supabase) {
@@ -1024,7 +1025,15 @@ export default function App() {
       return (
         <>
           <AppHeader session={headerSession} onSearch={() => setSearchMode(true)} onProfile={() => { setSelectedList(null); openProfileView("profile"); }} />
-          <ListDetailHeader list={selectedList} groupBy={listGroup} onGroupBy={setListGroup} onBack={() => { setSelectedList(null); setSelectedListFeed(emptyFeed); setListGroup("none"); }} />
+          <ListDetailHeader list={selectedList} groupBy={listGroup} onGroupBy={setListGroup} onBack={() => {
+            setSelectedList(null);
+            setSelectedListFeed(emptyFeed);
+            setListGroup("none");
+            setLibraryFilter("lists");
+            setProfileView("profile");
+            setProfilePanel("overview");
+            goTab("library");
+          }} />
           <GroupedListContent groups={groupedListItems(selectedListFeed.items, listGroup)} onOpen={openItem} onMenu={setActionItem} />
         </>
       );
@@ -1141,7 +1150,10 @@ export default function App() {
         {selectedEntity ? (
           <EntityScreen target={selectedEntity} session={usableSession} onBack={() => setSelectedEntity(null)} onOpen={openItem} onMenu={setActionItem} />
         ) : selectedEpisode ? (
-          <EpisodeDetailScreen target={selectedEpisode} session={usableSession} onBack={() => setSelectedEpisode(null)} onOpen={openItem} onOpenMenu={setActionItem} onOpenEntity={openEntity} />
+          <EpisodeDetailScreen target={selectedEpisode} session={usableSession} onBack={() => setSelectedEpisode(null)} onOpen={openItem} onOpenEntity={openEntity} onOpenSeason={season => {
+            setSelectedEpisode(null);
+            setSelectedSeason({ show: selectedEpisode.show, season });
+          }} />
         ) : selectedSeriesEpisodes ? (
           <SeriesEpisodesScreen target={selectedSeriesEpisodes} session={usableSession} onBack={() => setSelectedSeriesEpisodes(null)} onOpenSeason={season => {
             setSelectedSeriesEpisodes(null);
@@ -2267,7 +2279,7 @@ function ActionRow({ icon, label, danger, onPress }: { icon: keyof typeof Ionico
   );
 }
 
-function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenMenu, onOpenEntity }: { target: EpisodeTarget; session: Session | null; onBack: () => void; onOpen: (item: MediaSummary) => void; onOpenMenu: (item: MediaSummary) => void; onOpenEntity: (entity: EntityTarget) => void }) {
+function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity, onOpenSeason }: { target: EpisodeTarget; session: Session | null; onBack: () => void; onOpen: (item: MediaSummary) => void; onOpenEntity: (entity: EntityTarget) => void; onOpenSeason: (season: DetailSeason) => void }) {
   const [episode, setEpisode] = useState<any | null>(null);
   const [watched, setWatched] = useState(false);
   const [userRating, setUserRating] = useState<number | null>(null);
@@ -2277,6 +2289,7 @@ function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenMenu, onOp
   const [episodeRecommendations, setEpisodeRecommendations] = useState<MediaSummary[]>([]);
   const [busy, setBusy] = useState(false);
   const [ratingSheetVisible, setRatingSheetVisible] = useState(false);
+  const [watchSheetVisible, setWatchSheetVisible] = useState(false);
   const art = tmdbImage(episode?.still_path ?? target.artwork ?? target.show.backdropPath ?? target.show.posterPath, "w780");
 
   const loadEpisode = useCallback(async () => {
@@ -2359,6 +2372,20 @@ function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenMenu, onOp
     });
   }
 
+  async function saveEpisodeWatchLog(values: WatchLogValues) {
+    if (!session?.user.id || !supabase) return Alert.alert("Sign in needed", "Sign in before tracking episodes.");
+    const season = firstRow(episode?.seasons);
+    const mediaId = season?.media_id;
+    const episodeId = episode?.id ?? target.episodeId;
+    if (!mediaId || !episodeId) return Alert.alert("Unavailable", "This episode is not ready for tracking yet.");
+    const watchedAt = resolveWatchLogDate(values, episode?.air_date ?? target.airDate, episode?.runtime ?? 0);
+    await withEpisodeBusy(async () => {
+      await supabase!.from("watch_events").insert({ user_id: session.user.id, media_id: mediaId, episode_id: episodeId, watched_at: watchedAt });
+      await supabase!.from("progress").upsert({ user_id: session.user.id, media_id: mediaId, status: "watching", updated_at: new Date().toISOString() });
+      setWatched(true);
+    });
+  }
+
   const season = firstRow(episode?.seasons);
   const showCandidate = firstRow(season?.media) as any;
   const show = showCandidate?.tmdb_id ? fromDbMedia(showCandidate) : showCandidate?.kind ? showCandidate as MediaSummary : target.show;
@@ -2368,6 +2395,7 @@ function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenMenu, onOp
   const images = (episode?.raw?.images?.stills ?? episode?.raw?.images ?? []).slice(0, 12);
   const videos = (episode?.raw?.videos?.results ?? []).filter((video: any) => video.site === "YouTube");
   const trailer = videos.find((video: any) => video.type === "Trailer") ?? videos[0];
+  const seasonTarget: DetailSeason = { id: season?.id, seasonNumber: target.seasonNumber, name: season?.name || `Season ${target.seasonNumber}`, overview: null, posterPath: null, airDate: null, episodeCount: null };
 
   async function saveEpisodeRating(score: number | null) {
     if (!session?.user.id || !supabase || !episodeId) return Alert.alert("Unavailable", "This episode is not ready for rating yet.");
@@ -2426,7 +2454,8 @@ function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenMenu, onOp
           <Text style={styles.detailOverview}>{episode?.overview || "No description has been released for this episode yet."}</Text>
           <View style={styles.detailQuickActions}>
             <Pressable onPress={() => onOpen(show)} style={styles.quickAction}><Ionicons name="albums-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>Open show</Text></Pressable>
-            <Pressable onPress={() => onOpenMenu(show)} style={styles.quickAction}><Ionicons name="ellipsis-horizontal-circle-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>Actions</Text></Pressable>
+            <Pressable onPress={() => onOpenSeason(seasonTarget)} style={styles.quickAction}><Ionicons name="layers-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>Open season</Text></Pressable>
+            <Pressable onPress={() => setWatchSheetVisible(true)} style={styles.quickAction}><Ionicons name="ellipsis-horizontal-circle-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>Actions</Text></Pressable>
             <Pressable disabled={busy || watched} onPress={markWatched} style={styles.quickAction}><Ionicons name={watched ? "checkmark" : "calendar-outline"} size={19} color={colors.text} /><Text style={styles.quickActionText}>{watched ? "Watched" : "Mark watched"}</Text></Pressable>
             <Pressable disabled={busy || !episodeId} onPress={() => setRatingSheetVisible(true)} style={styles.quickAction}><Ionicons name="speedometer-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>{userRating != null ? `${userRating.toFixed(1)}/10` : "Rate"}</Text></Pressable>
             <Pressable onPress={() => sharePublicTitle(`/title/show/${show.id}/season/${target.seasonNumber}/episode/${target.episodeNumber}`, `${show.title} - ${title}`, episode?.overview || show.overview)} style={styles.quickAction}><Ionicons name="share-social-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>Share</Text></Pressable>
@@ -2435,6 +2464,7 @@ function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenMenu, onOp
       </View>
       <View style={styles.detailBody}>
         <RatingSheet visible={ratingSheetVisible} value={userRating} busy={busy} onClose={() => setRatingSheetVisible(false)} onSave={saveEpisodeRating} />
+        <WatchLogSheet visible={watchSheetVisible} title={`${show.title} - ${title}`} releaseDate={episode?.air_date ?? target.airDate ?? null} runtime={episode?.runtime ?? null} busy={busy} watched={watched} onClose={() => setWatchSheetVisible(false)} onSave={saveEpisodeWatchLog} />
         {images.length || trailer ? <TitleMediaPreview trailer={trailer} images={images} /> : null}
         {cast.length ? <CastSection cast={cast} onOpen={onOpenEntity} /> : null}
         {session?.user.id && episodeId ? <ReviewComposerPanel existingReview={myReview} currentRating={userRating} busy={busy} onSubmit={saveEpisodeReview} /> : null}
@@ -3763,6 +3793,17 @@ function dedupeMedia(items: MediaSummary[]) {
   });
 }
 
+async function enrichShowRuns(items: MediaSummary[], accessToken?: string, limit = 40) {
+  const shows = [...new Map(items.filter(item => item.kind === "show").map(item => [item.id, item])).values()].slice(0, limit);
+  if (!shows.length) return items;
+  const details = await Promise.allSettled(shows.map(item => fetchMobileTitle("show", item.id, accessToken).then(detail => ({ id: item.id, detail }))));
+  const detailById = new Map(details.flatMap(result => result.status === "fulfilled" ? [[result.value.id, result.value.detail]] : []));
+  return items.map(item => {
+    const detail = detailById.get(item.id);
+    return item.kind === "show" && detail ? { ...item, releaseDate: detail.releaseDate ?? item.releaseDate, endDate: detail.endDate ?? item.endDate, status: detail.status ?? item.status } : item;
+  });
+}
+
 async function loadUserLists(userId: string): Promise<UserList[]> {
   const client = supabase;
   if (!client) return [];
@@ -3814,16 +3855,17 @@ async function loadListFeed(listId: string): Promise<FeedResult> {
     const media = firstRow(row.media);
     return media?.id ? [media] : [];
   });
-  const { data: userData } = await client.auth.getUser();
+  const [{ data: userData }, { data: sessionData }] = await Promise.all([client.auth.getUser(), client.auth.getSession()]);
   const mediaIds = mediaRows.map((media: any) => media.id);
   const { data: ratingRows } = userData.user?.id && mediaIds.length ? await client.from("ratings").select("media_id,score").eq("user_id", userData.user.id).in("media_id", mediaIds) : { data: [] as any[] };
   const ratingByMedia = new Map((ratingRows ?? []).map((row: any) => [row.media_id, Number(row.score)]));
-  return { items: (data ?? []).flatMap((row: any) => {
+  const items = (data ?? []).flatMap((row: any) => {
     const media = firstRow(row.media);
     if (!media) return [];
     const item = fromDbMedia(media, ratingByMedia);
     return [{ ...item, listMediaId: media.id, franchiseGroup: row.franchise_group ?? null }];
-  }) };
+  });
+  return { items: await enrichShowRuns(items, sessionData.session?.access_token, 80) };
 }
 
 async function hiddenRecommendationKeys(client: NonNullable<typeof supabase>, userId: string, filters: RecommendationFilters) {
@@ -4508,12 +4550,12 @@ const styles = StyleSheet.create({
   settingsLabel: { color: colors.muted, fontSize: 12, fontWeight: "900", letterSpacing: 1.2, textTransform: "uppercase", marginBottom: 6 },
   settingsInput: { minHeight: 52, borderRadius: 14, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel2, color: colors.text, fontSize: 16, paddingHorizontal: 12 },
   profileMediaRow: { minHeight: 82, borderRadius: 18, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel2, padding: 10, flexDirection: "row", alignItems: "center", gap: 12 },
-  profileMediaPreview: { overflow: "hidden", backgroundColor: colors.panel, alignItems: "center", justifyContent: "center" },
+  profileMediaPreview: { flexShrink: 0, overflow: "hidden", backgroundColor: colors.panel, alignItems: "center", justifyContent: "center" },
   profileMediaAvatar: { width: 62, height: 62, borderRadius: 31 },
   profileMediaBanner: { width: 110, height: 62, borderRadius: 14 },
   profileMediaImage: { width: "100%", height: "100%" },
-  profileMediaButton: { width: 250, maxWidth: "72%", minHeight: 48, borderRadius: 16, borderWidth: 1, borderColor: colors.line, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 8, paddingHorizontal: 12 },
-  profileMediaButtonText: { color: colors.text, fontSize: 14, fontWeight: "900", textAlign: "center" },
+  profileMediaButton: { flex: 1, minWidth: 0, minHeight: 48, borderRadius: 16, borderWidth: 1, borderColor: colors.line, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 8, paddingHorizontal: 12 },
+  profileMediaButtonText: { color: colors.text, flexShrink: 1, fontSize: 14, fontWeight: "900", textAlign: "center" },
   settingsTextArea: { minHeight: 112, paddingTop: 12, textAlignVertical: "top" },
   settingsSave: { height: 56, borderRadius: 20, backgroundColor: colors.accent, alignItems: "center", justifyContent: "center", marginTop: 18 },
   settingsSaveText: { color: colors.text, fontSize: 17, fontWeight: "900" },
