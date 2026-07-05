@@ -27,7 +27,7 @@ import {
 } from "react-native";
 
 import { AppHeader, BottomNav, DiscoverFiltersCard, Hero, PickerSheet, RecommendationFiltersCard, RemoteImage, resolveRemoteImageUri, SectionTitle, TitleCard, type PickerAnchor } from "./src/components";
-import { disconnectTrakt, fetchDiscover, fetchMobileCompany, fetchMobileEpisode, fetchMobilePerson, fetchMobileSeason, fetchMobileTitle, fetchRecommendations, fetchSearch, fetchTraktStatus, fetchWebsiteEntityMetadata, fetchWebsiteHome, fetchWebsiteTitleMetadata, refreshRecommendations, setNotInterested, startTraktConnect, syncTrakt, type MobileTraktStatus } from "./src/api";
+import { disconnectTrakt, fetchDiscover, fetchMobileCompany, fetchMobileEpisode, fetchMobilePerson, fetchMobileProfile, fetchMobileSeason, fetchMobileTitle, fetchRecommendations, fetchSearch, fetchTraktStatus, fetchWebsiteEntityMetadata, fetchWebsiteHome, fetchWebsiteTitleMetadata, refreshRecommendations, setNotInterested, startTraktConnect, syncTrakt, type MobileTraktStatus } from "./src/api";
 import { API_URL, countries, excludeGenreOptions, genres, HAS_SUPABASE, ratingLabel, titleYear, tmdbImage, userRatingLabel } from "./src/config";
 import { supabase } from "./src/supabase";
 import { colors } from "./src/theme";
@@ -339,7 +339,7 @@ export default function App() {
         setProfile(data as Profile | null);
       });
     return () => { alive = false; };
-  }, [usableSession?.user.id]);
+  }, [usableSession?.access_token, usableSession?.user.id]);
 
   const loadHome = useCallback(async () => {
     try {
@@ -551,7 +551,16 @@ export default function App() {
     }
     const userId = usableSession.user.id;
     const accessToken = usableSession.access_token;
-    if (!force && profileDataLoadedFor.current === userId && Date.now() - profileDataLoadedAt.current < 30000) return;
+    if (!force && profileDataLoadedFor.current === userId && Date.now() - profileDataLoadedAt.current < 120000) return;
+    try {
+      const serverProfile = await fetchMobileProfile(accessToken);
+      setProfileData(serverProfile);
+      profileDataLoadedFor.current = userId;
+      profileDataLoadedAt.current = Date.now();
+      return;
+    } catch {
+      // Fall back to the legacy direct Supabase loader when the site API is not deployed yet.
+    }
     const [followers, following, progressCount, progressStatuses, ratings, reviews, reviewCount, favorites, lists, listCount, history, streakEvents, watchCount] = await Promise.all([
       supabase.from("follows").select("*", { count: "exact", head: true }).eq("following_id", userId).eq("status", "accepted"),
       supabase.from("follows").select("*", { count: "exact", head: true }).eq("follower_id", userId).eq("status", "accepted"),
@@ -579,7 +588,7 @@ export default function App() {
       return media && (row.status === "watching" || row.status === "paused") ? [fromDbMedia(media, ratingByMedia)] : [];
     });
     async function enrichShowRuns(items: MediaSummary[]) {
-      const shows = [...new Map(items.filter(item => item.kind === "show").map(item => [item.id, item])).values()].slice(0, 16);
+      const shows = [...new Map(items.filter(item => item.kind === "show" && (!item.status || !item.releaseDate)).map(item => [item.id, item])).values()].slice(0, 6);
       const details = await Promise.allSettled(shows.map(item => fetchMobileTitle("show", item.id, accessToken).then(detail => ({ id: item.id, detail }))));
       const detailById = new Map(details.flatMap(result => result.status === "fulfilled" ? [[result.value.id, result.value.detail]] : []));
       return items.map(item => {
@@ -697,7 +706,7 @@ export default function App() {
     });
     profileDataLoadedFor.current = userId;
     profileDataLoadedAt.current = Date.now();
-  }, [usableSession?.user.id]);
+  }, [usableSession?.access_token, usableSession?.user.id]);
 
   const loadActive = useCallback(async () => {
     setError("");
@@ -3794,7 +3803,7 @@ function dedupeMedia(items: MediaSummary[]) {
 }
 
 async function enrichShowRuns(items: MediaSummary[], accessToken?: string, limit = 40) {
-  const shows = [...new Map(items.filter(item => item.kind === "show").map(item => [item.id, item])).values()].slice(0, limit);
+  const shows = [...new Map(items.filter(item => item.kind === "show" && (!item.status || !item.releaseDate)).map(item => [item.id, item])).values()].slice(0, Math.min(limit, 12));
   if (!shows.length) return items;
   const details = await Promise.allSettled(shows.map(item => fetchMobileTitle("show", item.id, accessToken).then(detail => ({ id: item.id, detail }))));
   const detailById = new Map(details.flatMap(result => result.status === "fulfilled" ? [[result.value.id, result.value.detail]] : []));

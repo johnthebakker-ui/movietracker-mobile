@@ -157,6 +157,12 @@ export async function fetchSearch(query: string, token?: string): Promise<FeedRe
 }
 
 export async function fetchWebsiteHome(): Promise<HomePayload> {
+  try {
+    const feed = await request<HomePayload>("/api/mobile/home");
+    if (feed.hero.length || feed.sections.some(section => section.items.length)) return feed;
+  } catch {
+    // Older deployments do not expose the JSON home feed yet; fall back to HTML scraping.
+  }
   const html = await requestText("/");
   const hero = extractHeroItems(html);
   const sections = extractHomeSections(html);
@@ -220,6 +226,10 @@ export async function fetchMobileEpisode(showId: number, season: number, episode
 
 export async function fetchMobileSeason(showId: number, season: number, token?: string) {
   return request<MobileSeasonPayload>(`/api/mobile/season/${showId}/${season}`, token);
+}
+
+export async function fetchMobileProfile(token: string): Promise<any> {
+  return request<any>("/api/mobile/profile", token);
 }
 
 export async function refreshRecommendations(token: string) {
