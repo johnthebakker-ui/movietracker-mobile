@@ -212,6 +212,10 @@ export default function App() {
   const listRef = useRef<FlatList<MediaSummary>>(null);
   const profileDataLoadedFor = useRef<string | null>(null);
   const profileDataLoadedAt = useRef(0);
+  const libraryLoadedKey = useRef<string | null>(null);
+  const libraryLoadedAt = useRef(0);
+  const recommendationLoadedKey = useRef<string | null>(null);
+  const recommendationLoadedAt = useRef(0);
   const checkingMfa = useRef(false);
   const pendingMfaSession = useRef<Session | null>(null);
   const usableSession = mfa.required || authVerifying ? null : session;
@@ -377,16 +381,22 @@ export default function App() {
   const loadRecommendations = useCallback(async (filters = recommendationFiltersRef.current) => {
     if (!usableSession?.access_token) {
       setRecommendationFeed(emptyFeed);
+      recommendationLoadedKey.current = null;
+      recommendationLoadedAt.current = 0;
       return;
     }
+    const cacheKey = `${usableSession.user.id}:${JSON.stringify(filters)}`;
+    if (recommendationLoadedKey.current === cacheKey && Date.now() - recommendationLoadedAt.current < 120000) return;
     try {
       const feed = await fetchRecommendations(filters, usableSession.access_token);
       setRecommendationFeed(feed);
+      recommendationLoadedKey.current = cacheKey;
+      recommendationLoadedAt.current = Date.now();
     } catch (reason) {
       setRecommendationFeed(emptyFeed);
       throw reason;
     }
-  }, [usableSession?.access_token]);
+  }, [usableSession?.access_token, usableSession?.user.id]);
 
   const loadSearch = useCallback(async (query = searchQuery) => {
     const clean = query.trim();
@@ -433,8 +443,12 @@ export default function App() {
       setLibraryFeed(emptyFeed);
       setLibraryLists([]);
       setProgressCounts(blankProgress);
+      libraryLoadedKey.current = null;
+      libraryLoadedAt.current = 0;
       return;
     }
+    const cacheKey = `${usableSession.user.id}:${libraryFilter}`;
+    if (libraryLoadedKey.current === cacheKey && Date.now() - libraryLoadedAt.current < 120000) return;
     const [progressResult, favoriteResult, ratingResult] = await Promise.all([
       supabase.from("progress").select("status,updated_at,media(*)").eq("user_id", usableSession.user.id).order("updated_at", { ascending: false }).limit(80),
       supabase.from("favorites").select("media(*)").eq("user_id", usableSession.user.id).order("position").limit(80),
@@ -466,6 +480,8 @@ export default function App() {
       const lists = await loadUserLists(usableSession.user.id);
       setLibraryLists(lists);
       setLibraryFeed(emptyFeed);
+      libraryLoadedKey.current = cacheKey;
+      libraryLoadedAt.current = Date.now();
       return;
     }
     setLibraryLists([]);
@@ -474,6 +490,8 @@ export default function App() {
       : trackedItems.filter(item => item.reason === progressLabel(libraryFilter));
     const items = dedupeMedia(libraryFilter === "favorites" ? favoriteItems : filteredTracked);
     setLibraryFeed({ items: await enrichShowRuns(items, usableSession.access_token, 60) });
+    libraryLoadedKey.current = cacheKey;
+    libraryLoadedAt.current = Date.now();
   }, [libraryFilter, usableSession?.access_token, usableSession?.user.id]);
 
   const loadCalendar = useCallback(async () => {
@@ -715,9 +733,11 @@ export default function App() {
     if (tab === "calendar") await loadCalendar();
     if (tab === "library") await loadLibrary();
     if (tab === "profile" && !mfa.required) {
-      await loadLibrary();
-      await loadProfileData(false);
-      if (profileView === "recommendations") await loadRecommendations();
+      if (profileView === "recommendations") {
+        await loadRecommendations();
+      } else {
+        await loadProfileData(false);
+      }
     }
   }, [loadCalendar, loadDiscover, loadHome, loadLibrary, loadProfileData, loadRecommendations, mfa.required, profileView, tab]);
 
@@ -745,6 +765,10 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     setRefreshing(true);
+    libraryLoadedKey.current = null;
+    libraryLoadedAt.current = 0;
+    recommendationLoadedKey.current = null;
+    recommendationLoadedAt.current = 0;
     await loadActive().catch(reason => setError(reason instanceof Error ? reason.message : "Could not refresh."));
     setRefreshing(false);
   }, [loadActive]);
@@ -773,6 +797,10 @@ export default function App() {
   }, []);
 
   const refreshAfterAction = useCallback(async () => {
+    libraryLoadedKey.current = null;
+    libraryLoadedAt.current = 0;
+    recommendationLoadedKey.current = null;
+    recommendationLoadedAt.current = 0;
     await loadActive();
     if (selectedList?.id) setSelectedListFeed(await loadListFeed(selectedList.id));
   }, [loadActive, selectedList?.id]);
@@ -870,6 +898,11 @@ export default function App() {
     setProfile(null);
     setProfileData(blankProfileData);
     profileDataLoadedFor.current = null;
+    profileDataLoadedAt.current = 0;
+    libraryLoadedKey.current = null;
+    libraryLoadedAt.current = 0;
+    recommendationLoadedKey.current = null;
+    recommendationLoadedAt.current = 0;
     setMfa({ required: false, code: "" });
   }
 
