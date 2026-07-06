@@ -378,7 +378,7 @@ export default function App() {
     setDiscoverFeed(await fetchDiscover(discoverFilters, 1, usableSession?.access_token));
   }, [discoverFilters, usableSession?.access_token]);
 
-  const loadRecommendations = useCallback(async (filters = recommendationFiltersRef.current) => {
+  const loadRecommendations = useCallback(async (filters = recommendationFiltersRef.current, force = false) => {
     if (!usableSession?.access_token) {
       setRecommendationFeed(emptyFeed);
       recommendationLoadedKey.current = null;
@@ -386,7 +386,7 @@ export default function App() {
       return;
     }
     const cacheKey = `${usableSession.user.id}:${JSON.stringify(filters)}`;
-    if (recommendationLoadedKey.current === cacheKey && Date.now() - recommendationLoadedAt.current < 120000) return;
+    if (!force && recommendationLoadedKey.current === cacheKey && Date.now() - recommendationLoadedAt.current < 120000) return;
     try {
       const feed = await fetchRecommendations(filters, usableSession.access_token);
       setRecommendationFeed(feed);
@@ -769,6 +769,8 @@ export default function App() {
     libraryLoadedAt.current = 0;
     recommendationLoadedKey.current = null;
     recommendationLoadedAt.current = 0;
+    profileDataLoadedFor.current = null;
+    profileDataLoadedAt.current = 0;
     await loadActive().catch(reason => setError(reason instanceof Error ? reason.message : "Could not refresh."));
     setRefreshing(false);
   }, [loadActive]);
@@ -801,9 +803,12 @@ export default function App() {
     libraryLoadedAt.current = 0;
     recommendationLoadedKey.current = null;
     recommendationLoadedAt.current = 0;
+    profileDataLoadedFor.current = null;
+    profileDataLoadedAt.current = 0;
+    if (usableSession?.access_token) await refreshRecommendations(usableSession.access_token).catch(() => undefined);
     await loadActive();
     if (selectedList?.id) setSelectedListFeed(await loadListFeed(selectedList.id));
-  }, [loadActive, selectedList?.id]);
+  }, [loadActive, selectedList?.id, usableSession?.access_token]);
 
   const activeFeed = searchMode ? searchFeed : selectedList ? selectedListFeed : tab === "discover" ? discoverFeed : tab === "calendar" ? calendarFeed : tab === "library" ? libraryFeed : tab === "profile" && profileView === "recommendations" ? recommendationFeed : emptyFeed;
   const profileTitle = profile?.display_name || profile?.username || usableSession?.user.user_metadata?.display_name || usableSession?.user.email || "Your MovieTracker";
@@ -947,7 +952,9 @@ export default function App() {
     setRefreshing(true);
     try {
       await refreshRecommendations(currentSession.access_token);
-      await loadRecommendations(recommendationFilters);
+      recommendationLoadedKey.current = null;
+      recommendationLoadedAt.current = 0;
+      await loadRecommendations(recommendationFilters, true);
     } catch (reason) {
       Alert.alert("Could not refresh picks", reason instanceof Error ? reason.message : "Your app session is signed in, but the website recommendation endpoint did not return picks.");
     } finally {
@@ -1192,7 +1199,7 @@ export default function App() {
         {selectedEntity ? (
           <EntityScreen target={selectedEntity} session={usableSession} onBack={() => setSelectedEntity(null)} onOpen={openItem} onMenu={setActionItem} />
         ) : selectedEpisode ? (
-          <EpisodeDetailScreen target={selectedEpisode} session={usableSession} onBack={() => setSelectedEpisode(null)} onOpen={openItem} onOpenEntity={openEntity} onOpenSeason={season => {
+          <EpisodeDetailScreen target={selectedEpisode} session={usableSession} onBack={() => setSelectedEpisode(null)} onOpen={openItem} onOpenEntity={openEntity} onChanged={refreshAfterAction} onOpenSeason={season => {
             setSelectedEpisode(null);
             setSelectedSeason({ show: selectedEpisode.show, season });
           }} />
@@ -1218,7 +1225,7 @@ export default function App() {
             artwork: episode.still_path ?? episode.stillPath ?? selectedSeason.show.backdropPath ?? selectedSeason.show.posterPath
           })} />
         ) : selected ? (
-          <DetailScreenV2 key={`${selected.kind}-${selected.id}`} item={selected} session={usableSession} onBack={closeSelected} onOpen={openItem} onOpenEntity={openEntity} onOpenSeason={season => setSelectedSeason({ show: selected, season })} onOpenAllSeasons={seasons => setSelectedSeriesEpisodes({ show: selected, seasons })} onHide={hideRecommendation} onChanged={loadActive} />
+          <DetailScreenV2 key={`${selected.kind}-${selected.id}`} item={selected} session={usableSession} onBack={closeSelected} onOpen={openItem} onOpenEntity={openEntity} onOpenSeason={season => setSelectedSeason({ show: selected, season })} onOpenAllSeasons={seasons => setSelectedSeriesEpisodes({ show: selected, seasons })} onHide={hideRecommendation} onChanged={refreshAfterAction} />
         ) : (
           <FlatList
             ref={listRef}
@@ -2067,7 +2074,7 @@ function GroupedListContent({ groups, onOpen, onMenu }: { groups: Array<{ title:
 }
 
 function PosterStack({ posters }: { posters: string[] }) {
-  return <View style={styles.posterStack}>{posters.slice(0, 4).map((poster, index) => <Image key={`${poster}-${index}`} source={{ uri: poster }} style={[styles.stackPoster, { left: 16 + index * 32, transform: [{ rotate: `${(index - 1.5) * 5}deg` }] }]} />)}{!posters.length ? <Ionicons name="list-outline" size={38} color={colors.muted} /> : null}</View>;
+  return <View style={styles.posterStack}>{posters.slice(0, 4).map((poster, index) => <Image key={`${poster}-${index}`} source={{ uri: tmdbImage(poster, "w342") ?? poster }} style={[styles.stackPoster, { left: 16 + index * 32, transform: [{ rotate: `${(index - 1.5) * 5}deg` }] }]} />)}{!posters.length ? <Ionicons name="list-outline" size={38} color={colors.muted} /> : null}</View>;
 }
 
 function ProfileShortcuts({ onCalendar, onHistory, onReviews, onSettings }: { onCalendar: () => void; onHistory: () => void; onReviews: () => void; onSettings: () => void }) {
@@ -2293,7 +2300,7 @@ function MovieActionSheet({ item, visible, session, currentList, franchiseGroups
             ) : null}
             <Text style={styles.actionSectionLabel}>Custom lists</Text>
             {lists.length ? <View style={styles.contextListSearch}><Ionicons name="search-outline" size={18} color={colors.muted} /><TextInput value={listQuery} onChangeText={setListQuery} placeholder="Find a list" placeholderTextColor={colors.muted} style={styles.contextListInput} /></View> : null}
-            <ScrollView style={[styles.actionListScroll, isCurrentListItem && styles.actionListScrollCompact]} nestedScrollEnabled showsVerticalScrollIndicator>
+            <ScrollView style={[styles.actionListScroll, isCurrentListItem && styles.actionListScrollCompact]} contentContainerStyle={styles.actionListContent} keyboardShouldPersistTaps="handled" nestedScrollEnabled showsVerticalScrollIndicator>
               {filteredLists.length ? filteredLists.map(list => (
                 <Pressable disabled={busy} key={list.id} onPress={() => toggleList(list)} style={[styles.listActionRow, list.contains && styles.listActionRowActive]}>
                   <Text style={[styles.listActionName, list.contains && styles.listActionNameActive]} numberOfLines={1}>{list.name}</Text>
@@ -2321,7 +2328,7 @@ function ActionRow({ icon, label, danger, onPress }: { icon: keyof typeof Ionico
   );
 }
 
-function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity, onOpenSeason }: { target: EpisodeTarget; session: Session | null; onBack: () => void; onOpen: (item: MediaSummary) => void; onOpenEntity: (entity: EntityTarget) => void; onOpenSeason: (season: DetailSeason) => void }) {
+function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity, onOpenSeason, onChanged }: { target: EpisodeTarget; session: Session | null; onBack: () => void; onOpen: (item: MediaSummary) => void; onOpenEntity: (entity: EntityTarget) => void; onOpenSeason: (season: DetailSeason) => void; onChanged?: () => Promise<void> }) {
   const [episode, setEpisode] = useState<any | null>(null);
   const [watched, setWatched] = useState(false);
   const [userRating, setUserRating] = useState<number | null>(null);
@@ -2396,6 +2403,7 @@ function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity, on
     try {
       await work();
       await loadEpisode();
+      await onChanged?.();
     } finally {
       setBusy(false);
     }
@@ -3165,9 +3173,10 @@ function WatchLogSheet({ visible, title, releaseDate, runtime, busy, watched, on
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <Pressable style={styles.modalScrim} onPress={onClose} />
+      <KeyboardAvoidingView pointerEvents="box-none" behavior={Platform.OS === "ios" ? "padding" : "height"} keyboardVerticalOffset={16} style={styles.modalKeyboardAvoider}>
       <View style={styles.watchLogSheet}>
         <View style={styles.grabber} />
-        <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+        <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.watchLogScrollContent}>
           <View style={styles.actionHeader}>
             <View style={{ flex: 1 }}>
               <Text style={styles.actionTitle}>{watched ? "Add another watch" : "Mark watched"}</Text>
@@ -3194,6 +3203,7 @@ function WatchLogSheet({ visible, title, releaseDate, runtime, busy, watched, on
           </View>
         </ScrollView>
       </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
@@ -3284,7 +3294,8 @@ function resolveWatchLogDate(values: WatchLogValues, releaseDate?: string | null
   if (Number.isNaN(value.getTime())) throw new Error("Choose a valid watch date.");
   const completedAt = values.timePoint === "start" && runtimeMinutes > 0 ? new Date(value.getTime() + runtimeMinutes * 60_000) : value;
   const dateToValidate = values.timePoint === "start" ? value : completedAt;
-  if (dateToValidate.getTime() > Date.now() + 60_000) throw new Error("Choose a watch date that is not in the future.");
+  const shouldRejectFuture = values.mode !== "custom" || values.timePoint === "start";
+  if (shouldRejectFuture && dateToValidate.getTime() > Date.now() + 60_000) throw new Error("Choose a watch date that is not in the future.");
   return completedAt.toISOString();
 }
 
@@ -4391,7 +4402,8 @@ const styles = StyleSheet.create({
   listDetailBody: { color: colors.muted, fontSize: 16, lineHeight: 24, marginTop: 8 },
   listDetailTools: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 18 },
   modalScrim: { flex: 1, backgroundColor: "rgba(0,0,0,0.56)" },
-  actionSheet: { position: "absolute", left: 14, right: 14, bottom: 18, maxHeight: "86%", borderRadius: 28, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel, padding: 16 },
+  modalKeyboardAvoider: { position: "absolute", left: 0, right: 0, top: 0, bottom: 0, justifyContent: "flex-end" },
+  actionSheet: { position: "absolute", left: 14, right: 14, bottom: 18, maxHeight: "92%", borderRadius: 28, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel, padding: 18 },
   grabber: { width: 44, height: 5, borderRadius: 3, backgroundColor: "#4a5052", alignSelf: "center", marginBottom: 10 },
   actionHeader: { flexDirection: "row", alignItems: "flex-start", gap: 10 },
   actionThumb: { width: 48, height: 66, borderRadius: 8, backgroundColor: colors.panel2 },
@@ -4407,23 +4419,24 @@ const styles = StyleSheet.create({
   contextPrimaryActions: { flexDirection: "row", gap: 10, marginTop: 10, marginBottom: 8 },
   contextPrimaryButton: { flex: 1, minHeight: 76, borderRadius: 14, backgroundColor: colors.panel2, alignItems: "center", justifyContent: "center", gap: 6, paddingHorizontal: 4 },
   contextPrimaryText: { color: colors.text, fontSize: 12, fontWeight: "900", textAlign: "center" },
-  contextListSearch: { height: 48, borderRadius: 14, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel2, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 12, marginBottom: 8 },
+  contextListSearch: { height: 54, borderRadius: 16, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel2, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 14, marginBottom: 10 },
   contextListInput: { flex: 1, color: colors.text, fontSize: 15 },
-  actionListScroll: { maxHeight: 292 },
-  actionListScrollCompact: { maxHeight: 152 },
+  actionListScroll: { maxHeight: 330 },
+  actionListScrollCompact: { maxHeight: 220 },
+  actionListContent: { paddingBottom: 10, gap: 4 },
   statusSheetRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginVertical: 10 },
   statusSheetButton: { flexBasis: "31%", minHeight: 58, borderRadius: 16, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel2, alignItems: "center", justifyContent: "center", gap: 4 },
   statusSheetButtonActive: { backgroundColor: colors.accentSoft, borderColor: colors.accent },
   statusSheetText: { color: colors.muted, fontSize: 11, fontWeight: "900" },
   statusSheetTextActive: { color: colors.text },
-  listActionRow: { minHeight: 50, borderRadius: 14, flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 12 },
+  listActionRow: { minHeight: 56, borderRadius: 14, flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 14 },
   listActionRowActive: { backgroundColor: colors.panel2 },
   listActionName: { color: colors.text, fontSize: 15, fontWeight: "800", flex: 1 },
   listActionNameActive: { color: "#6ee7a8" },
   listActionState: { flexDirection: "row", alignItems: "center", gap: 5 },
   listActionText: { color: colors.muted, fontSize: 13, fontWeight: "900" },
   listActionTextActive: { color: "#6ee7a8" },
-  currentListSection: { borderTopWidth: 1, borderTopColor: colors.line, marginTop: 10, paddingTop: 12 },
+  currentListSection: { borderTopWidth: 1, borderBottomWidth: 1, borderColor: colors.line, marginTop: 12, marginBottom: 12, paddingTop: 14, paddingBottom: 14 },
   franchiseGroupChips: { gap: 8, paddingBottom: 8 },
   franchiseGroupCreateRow: { flexDirection: "row", gap: 8 },
   franchiseGroupInput: { flex: 1, minHeight: 46, borderRadius: 14, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel2, color: colors.text, paddingHorizontal: 12, fontSize: 15, fontWeight: "700" },
@@ -4431,6 +4444,7 @@ const styles = StyleSheet.create({
   franchiseGroupSaveText: { color: colors.text, fontSize: 14, fontWeight: "900" },
   currentListRemove: { minHeight: 54, borderRadius: 16, backgroundColor: "rgba(255,77,77,0.12)", flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 },
   currentListRemoveText: { color: "#ff8585", fontSize: 15, fontWeight: "900" },
+  watchLogScrollContent: { paddingBottom: 8 },
   episodeHero: { minHeight: 640, backgroundColor: colors.panel, justifyContent: "flex-end", overflow: "hidden" },
   entityHeader: { padding: 18, paddingBottom: 4 },
   entityHeroRow: { flexDirection: "row", gap: 16, alignItems: "center", marginTop: 18 },
