@@ -9,6 +9,7 @@ export const genres = [
   { value: "", label: "Every genre" },
   { value: "kdrama", label: "K-Drama" },
   { value: "superhero", label: "Superhero" },
+  { value: "christmas", label: "Christmas" },
   { value: "28", label: "Action" },
   { value: "12", label: "Adventure" },
   { value: "16", label: "Animation" },
@@ -29,7 +30,7 @@ export const excludeGenreOptions = [
   { value: "anime", label: "Anime" },
   { value: "16", label: "Animation / cartoons" },
   { value: "superhero", label: "Superhero" },
-  ...genres.filter(genre => genre.value && !["kdrama", "superhero", "16"].includes(genre.value))
+  ...genres.filter(genre => genre.value && !["kdrama", "superhero", "christmas", "16"].includes(genre.value))
 ];
 
 export const countries = [

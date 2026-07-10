@@ -48,6 +48,8 @@ type WatchDateMode = "now" | "release" | "unknown" | "custom";
 type WatchLogValues = { mode: WatchDateMode; date?: string; time?: string; timePoint: WatchTimePoint };
 type LibraryFilter = "all" | "planned" | "watching" | "completed" | "paused" | "dropped" | "favorites" | "lists";
 type ListGroup = "none" | "collections";
+type ListSort = "title_asc" | "title_desc" | "release_desc" | "release_asc" | "added_desc" | "added_asc" | "list_order";
+type ActionRefreshReason = "profile" | "list" | "watch" | "rating";
 type CalendarMode = "upcoming" | "watched";
 type ProfilePanel = "overview" | "activity" | "lists" | "reviews" | "history" | "statistics";
 type ProfileView = "profile" | "recommendations" | "settings" | "history" | "reviews" | "statistics";
@@ -139,6 +141,15 @@ type ProfileData = {
 const blankProgress: ProgressCounts = { planned: 0, watching: 0, completed: 0, paused: 0, dropped: 0, favorites: 0 };
 const blankProfileData: ProfileData = { followers: 0, following: 0, tracked: 0, watchEvents: 0, screenTimeHours: 0, historyUniqueTitles: 0, averageRating: "-", reviewCount: 0, listCount: 0, history: [], reviews: [], favorites: [], lists: [], progressGroups: [], currentStreak: 0, longestStreak: 0, currentlyWatching: [], genreStats: [] };
 const trackedStatusOrder: TrackedStatus[] = ["completed", "watching", "planned", "paused", "dropped"];
+const listSortOptions: Array<{ value: ListSort; label: string }> = [
+  { value: "title_asc", label: "Name A-Z" },
+  { value: "title_desc", label: "Name Z-A" },
+  { value: "release_desc", label: "Release date: newest" },
+  { value: "release_asc", label: "Release date: oldest" },
+  { value: "added_desc", label: "Date added: newest" },
+  { value: "added_asc", label: "Date added: oldest" },
+  { value: "list_order", label: "Manual list order" }
+];
 
 function withTimeout<T>(work: Promise<T>, ms: number, message: string): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -180,6 +191,7 @@ export default function App() {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("profile");
   const [selectedList, setSelectedList] = useState<UserList | null>(null);
   const [selectedListFeed, setSelectedListFeed] = useState<FeedResult>(emptyFeed);
+  const [listSort, setListSort] = useState<ListSort>("title_asc");
   const [searchMode, setSearchMode] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchFeed, setSearchFeed] = useState<FeedResult>(emptyFeed);
@@ -428,15 +440,16 @@ export default function App() {
     if (!supabase) return;
     setSelectedList(list);
     setListGroup("none");
+    setListSort("title_asc");
     setLoading(true);
     try {
-      setSelectedListFeed(await loadListFeed(list.id));
+      setSelectedListFeed(await loadListFeed(list.id, usableSession?.user.id));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Could not open this list.");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [usableSession?.user.id]);
 
   const loadLibrary = useCallback(async () => {
     if (!usableSession?.user.id || !supabase) {
@@ -798,17 +811,27 @@ export default function App() {
     setSelectedEntity(entity);
   }, []);
 
-  const refreshAfterAction = useCallback(async () => {
+  const refreshAfterAction = useCallback(async (reason: ActionRefreshReason = "profile") => {
     libraryLoadedKey.current = null;
     libraryLoadedAt.current = 0;
-    recommendationLoadedKey.current = null;
-    recommendationLoadedAt.current = 0;
     profileDataLoadedFor.current = null;
     profileDataLoadedAt.current = 0;
+    if (selectedList?.id) setSelectedListFeed(await loadListFeed(selectedList.id, usableSession?.user.id));
+    if (reason === "list") {
+      if (usableSession?.user.id && tab === "profile") {
+        const nextLists = await loadUserLists(usableSession.user.id);
+        setProfileData(current => ({ ...current, lists: nextLists, listCount: nextLists.length }));
+      }
+      if (tab === "library" && libraryFilter === "lists" && usableSession?.user.id) {
+        setLibraryLists(await loadUserLists(usableSession.user.id));
+      }
+      return;
+    }
+    recommendationLoadedKey.current = null;
+    recommendationLoadedAt.current = 0;
     if (usableSession?.access_token) await refreshRecommendations(usableSession.access_token).catch(() => undefined);
     await loadActive();
-    if (selectedList?.id) setSelectedListFeed(await loadListFeed(selectedList.id));
-  }, [loadActive, selectedList?.id, usableSession?.access_token]);
+  }, [libraryFilter, loadActive, selectedList?.id, tab, usableSession?.access_token, usableSession?.user.id]);
 
   const activeFeed = searchMode ? searchFeed : selectedList ? selectedListFeed : tab === "discover" ? discoverFeed : tab === "calendar" ? calendarFeed : tab === "library" ? libraryFeed : tab === "profile" && profileView === "recommendations" ? recommendationFeed : emptyFeed;
   const profileTitle = profile?.display_name || profile?.username || usableSession?.user.user_metadata?.display_name || usableSession?.user.email || "Your MovieTracker";
@@ -1059,6 +1082,7 @@ export default function App() {
   }
 
   const selectedListFranchiseGroups = useMemo(() => availableListFranchiseGroups(selectedListFeed.items), [selectedListFeed.items]);
+  const sortedSelectedListItems = useMemo(() => sortListItems(selectedListFeed.items, listSort), [listSort, selectedListFeed.items]);
 
   function renderHeader() {
     if (searchMode) {
@@ -1074,16 +1098,23 @@ export default function App() {
       return (
         <>
           <AppHeader session={headerSession} onSearch={() => setSearchMode(true)} onProfile={() => { setSelectedList(null); openProfileView("profile"); }} />
-          <ListDetailHeader list={selectedList} groupBy={listGroup} onGroupBy={setListGroup} onBack={() => {
-            setSelectedList(null);
-            setSelectedListFeed(emptyFeed);
-            setListGroup("none");
-            setLibraryFilter("lists");
-            setProfileView("profile");
-            setProfilePanel("overview");
-            goTab("library");
-          }} />
-          <GroupedListContent groups={groupedListItems(selectedListFeed.items, listGroup)} onOpen={openItem} onMenu={setActionItem} />
+          <ListDetailHeader
+            list={selectedList}
+            sort={listSort}
+            groupBy={listGroup}
+            onSort={() => setPicker({ title: "Sort titles", value: listSort, options: listSortOptions, onPick: value => setListSort(value as ListSort) })}
+            onGroupBy={setListGroup}
+            onBack={() => {
+              setSelectedList(null);
+              setSelectedListFeed(emptyFeed);
+              setListGroup("none");
+              setListSort("title_asc");
+              setLibraryFilter("lists");
+              setProfileView("profile");
+              setProfilePanel("overview");
+              goTab("library");
+            }} />
+          {listGroup === "collections" ? <GroupedListContent groups={groupedListItems(sortedSelectedListItems, listGroup)} onOpen={openItem} onMenu={setActionItem} /> : null}
         </>
       );
     }
@@ -1208,6 +1239,7 @@ export default function App() {
             setSelectedSeriesEpisodes(null);
             setSelectedSeason({ show: selectedSeriesEpisodes.show, season });
           }} onOpenEpisode={(season, episode) => setSelectedEpisode({
+            episodeId: Number(episode.db_episode_id ?? episode.episodeDbId ?? episode.episode_id ?? 0) || undefined,
             show: selectedSeriesEpisodes.show,
             seasonNumber: season.seasonNumber,
             episodeNumber: Number(episode.episode_number ?? episode.episodeNumber ?? 0),
@@ -1217,6 +1249,7 @@ export default function App() {
           })} />
         ) : selectedSeason ? (
           <SeasonDetailScreen target={selectedSeason} session={usableSession} onBack={() => setSelectedSeason(null)} onOpenEpisode={episode => setSelectedEpisode({
+            episodeId: Number(episode.db_episode_id ?? episode.episodeDbId ?? episode.episode_id ?? 0) || undefined,
             show: selectedSeason.show,
             seasonNumber: selectedSeason.season.seasonNumber,
             episodeNumber: Number(episode.episode_number ?? episode.episodeNumber ?? 0),
@@ -1229,11 +1262,11 @@ export default function App() {
         ) : (
           <FlatList
             ref={listRef}
-            data={selectedList ? [] : activeFeed.items}
+            data={selectedList && listGroup === "none" ? sortedSelectedListItems : selectedList ? [] : activeFeed.items}
             keyExtractor={(item, index) => `${item.kind}-${item.id}-${item.reason ?? index}`}
             numColumns={2}
             ListHeaderComponent={listHeader}
-            ListEmptyComponent={!loading && !selectedList && tab !== "home" && tab !== "calendar" && !(tab === "library" && libraryFilter === "lists" && !selectedList) && !(tab === "profile" && (profileView !== "recommendations" || !usableSession || mfa.required)) ? <EmptyPanel title="Nothing loaded yet" body={searchMode ? "Search for a title, person, or keyword." : emptyText(tab, Boolean(usableSession))} /> : null}
+            ListEmptyComponent={!loading ? (selectedList && listGroup === "none" ? <EmptyPanel title="No titles in this list yet" body="Add titles from search, discovery, or a title page." /> : !selectedList && tab !== "home" && tab !== "calendar" && !(tab === "library" && libraryFilter === "lists" && !selectedList) && !(tab === "profile" && (profileView !== "recommendations" || !usableSession || mfa.required)) ? <EmptyPanel title="Nothing loaded yet" body={searchMode ? "Search for a title, person, or keyword." : emptyText(tab, Boolean(usableSession))} /> : null) : null}
             contentContainerStyle={styles.listContent}
             columnWrapperStyle={styles.columns}
             refreshControl={<RefreshControl tintColor={colors.accent} refreshing={refreshing} onRefresh={refresh} />}
@@ -1343,7 +1376,8 @@ function DiscoverHeading({ view, onForYou }: { view?: string; onForYou: () => vo
   );
 }
 
-function ListDetailHeader({ list, groupBy, onGroupBy, onBack }: { list: UserList; groupBy: ListGroup; onGroupBy: (value: ListGroup) => void; onBack: () => void }) {
+function ListDetailHeader({ list, sort, groupBy, onSort, onGroupBy, onBack }: { list: UserList; sort: ListSort; groupBy: ListGroup; onSort: () => void; onGroupBy: (value: ListGroup) => void; onBack: () => void }) {
+  const sortLabel = listSortOptions.find(option => option.value === sort)?.label ?? "Name A-Z";
   return (
     <View style={styles.listDetailHeader}>
       <Pressable onPress={onBack} style={styles.backChip}><Ionicons name="chevron-back" size={18} color={colors.text} /><Text style={styles.backChipText}>Lists</Text></Pressable>
@@ -1353,10 +1387,11 @@ function ListDetailHeader({ list, groupBy, onGroupBy, onBack }: { list: UserList
       <Text style={styles.listDetailBody}>{list.description || "A hand-picked collection."}</Text>
       <Text style={styles.listCount}>{list.count} {list.count === 1 ? "title" : "titles"}</Text>
       <View style={styles.listDetailTools}>
-        <Pressable onPress={() => onGroupBy("none")} style={[styles.groupChip, groupBy === "none" && styles.groupChipActive]}>
-          <Text style={[styles.groupChipText, groupBy === "none" && styles.groupChipTextActive]}>List order</Text>
+        <Pressable onPress={onSort} style={[styles.groupChip, styles.groupChipActive]}>
+          <Ionicons name="swap-vertical-outline" size={15} color={colors.text} />
+          <Text style={[styles.groupChipText, styles.groupChipTextActive]} numberOfLines={1}>{sortLabel}</Text>
         </Pressable>
-        <Pressable onPress={() => onGroupBy("collections")} style={[styles.groupChip, groupBy === "collections" && styles.groupChipActive]}>
+        <Pressable onPress={() => onGroupBy(groupBy === "collections" ? "none" : "collections")} style={[styles.groupChip, groupBy === "collections" && styles.groupChipActive]}>
           <Ionicons name="git-branch-outline" size={15} color={groupBy === "collections" ? colors.text : colors.muted} />
           <Text style={[styles.groupChipText, groupBy === "collections" && styles.groupChipTextActive]}>Group franchises</Text>
         </Pressable>
@@ -1872,6 +1907,7 @@ function SeriesEpisodesScreen({ target, session, onBack, onOpenSeason, onOpenEpi
   const [source, setSource] = useState<"movietracker" | "tmdb" | "imdb">("tmdb");
   const [colorized, setColorized] = useState(false);
   const [inverted, setInverted] = useState(false);
+  const [dimUnwatched, setDimUnwatched] = useState(false);
   const seasons = useMemo(() => [...target.seasons].sort((a, b) => a.seasonNumber - b.seasonNumber), [target.seasons]);
   const payloadBySeason = useMemo(() => new Map(payloads.map(payload => [Number(payload?.season?.season_number ?? payload?.season?.seasonNumber ?? payload?.seasonNumber ?? 0), payload])), [payloads]);
   const hasImdb = payloads.some(payload => (payload?.imdbRatings ?? []).some((rating: any) => typeof rating.imdbRating === "number"));
@@ -1882,6 +1918,17 @@ function SeriesEpisodesScreen({ target, session, onBack, onOpenSeason, onOpenEpi
     return { season, payload, episodes };
   }), [payloadBySeason, seasons]);
   const maxEpisodes = Math.max(0, ...seasonRows.map(row => row.episodes.length));
+  const watchProgress = useMemo(() => {
+    const watchedKeys = new Set<string>();
+    let total = 0;
+    seasonRows.forEach(({ season, episodes }) => episodes.forEach(episode => {
+      const episodeNumber = Number(episode.episode_number ?? episode.episodeNumber ?? 0);
+      if (!episodeNumber) return;
+      total += 1;
+      if (episode.watched) watchedKeys.add(`${season.seasonNumber}-${episodeNumber}`);
+    }));
+    return { total, watched: watchedKeys.size, watchedKeys };
+  }, [seasonRows]);
 
   useEffect(() => {
     let alive = true;
@@ -1906,6 +1953,11 @@ function SeriesEpisodesScreen({ target, session, onBack, onOpenSeason, onOpenEpi
     return Number.isFinite(tmdbScore) && tmdbScore > 0 ? tmdbScore : null;
   }
 
+  function isEpisodeWatched(seasonNumber: number, episode: any) {
+    const episodeNumber = Number(episode.episode_number ?? episode.episodeNumber ?? 0);
+    return Boolean(episode.watched) || watchProgress.watchedKeys.has(`${seasonNumber}-${episodeNumber}`);
+  }
+
   return (
     <ScrollView contentContainerStyle={styles.detailContent}>
       <View style={styles.entityHeader}>
@@ -1924,6 +1976,21 @@ function SeriesEpisodesScreen({ target, session, onBack, onOpenSeason, onOpenEpi
         <Pressable onPress={() => setInverted(value => !value)} style={[styles.ratingGraphToggle, inverted && styles.ratingGraphToggleActive]}><Text style={styles.ratingGraphToggleText}>Inverted axes</Text><Switch value={inverted} onValueChange={setInverted} trackColor={{ false: "#343a3d", true: colors.accent }} thumbColor={colors.text} /></Pressable>
       </View>
       {colorized ? <RatingLegend /> : null}
+      {session?.user.id && watchProgress.total ? (
+        <View style={styles.watchProgressCard}>
+          <View style={styles.watchProgressHeader}>
+            <View>
+              <Text style={styles.watchProgressLabel}>Watch progress</Text>
+              <Text style={styles.watchProgressValue}>{watchProgress.watched} / {watchProgress.total} episodes</Text>
+            </View>
+            <Pressable onPress={() => setDimUnwatched(value => !value)} style={[styles.watchProgressToggle, dimUnwatched && styles.watchProgressToggleActive]}>
+              <Ionicons name={dimUnwatched ? "eye-off-outline" : "eye-outline"} size={18} color={dimUnwatched ? colors.text : colors.muted} />
+              <Text style={[styles.watchProgressToggleText, dimUnwatched && styles.watchProgressToggleTextActive]}>Dim unwatched</Text>
+            </Pressable>
+          </View>
+          <View style={styles.watchProgressTrack}><View style={[styles.watchProgressFill, { width: `${Math.round((watchProgress.watched / watchProgress.total) * 100)}%` }]} /></View>
+        </View>
+      ) : null}
       {loadingAll ? <ActivityIndicator color={colors.accent} style={{ marginVertical: 18 }} /> : null}
       {seasonRows.length && maxEpisodes ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.fullMatrixScroll}><View style={styles.fullEpisodeMatrix}>
         {!inverted ? <>
@@ -1934,7 +2001,8 @@ function SeriesEpisodesScreen({ target, session, onBack, onOpenSeason, onOpenEpi
             const score = episodeScore(payload, episode);
             const cellColors = ratingCellStyle(score, colorized);
             const episodeNumber = Number(episode.episode_number ?? episode.episodeNumber ?? 0);
-            return <Pressable key={`${season.seasonNumber}-${episode.id ?? index}`} onPress={() => onOpenEpisode(season, episode)} style={[styles.matrixCell, { backgroundColor: cellColors.backgroundColor }]}><Text style={[styles.matrixCellText, { color: cellColors.color }]}>{score != null ? score.toFixed(1) : "-"}</Text></Pressable>;
+            const dimmed = dimUnwatched && !isEpisodeWatched(season.seasonNumber, episode);
+            return <Pressable key={`${season.seasonNumber}-${episode.id ?? index}`} onPress={() => onOpenEpisode(season, episode)} style={[styles.matrixCell, { backgroundColor: cellColors.backgroundColor }, dimmed && styles.dimmedEpisode]}><Text style={[styles.matrixCellText, { color: cellColors.color }]}>{score != null ? score.toFixed(1) : "-"}</Text></Pressable>;
           })}</View>)}
         </> : <>
           <View style={styles.matrixRow}><Text style={styles.matrixAxisCell}>Episode</Text>{seasonRows.map(({ season }) => <Text key={season.seasonNumber} style={styles.matrixHeaderCell}>S{season.seasonNumber}</Text>)}</View>
@@ -1943,7 +2011,8 @@ function SeriesEpisodesScreen({ target, session, onBack, onOpenSeason, onOpenEpi
             if (!episode) return <View key={season.seasonNumber} style={styles.matrixEmptyCell} />;
             const score = episodeScore(payload, episode);
             const cellColors = ratingCellStyle(score, colorized);
-            return <Pressable key={`${season.seasonNumber}-${episode.id ?? index}`} onPress={() => onOpenEpisode(season, episode)} style={[styles.matrixCell, { backgroundColor: cellColors.backgroundColor }]}><Text style={[styles.matrixCellText, { color: cellColors.color }]}>{score != null ? score.toFixed(1) : "-"}</Text></Pressable>;
+            const dimmed = dimUnwatched && !isEpisodeWatched(season.seasonNumber, episode);
+            return <Pressable key={`${season.seasonNumber}-${episode.id ?? index}`} onPress={() => onOpenEpisode(season, episode)} style={[styles.matrixCell, { backgroundColor: cellColors.backgroundColor }, dimmed && styles.dimmedEpisode]}><Text style={[styles.matrixCellText, { color: cellColors.color }]}>{score != null ? score.toFixed(1) : "-"}</Text></Pressable>;
           })}</View>)}
         </>}
       </View></ScrollView> : null}
@@ -1956,15 +2025,17 @@ function SeriesEpisodesScreen({ target, session, onBack, onOpenSeason, onOpenEpi
                 const episodeNumber = Number(episode.episode_number ?? episode.episodeNumber ?? 0);
                 const score = episodeScore(payload, episode);
                 const cellColors = ratingCellStyle(score, colorized);
-                return <Pressable key={`${season.seasonNumber}-${episode.id ?? episodeNumber}`} onPress={() => onOpenEpisode(season, episode)} style={[styles.seasonEpisodeCell, { backgroundColor: cellColors.backgroundColor }]}><Text style={[styles.seasonEpisodeCode, { color: cellColors.color }]}>E{episodeNumber}</Text><Text style={[styles.seasonEpisodeScore, { color: cellColors.color }]}>{score != null ? score.toFixed(1) : "-"}</Text></Pressable>;
+                const dimmed = dimUnwatched && !isEpisodeWatched(season.seasonNumber, episode);
+                return <Pressable key={`${season.seasonNumber}-${episode.id ?? episodeNumber}`} onPress={() => onOpenEpisode(season, episode)} style={[styles.seasonEpisodeCell, { backgroundColor: cellColors.backgroundColor }, dimmed && styles.dimmedEpisode]}><Text style={[styles.seasonEpisodeCode, { color: cellColors.color }]}>E{episodeNumber}</Text><Text style={[styles.seasonEpisodeScore, { color: cellColors.color }]}>{score != null ? score.toFixed(1) : "-"}</Text></Pressable>;
               })}
             </ScrollView>
             <View style={styles.seasonList}>
               {episodes.map(episode => {
                 const still = tmdbImage(episode.still_path ?? episode.stillPath, "w342");
                 const episodeNumber = Number(episode.episode_number ?? episode.episodeNumber ?? 0);
+                const dimmed = dimUnwatched && !isEpisodeWatched(season.seasonNumber, episode);
                 return (
-                  <Pressable key={`row-${season.seasonNumber}-${episode.id ?? episodeNumber}`} onPress={() => onOpenEpisode(season, episode)} style={styles.seasonCard}>
+                  <Pressable key={`row-${season.seasonNumber}-${episode.id ?? episodeNumber}`} onPress={() => onOpenEpisode(season, episode)} style={[styles.seasonCard, dimmed && styles.dimmedEpisodeCard]}>
                     {still ? <RemoteImage uri={still} style={styles.seasonPoster} resizeMode="cover" /> : <View style={styles.seasonPoster}><Ionicons name="film-outline" size={20} color={colors.muted} /></View>}
                     <View style={styles.seasonCopy}>
                       <Text style={styles.seasonName} numberOfLines={1}>E{episodeNumber} - {episode.name ?? "Episode"}</Text>
@@ -2018,8 +2089,25 @@ function ListGrid({ lists, onOpen }: { lists: UserList[]; onOpen?: (list: UserLi
   return <View style={styles.listGrid}>{lists.map(list => <Pressable key={list.id} onPress={() => onOpen?.(list)} style={styles.listCard}><PosterStack posters={list.posters} /><Text style={styles.listVisibility}>{list.visibility ?? "private"}</Text><Text style={styles.listName} numberOfLines={1}>{list.name}</Text><Text style={styles.listDescription} numberOfLines={2}>{list.description || "A hand-picked collection."}</Text><Text style={styles.listCount}>{list.count} {list.count === 1 ? "title" : "titles"}</Text></Pressable>)}</View>;
 }
 
+function sortListItems(items: MediaSummary[], sort: ListSort) {
+  const titleCompare = (a: MediaSummary, b: MediaSummary) => a.title.localeCompare(b.title);
+  const dateValue = (value?: string | null, newest = true) => value || (newest ? "0000-00-00" : "9999-99-99");
+  const listFields = (item: MediaSummary) => item as MediaSummary & { listAddedAt?: string | null; listPosition?: number | null };
+  return [...items].sort((a, b) => {
+    const aList = listFields(a);
+    const bList = listFields(b);
+    if (sort === "title_desc") return b.title.localeCompare(a.title);
+    if (sort === "release_desc") return dateValue(b.releaseDate).localeCompare(dateValue(a.releaseDate)) || titleCompare(a, b);
+    if (sort === "release_asc") return dateValue(a.releaseDate, false).localeCompare(dateValue(b.releaseDate, false)) || titleCompare(a, b);
+    if (sort === "added_desc") return dateValue(bList.listAddedAt).localeCompare(dateValue(aList.listAddedAt)) || titleCompare(a, b);
+    if (sort === "added_asc") return dateValue(aList.listAddedAt, false).localeCompare(dateValue(bList.listAddedAt, false)) || titleCompare(a, b);
+    if (sort === "list_order") return (aList.listPosition ?? 999_999) - (bList.listPosition ?? 999_999) || titleCompare(a, b);
+    return titleCompare(a, b);
+  });
+}
+
 function groupedListItems(items: MediaSummary[], groupBy: ListGroup) {
-  const ordered = [...items].sort((a, b) => (a.releaseDate ?? "9999-12-31").localeCompare(b.releaseDate ?? "9999-12-31") || a.title.localeCompare(b.title));
+  const ordered = items;
   if (groupBy === "none") return [{ title: "Titles", items }];
   const groups = new Map<string, MediaSummary[]>();
   if (groupBy === "collections") {
@@ -2141,7 +2229,7 @@ function MfaPanel({ code, error, busy, onCode, onVerify }: { code: string; error
   );
 }
 
-function MovieActionSheet({ item, visible, session, currentList, franchiseGroups = [], allowNotInterested, onClose, onOpen, onNotInterested, onChanged }: { item: MediaSummary | null; visible: boolean; session: Session | null; currentList?: UserList | null; franchiseGroups?: string[]; allowNotInterested?: boolean; onClose: () => void; onOpen: (item: MediaSummary) => void; onNotInterested: (item: MediaSummary) => void; onChanged: () => Promise<void> }) {
+function MovieActionSheet({ item, visible, session, currentList, franchiseGroups = [], allowNotInterested, onClose, onOpen, onNotInterested, onChanged }: { item: MediaSummary | null; visible: boolean; session: Session | null; currentList?: UserList | null; franchiseGroups?: string[]; allowNotInterested?: boolean; onClose: () => void; onOpen: (item: MediaSummary) => void; onNotInterested: (item: MediaSummary) => void; onChanged: (reason?: ActionRefreshReason) => Promise<void> }) {
   const [dbId, setDbId] = useState<number | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [favorite, setFavorite] = useState(false);
@@ -2150,6 +2238,7 @@ function MovieActionSheet({ item, visible, session, currentList, franchiseGroups
   const [manualGroup, setManualGroup] = useState("");
   const [newManualGroup, setNewManualGroup] = useState("");
   const [busy, setBusy] = useState(false);
+  const [watchSheetVisible, setWatchSheetVisible] = useState(false);
   const poster = tmdbImage(item?.posterPath ?? item?.backdropPath ?? null, "w342");
   const filteredLists = lists.filter(list => list.name.toLowerCase().includes(listQuery.trim().toLowerCase()));
   const isCurrentListItem = Boolean(currentList && lists.some(list => list.id === currentList.id && list.contains));
@@ -2158,7 +2247,11 @@ function MovieActionSheet({ item, visible, session, currentList, franchiseGroups
   const loadState = useCallback(async () => {
     if (!visible || !item || !session?.user.id || !supabase) return;
     const { data: media } = await supabase.from("media").select("id").eq("tmdb_id", item.id).eq("kind", item.kind).maybeSingle();
-    const mediaId = media?.id ? Number(media.id) : null;
+    let mediaId = media?.id ? Number(media.id) : null;
+    if (!mediaId && session.access_token) {
+      const hydrated = await fetchMobileTitle(item.kind, item.id, session.access_token).catch(() => null);
+      mediaId = hydrated?.dbId ? Number(hydrated.dbId) : null;
+    }
     setDbId(mediaId);
     if (!mediaId) return;
     const [progress, fav, userLists, contains] = await Promise.all([
@@ -2183,76 +2276,130 @@ function MovieActionSheet({ item, visible, session, currentList, franchiseGroups
     setNewManualGroup("");
   }, [item?.franchiseGroup, visible]);
 
+  async function ensureActionMediaId() {
+    if (dbId) return dbId;
+    if (!session?.user.id || !supabase || !item) return null;
+    const { data: media } = await supabase.from("media").select("id").eq("tmdb_id", item.id).eq("kind", item.kind).maybeSingle();
+    let mediaId = media?.id ? Number(media.id) : null;
+    if (!mediaId && session.access_token) {
+      const hydrated = await fetchMobileTitle(item.kind, item.id, session.access_token).catch(() => null);
+      mediaId = hydrated?.dbId ? Number(hydrated.dbId) : null;
+    }
+    if (mediaId) setDbId(mediaId);
+    return mediaId;
+  }
+
   async function updateStatus(nextStatus: string) {
-    if (!session?.user.id || !supabase || !dbId) return Alert.alert("Unavailable", "Open this title on the website once before editing it in the app.");
+    const mediaId = await ensureActionMediaId();
+    if (!session?.user.id || !supabase || !mediaId) return Alert.alert("Unavailable", "Could not prepare this title yet. Try again in a second.");
     setBusy(true);
     try {
-      await supabase.from("progress").upsert({ user_id: session.user.id, media_id: dbId, status: nextStatus, completed_at: nextStatus === "completed" ? new Date().toISOString() : null, updated_at: new Date().toISOString() });
+      await supabase.from("progress").upsert({ user_id: session.user.id, media_id: mediaId, status: nextStatus, completed_at: null, updated_at: new Date().toISOString() });
       setStatus(nextStatus);
-      await onChanged();
+      await onChanged("profile");
     } finally {
       setBusy(false);
     }
   }
 
   async function clearStatus() {
-    if (!session?.user.id || !supabase || !dbId) return Alert.alert("Unavailable", "Open this title on the website once before editing it in the app.");
+    const mediaId = await ensureActionMediaId();
+    if (!session?.user.id || !supabase || !mediaId) return Alert.alert("Unavailable", "Could not prepare this title yet. Try again in a second.");
     setBusy(true);
     try {
-      await supabase.from("progress").delete().eq("user_id", session.user.id).eq("media_id", dbId);
+      await supabase.from("progress").delete().eq("user_id", session.user.id).eq("media_id", mediaId);
       setStatus(null);
-      await onChanged();
+      await onChanged("profile");
     } finally {
       setBusy(false);
     }
   }
 
   async function toggleFavorite() {
-    if (!session?.user.id || !supabase || !dbId) return Alert.alert("Unavailable", "Open this title on the website once before editing it in the app.");
+    const mediaId = await ensureActionMediaId();
+    if (!session?.user.id || !supabase || !mediaId) return Alert.alert("Unavailable", "Could not prepare this title yet. Try again in a second.");
     setBusy(true);
     try {
-      if (favorite) await supabase.from("favorites").delete().eq("user_id", session.user.id).eq("media_id", dbId);
-      else await supabase.from("favorites").insert({ user_id: session.user.id, media_id: dbId });
+      if (favorite) await supabase.from("favorites").delete().eq("user_id", session.user.id).eq("media_id", mediaId);
+      else await supabase.from("favorites").insert({ user_id: session.user.id, media_id: mediaId });
       setFavorite(!favorite);
-      await onChanged();
+      await onChanged("profile");
     } finally {
       setBusy(false);
     }
   }
 
-  async function toggleList(list: ListMembership) {
-    if (!supabase || !dbId) return Alert.alert("Unavailable", "Open this title on the website once before editing it in the app.");
+  async function performToggleList(list: ListMembership) {
+    const mediaId = await ensureActionMediaId();
+    if (!supabase || !mediaId) return Alert.alert("Still preparing", "Try again in a second.");
+    const nextContains = !list.contains;
+    const snapshot = lists;
     setBusy(true);
+    setLists(current => current.map(candidate => candidate.id === list.id ? { ...candidate, contains: nextContains } : candidate));
     try {
       if (list.contains) {
-        await supabase.from("list_items").delete().eq("list_id", list.id).eq("media_id", dbId);
+        await supabase.from("list_items").delete().eq("list_id", list.id).eq("media_id", mediaId);
       } else {
-        const { count } = await supabase.from("list_items").select("id", { count: "exact", head: true }).eq("list_id", list.id);
-        await supabase.from("list_items").insert({ list_id: list.id, media_id: dbId, position: count ?? 0 });
+        const { data: existing } = await supabase.from("list_items").select("id").eq("list_id", list.id).eq("media_id", mediaId).maybeSingle();
+        if (!existing?.id) {
+          const { count } = await supabase.from("list_items").select("id", { count: "exact", head: true }).eq("list_id", list.id);
+          await supabase.from("list_items").insert({ list_id: list.id, media_id: mediaId, position: count ?? 0 });
+        }
       }
-      setLists(current => current.map(candidate => candidate.id === list.id ? { ...candidate, contains: !candidate.contains } : candidate));
-      await onChanged();
+      await onChanged("list");
+    } catch (reason) {
+      setLists(snapshot);
+      Alert.alert("Could not update list", reason instanceof Error ? reason.message : "Please try again.");
     } finally {
       setBusy(false);
     }
+  }
+
+  function toggleList(list: ListMembership) {
+    if (!list.contains) {
+      void performToggleList(list);
+      return;
+    }
+    Alert.alert("Remove from list?", `Remove ${item?.title ?? "this title"} from ${list.name}?`, [
+      { text: "Cancel", style: "cancel" },
+      { text: "Remove", style: "destructive", onPress: () => void performToggleList(list) }
+    ]);
   }
 
   async function saveFranchiseGroup() {
-    const mediaId = item?.listMediaId ?? dbId;
-    if (!supabase || !currentList?.id || !mediaId) return Alert.alert("Unavailable", "Open this title on the website once before editing it in the app.");
+    const mediaId = item?.listMediaId ?? await ensureActionMediaId();
+    if (!supabase || !currentList?.id || !mediaId) return Alert.alert("Unavailable", "Could not prepare this title yet. Try again in a second.");
     const group = (newManualGroup || manualGroup).trim();
     setBusy(true);
     try {
       await supabase.from("list_items").update({ franchise_group: group || null }).eq("list_id", currentList.id).eq("media_id", mediaId);
       setManualGroup(group);
       setNewManualGroup("");
-      await onChanged();
+      await onChanged("list");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveActionWatchLog(values: WatchLogValues) {
+    const mediaId = await ensureActionMediaId();
+    if (!session?.user.id || !supabase || !mediaId || !item) return Alert.alert("Unavailable", "Could not prepare this title yet. Try again in a second.");
+    const runtime = Number((item.raw as any)?.runtime ?? 0) || 0;
+    const watchedAt = resolveWatchLogDate(values, item.releaseDate, runtime);
+    setBusy(true);
+    try {
+      await supabase.from("watch_events").insert({ user_id: session.user.id, media_id: mediaId, watched_at: watchedAt });
+      await supabase.from("progress").upsert({ user_id: session.user.id, media_id: mediaId, status: "completed", completed_at: watchedAt, updated_at: new Date().toISOString() });
+      setStatus("completed");
+      await onChanged("watch");
+      Alert.alert("Watch added", "Your watch history was updated.");
     } finally {
       setBusy(false);
     }
   }
 
   return (
+    <>
     <Modal visible={visible && Boolean(item)} transparent animationType="slide" onRequestClose={onClose}>
       <Pressable style={styles.modalScrim} onPress={onClose} />
       <View style={styles.actionSheet}>
@@ -2270,7 +2417,7 @@ function MovieActionSheet({ item, visible, session, currentList, franchiseGroups
             <View style={styles.contextPrimaryActions}>
               {item ? <Pressable style={styles.contextPrimaryButton} onPress={() => { onClose(); onOpen(item); }}><Ionicons name="open-outline" size={22} color={colors.text} /><Text style={styles.contextPrimaryText}>Details</Text></Pressable> : null}
               <Pressable disabled={busy} style={styles.contextPrimaryButton} onPress={() => status === "planned" ? clearStatus() : updateStatus("planned")}><Ionicons name="list-outline" size={22} color={colors.text} /><Text style={styles.contextPrimaryText}>{status === "planned" ? "Remove plan" : "Watchlist"}</Text></Pressable>
-              <Pressable disabled={busy || status === "completed"} style={styles.contextPrimaryButton} onPress={() => updateStatus("completed")}><Ionicons name="checkmark" size={22} color={colors.text} /><Text style={styles.contextPrimaryText}>Watched</Text></Pressable>
+              <Pressable disabled={busy} style={styles.contextPrimaryButton} onPress={() => setWatchSheetVisible(true)}><Ionicons name={status === "completed" ? "repeat-outline" : "checkmark"} size={22} color={colors.text} /><Text style={styles.contextPrimaryText}>{status === "completed" ? "Rewatch" : "Watched"}</Text></Pressable>
               <Pressable disabled={busy} style={styles.contextPrimaryButton} onPress={toggleFavorite}><Ionicons name={favorite ? "heart" : "heart-outline"} size={22} color={colors.text} /><Text style={styles.contextPrimaryText}>{favorite ? "Unfavorite" : "Favorite"}</Text></Pressable>
             </View>
             <View style={styles.actionDivider} />
@@ -2316,6 +2463,8 @@ function MovieActionSheet({ item, visible, session, currentList, franchiseGroups
         ) : item ? <ActionRow icon="open-outline" label="Details" onPress={() => { onClose(); onOpen(item); }} /> : null}
       </View>
     </Modal>
+    <WatchLogSheet visible={watchSheetVisible} title={item?.title ?? ""} releaseDate={item?.releaseDate ?? null} runtime={Number((item?.raw as any)?.runtime ?? 0) || null} busy={busy} watched={status === "completed"} onClose={() => setWatchSheetVisible(false)} onSave={saveActionWatchLog} />
+    </>
   );
 }
 
@@ -2328,7 +2477,7 @@ function ActionRow({ icon, label, danger, onPress }: { icon: keyof typeof Ionico
   );
 }
 
-function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity, onOpenSeason, onChanged }: { target: EpisodeTarget; session: Session | null; onBack: () => void; onOpen: (item: MediaSummary) => void; onOpenEntity: (entity: EntityTarget) => void; onOpenSeason: (season: DetailSeason) => void; onChanged?: () => Promise<void> }) {
+function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity, onOpenSeason, onChanged }: { target: EpisodeTarget; session: Session | null; onBack: () => void; onOpen: (item: MediaSummary) => void; onOpenEntity: (entity: EntityTarget) => void; onOpenSeason: (season: DetailSeason) => void; onChanged?: (reason?: ActionRefreshReason) => Promise<void> }) {
   const [episode, setEpisode] = useState<any | null>(null);
   const [watched, setWatched] = useState(false);
   const [userRating, setUserRating] = useState<number | null>(null);
@@ -2398,12 +2547,12 @@ function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity, on
     loadEpisode().catch(() => undefined);
   }, [loadEpisode]);
 
-  async function withEpisodeBusy(work: () => Promise<void>) {
+  async function withEpisodeBusy(work: () => Promise<void>, reason: ActionRefreshReason = "watch") {
     setBusy(true);
     try {
       await work();
       await loadEpisode();
-      await onChanged?.();
+      await onChanged?.(reason);
     } finally {
       setBusy(false);
     }
@@ -2419,7 +2568,7 @@ function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity, on
       await supabase!.from("watch_events").insert({ user_id: session.user.id, media_id: mediaId, episode_id: episodeId, watched_at: new Date().toISOString() });
       await supabase!.from("progress").upsert({ user_id: session.user.id, media_id: mediaId, status: "watching", updated_at: new Date().toISOString() });
       setWatched(true);
-    });
+    }, "watch");
   }
 
   async function saveEpisodeWatchLog(values: WatchLogValues) {
@@ -2433,7 +2582,7 @@ function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity, on
       await supabase!.from("watch_events").insert({ user_id: session.user.id, media_id: mediaId, episode_id: episodeId, watched_at: watchedAt });
       await supabase!.from("progress").upsert({ user_id: session.user.id, media_id: mediaId, status: "watching", updated_at: new Date().toISOString() });
       setWatched(true);
-    });
+    }, "watch");
   }
 
   const season = firstRow(episode?.seasons);
@@ -2506,7 +2655,7 @@ function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity, on
             <Pressable onPress={() => onOpen(show)} style={styles.quickAction}><Ionicons name="albums-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>Open show</Text></Pressable>
             <Pressable onPress={() => onOpenSeason(seasonTarget)} style={styles.quickAction}><Ionicons name="layers-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>Open season</Text></Pressable>
             <Pressable onPress={() => setWatchSheetVisible(true)} style={styles.quickAction}><Ionicons name="ellipsis-horizontal-circle-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>Actions</Text></Pressable>
-            <Pressable disabled={busy || watched} onPress={markWatched} style={styles.quickAction}><Ionicons name={watched ? "checkmark" : "calendar-outline"} size={19} color={colors.text} /><Text style={styles.quickActionText}>{watched ? "Watched" : "Mark watched"}</Text></Pressable>
+            <Pressable disabled={busy} onPress={() => setWatchSheetVisible(true)} style={styles.quickAction}><Ionicons name={watched ? "repeat-outline" : "calendar-outline"} size={19} color={colors.text} /><Text style={styles.quickActionText}>{watched ? "Mark rewatch" : "Mark watched"}</Text></Pressable>
             <Pressable disabled={busy || !episodeId} onPress={() => setRatingSheetVisible(true)} style={styles.quickAction}><Ionicons name="speedometer-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>{userRating != null ? `${userRating.toFixed(1)}/10` : "Rate"}</Text></Pressable>
             <Pressable onPress={() => sharePublicTitle(`/title/show/${show.id}/season/${target.seasonNumber}/episode/${target.episodeNumber}`, `${show.title} - ${title}`, episode?.overview || show.overview)} style={styles.quickAction}><Ionicons name="share-social-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>Share</Text></Pressable>
           </View>
@@ -2636,7 +2785,7 @@ function EntityScreen({ target, session, onBack, onOpen, onMenu }: { target: Ent
   );
 }
 
-function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSeason, onOpenAllSeasons, onHide, onChanged }: { item: MediaSummary; session: Session | null; onBack: () => void; onOpen: (item: MediaSummary) => void; onOpenEntity: (entity: EntityTarget) => void; onOpenSeason: (season: DetailSeason) => void; onOpenAllSeasons: (seasons: DetailSeason[]) => void; onHide: (item: MediaSummary) => void; onChanged: () => Promise<void> }) {
+function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSeason, onOpenAllSeasons, onHide, onChanged }: { item: MediaSummary; session: Session | null; onBack: () => void; onOpen: (item: MediaSummary) => void; onOpenEntity: (entity: EntityTarget) => void; onOpenSeason: (season: DetailSeason) => void; onOpenAllSeasons: (seasons: DetailSeason[]) => void; onHide: (item: MediaSummary) => void; onChanged: (reason?: ActionRefreshReason) => Promise<void> }) {
   const [detail, setDetail] = useState<DetailData | null>(null);
   const [busy, setBusy] = useState(false);
   const [listSheetVisible, setListSheetVisible] = useState(false);
@@ -2801,11 +2950,11 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
     loadDetail().catch(() => undefined);
   }, [loadDetail]);
 
-  async function withBusy(work: () => Promise<void>) {
+  async function withBusy(work: () => Promise<void>, reason: ActionRefreshReason = "profile") {
     setBusy(true);
     try {
       await work();
-      await onChanged();
+      await onChanged(reason);
     } finally {
       setBusy(false);
     }
@@ -2816,7 +2965,7 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
     await withBusy(async () => {
       await supabase!.from("progress").upsert({ user_id: session.user.id, media_id: detail.dbId, status: nextStatus, completed_at: nextStatus === "completed" ? new Date().toISOString() : null, updated_at: new Date().toISOString() });
       setDetail(current => current ? { ...current, progressStatus: nextStatus } : current);
-    });
+    }, "profile");
   }
 
   async function saveUserRating(score: number | null) {
@@ -2837,7 +2986,7 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
       if (error) throw error;
       if (savedRating?.id) await supabase!.from("reviews").update({ rating_id: savedRating.id, updated_at: new Date().toISOString() }).eq("user_id", session.user.id).eq("media_id", detail.dbId);
       setDetail(current => current ? { ...current, userRating: nextScore, myReview: current.myReview ? { ...current.myReview, ratingId: savedRating?.id ?? current.myReview.ratingId, score: nextScore } : current.myReview } : current);
-    });
+    }, "rating");
     setRatingSheetVisible(false);
   }
 
@@ -2876,7 +3025,7 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
       await supabase!.from("progress").upsert({ user_id: session.user.id, media_id: detail.dbId, status: "completed", completed_at: watchedAt, updated_at: new Date().toISOString() });
       setDetail(current => current ? { ...current, progressStatus: "completed", watched: true } : current);
       Alert.alert("Watch added", "Your watch history was updated.");
-    });
+    }, "watch");
   }
 
   async function toggleFavorite() {
@@ -2888,16 +3037,27 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
     });
   }
 
-  async function toggleDetailList(list: ListMembership) {
+  async function performToggleDetailList(list: ListMembership) {
     if (!supabase || !detail?.dbId) return Alert.alert("Unavailable", "Open this title on the website once before editing it in the app.");
     await withBusy(async () => {
       if (list.contains) await supabase!.from("list_items").delete().eq("list_id", list.id).eq("media_id", detail.dbId);
       else {
-        const { count } = await supabase!.from("list_items").select("id", { count: "exact", head: true }).eq("list_id", list.id);
-        await supabase!.from("list_items").insert({ list_id: list.id, media_id: detail.dbId, position: count ?? 0 });
+        const { data: existing } = await supabase!.from("list_items").select("id").eq("list_id", list.id).eq("media_id", detail.dbId).maybeSingle();
+        if (!existing?.id) {
+          const { count } = await supabase!.from("list_items").select("id", { count: "exact", head: true }).eq("list_id", list.id);
+          await supabase!.from("list_items").insert({ list_id: list.id, media_id: detail.dbId, position: count ?? 0 });
+        }
       }
       setDetail(current => current ? { ...current, lists: current.lists.map(candidate => candidate.id === list.id ? { ...candidate, contains: !candidate.contains } : candidate) } : current);
-    });
+    }, "list");
+  }
+
+  async function toggleDetailList(list: ListMembership) {
+    if (!list.contains) return performToggleDetailList(list);
+    Alert.alert("Remove from list?", `Remove ${item.title} from ${list.name}?`, [
+      { text: "Cancel", style: "cancel" },
+      { text: "Remove", style: "destructive", onPress: () => void performToggleDetailList(list) }
+    ]);
   }
 
   return (
@@ -2920,7 +3080,13 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
       <View style={styles.detailBody}>
         <View style={styles.titleActionDock}>
           <Text style={styles.actionLabelBig}>My status</Text>
-          <View style={styles.statusActions}>{[["planned", detail?.progressStatus === "completed" ? "Plan rewatch" : "Plan", "bookmark-outline"], ["watching", "Watching", "eye-outline"], ["completed", "Watched", "checkmark"], ["paused", "Paused", "pause-circle-outline"], ["dropped", "Dropped", "close-circle-outline"]].map(([value, label, icon]) => <Pressable disabled={busy} key={value} onPress={() => setStatus(value)} style={[styles.detailStatusButton, detail?.progressStatus === value && styles.detailStatusButtonActive]}><Ionicons name={icon as keyof typeof Ionicons.glyphMap} size={17} color={detail?.progressStatus === value ? colors.accent : colors.muted} /><Text style={[styles.detailStatusText, detail?.progressStatus === value && styles.detailStatusTextActive]}>{label}</Text></Pressable>)}</View>
+          <View style={styles.statusActions}>{[
+            { value: "planned", label: detail?.progressStatus === "completed" ? "Plan rewatch" : "Plan", icon: "bookmark-outline" },
+            { value: "watching", label: "Watching", icon: "eye-outline" },
+            { value: "completed", label: detail?.watched ? "Mark rewatch" : "Mark watched", icon: detail?.watched ? "repeat-outline" : "checkmark" },
+            { value: "paused", label: "Paused", icon: "pause-circle-outline" },
+            { value: "dropped", label: "Dropped", icon: "close-circle-outline" }
+          ].map(action => <Pressable disabled={busy} key={action.value} onPress={() => action.value === "completed" ? setWatchSheetVisible(true) : setStatus(action.value)} style={[styles.detailStatusButton, detail?.progressStatus === action.value && styles.detailStatusButtonActive]}><Ionicons name={action.icon as keyof typeof Ionicons.glyphMap} size={17} color={detail?.progressStatus === action.value ? colors.accent : colors.muted} /><Text style={[styles.detailStatusText, detail?.progressStatus === action.value && styles.detailStatusTextActive]}>{action.label}</Text></Pressable>)}</View>
           <Pressable disabled={busy} onPress={() => setRatingSheetVisible(true)} style={styles.ratingAction}>
             <Ionicons name="speedometer-outline" size={24} color="#ffc24b" />
             <View style={styles.ratingActionCopy}>
@@ -3294,7 +3460,7 @@ function resolveWatchLogDate(values: WatchLogValues, releaseDate?: string | null
   if (Number.isNaN(value.getTime())) throw new Error("Choose a valid watch date.");
   const completedAt = values.timePoint === "start" && runtimeMinutes > 0 ? new Date(value.getTime() + runtimeMinutes * 60_000) : value;
   const dateToValidate = values.timePoint === "start" ? value : completedAt;
-  const shouldRejectFuture = values.mode !== "custom" || values.timePoint === "start";
+  const shouldRejectFuture = values.mode !== "custom";
   if (shouldRejectFuture && dateToValidate.getTime() > Date.now() + 60_000) throw new Error("Choose a watch date that is not in the future.");
   return completedAt.toISOString();
 }
@@ -3863,19 +4029,23 @@ async function loadUserLists(userId: string): Promise<UserList[]> {
   const { data: rawLists } = await client.from("lists").select("id,name,description,visibility,cover_url,featured_media_id").eq("user_id", userId).order("name", { ascending: true });
   const lists = rawLists ?? [];
   if (!lists.length) return [];
-  const listIds = lists.map((list: any) => list.id);
   const featuredIds = lists.flatMap((list: any) => list.featured_media_id ? [list.featured_media_id] : []);
-  const [{ data: items }, { data: featuredRows }] = await Promise.all([
-    client.from("list_items").select("list_id,position,media(id,poster_path,backdrop_path,title)").in("list_id", listIds).order("position", { ascending: true }),
-    featuredIds.length ? client.from("media").select("id,poster_path,backdrop_path,title").in("id", featuredIds) : Promise.resolve({ data: [] })
+  const [featuredResult, snapshots] = await Promise.all([
+    featuredIds.length ? client.from("media").select("id,poster_path,backdrop_path,title").in("id", featuredIds) : Promise.resolve({ data: [] }),
+    Promise.all(lists.map(async (list: any) => {
+      const [countResult, itemsResult] = await Promise.all([
+        client.from("list_items").select("id", { count: "exact", head: true }).eq("list_id", list.id),
+        client.from("list_items").select("list_id,position,media(id,poster_path,backdrop_path,title)").eq("list_id", list.id).order("position", { ascending: true }).limit(4)
+      ]);
+      return { listId: list.id, count: countResult.count ?? 0, items: itemsResult.data ?? [] };
+    }))
   ]);
-  const itemsByList = new Map<string, any[]>();
-  (items ?? []).forEach((item: any) => {
-    itemsByList.set(item.list_id, [...(itemsByList.get(item.list_id) ?? []), item]);
-  });
+  const featuredRows = featuredResult.data ?? [];
+  const snapshotByList = new Map(snapshots.map(snapshot => [snapshot.listId, snapshot]));
   const featuredById = new Map((featuredRows ?? []).map((media: any) => [media.id, media]));
   return lists.map((list: any) => {
-    const listItems = itemsByList.get(list.id) ?? [];
+    const snapshot = snapshotByList.get(list.id);
+    const listItems = snapshot?.items ?? [];
     const featured = list.featured_media_id ? featuredById.get(list.featured_media_id) : null;
     const featuredPoster = tmdbImage(featured?.backdrop_path || featured?.poster_path, "w500");
     const posters = listItems.slice(0, 4).flatMap((item: any) => {
@@ -3883,22 +4053,22 @@ async function loadUserLists(userId: string): Promise<UserList[]> {
       const poster = tmdbImage(media?.poster_path || media?.backdrop_path, "w342");
       return poster ? [poster] : [];
     });
-    return { id: list.id, name: list.name, description: list.description, visibility: list.visibility, cover_url: list.cover_url, count: listItems.length, posters: list.cover_url ? [list.cover_url] : featuredPoster ? [featuredPoster, ...posters].slice(0, 4) : posters };
+    return { id: list.id, name: list.name, description: list.description, visibility: list.visibility, cover_url: list.cover_url, count: snapshot?.count ?? 0, posters: list.cover_url ? [list.cover_url] : featuredPoster ? [featuredPoster, ...posters].slice(0, 4) : posters };
   });
 }
 
-async function loadListFeed(listId: string): Promise<FeedResult> {
+async function loadListFeed(listId: string, userId?: string | null): Promise<FeedResult> {
   const client = supabase;
   if (!client) return emptyFeed;
   let result: any = await client
     .from("list_items")
-    .select("position,franchise_group,media(*)")
+    .select("position,added_at,franchise_group,media(*)")
     .eq("list_id", listId)
     .order("position", { ascending: true });
   if (result.error) {
     result = await client
       .from("list_items")
-      .select("position,media(*)")
+      .select("position,added_at,media(*)")
       .eq("list_id", listId)
       .order("position", { ascending: true });
   }
@@ -3908,17 +4078,16 @@ async function loadListFeed(listId: string): Promise<FeedResult> {
     const media = firstRow(row.media);
     return media?.id ? [media] : [];
   });
-  const [{ data: userData }, { data: sessionData }] = await Promise.all([client.auth.getUser(), client.auth.getSession()]);
   const mediaIds = mediaRows.map((media: any) => media.id);
-  const { data: ratingRows } = userData.user?.id && mediaIds.length ? await client.from("ratings").select("media_id,score").eq("user_id", userData.user.id).in("media_id", mediaIds) : { data: [] as any[] };
+  const { data: ratingRows } = userId && mediaIds.length ? await client.from("ratings").select("media_id,score").eq("user_id", userId).in("media_id", mediaIds) : { data: [] as any[] };
   const ratingByMedia = new Map((ratingRows ?? []).map((row: any) => [row.media_id, Number(row.score)]));
   const items = (data ?? []).flatMap((row: any) => {
     const media = firstRow(row.media);
     if (!media) return [];
     const item = fromDbMedia(media, ratingByMedia);
-    return [{ ...item, listMediaId: media.id, franchiseGroup: row.franchise_group ?? null }];
+    return [{ ...item, listMediaId: media.id, franchiseGroup: row.franchise_group ?? null, listAddedAt: row.added_at ?? null, listPosition: row.position ?? null }];
   });
-  return { items: await enrichShowRuns(items, sessionData.session?.access_token, 80) };
+  return { items };
 }
 
 async function hiddenRecommendationKeys(client: NonNullable<typeof supabase>, userId: string, filters: RecommendationFilters) {
@@ -3954,7 +4123,12 @@ async function hiddenRecommendationMediaIds(client: NonNullable<typeof supabase>
 
 function passesRecommendationFilters(item: MediaSummary, filters: RecommendationFilters, hidden: Set<string>) {
   if (filters.kind !== "all" && item.kind !== filters.kind) return false;
-  if (filters.genre && !item.genres?.some(genre => String(genre.id) === filters.genre || genre.name.toLowerCase() === filters.genre.toLowerCase())) return false;
+  if (filters.genre) {
+    const genreMatches = filters.genre === "christmas"
+      ? isChristmasLike(item)
+      : item.genres?.some(genre => String(genre.id) === filters.genre || genre.name.toLowerCase() === filters.genre.toLowerCase());
+    if (!genreMatches) return false;
+  }
   if (filters.country && !item.originCountries?.includes(filters.country)) return false;
   if (filters.year && item.releaseDate?.slice(0, 4) !== filters.year) return false;
   if (filters.excludeGenres.some(value => item.genres?.some(genre => String(genre.id) === value || genre.name.toLowerCase().includes(value.toLowerCase())))) return false;
@@ -4007,6 +4181,12 @@ function isThrillerLike(media: any) {
   return /\b(thriller|suspense|suspenseful|serial killer|kidnap|kidnapped|abduct|abducted|conspiracy|stalker|psychological|murder mystery|tense|paranoia|manhunt|hostage)\b/i.test(searchableMediaText(media));
 }
 
+function isChristmasLike(media: any) {
+  const genresValue = Array.isArray(media?.genres) ? media.genres : [];
+  if (genresValue.some((genre: any) => String(genre?.name ?? "").toLowerCase() === "christmas")) return true;
+  return /\b(christmas|xmas|santa|holiday|holidays|yuletide|north pole|reindeer|mistletoe|noel)\b/i.test(searchableMediaText(media));
+}
+
 function normalizedGenreNames(media: any) {
   const names = new Set<string>();
   const anime = isAnimeLike(media);
@@ -4023,6 +4203,7 @@ function normalizedGenreNames(media: any) {
   if (isSuperheroLike(media)) names.add("Superhero");
   if (isHorrorLike(media)) names.add("Horror");
   if (isThrillerLike(media)) names.add("Thriller");
+  if (isChristmasLike(media)) names.add("Christmas");
   return [...names];
 }
 
@@ -4553,6 +4734,16 @@ const styles = StyleSheet.create({
   ratingGraphToggle: { minHeight: 42, borderRadius: 14, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel, paddingHorizontal: 12, flexDirection: "row", alignItems: "center", gap: 8 },
   ratingGraphToggleActive: { borderColor: colors.accent, backgroundColor: "rgba(255,84,57,0.16)" },
   ratingGraphToggleText: { color: colors.text, fontSize: 13, fontWeight: "900" },
+  watchProgressCard: { marginHorizontal: 18, marginTop: 14, borderRadius: 18, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel, padding: 14 },
+  watchProgressHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 12 },
+  watchProgressLabel: { color: colors.accent, fontSize: 11, fontWeight: "900", letterSpacing: 2, textTransform: "uppercase" },
+  watchProgressValue: { color: colors.text, fontSize: 18, fontWeight: "900", marginTop: 4 },
+  watchProgressToggle: { minHeight: 38, borderRadius: 14, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel2, paddingHorizontal: 12, flexDirection: "row", alignItems: "center", gap: 6 },
+  watchProgressToggleActive: { borderColor: colors.accent, backgroundColor: "rgba(255,84,57,0.18)" },
+  watchProgressToggleText: { color: colors.muted, fontSize: 12, fontWeight: "900" },
+  watchProgressToggleTextActive: { color: colors.text },
+  watchProgressTrack: { height: 8, borderRadius: 999, backgroundColor: colors.panel2, overflow: "hidden", marginTop: 12 },
+  watchProgressFill: { height: "100%", borderRadius: 999, backgroundColor: colors.accent },
   ratingLegend: { flexDirection: "row", flexWrap: "wrap", gap: 8, paddingHorizontal: 18, marginTop: 10 },
   ratingLegendItem: { flexDirection: "row", alignItems: "center", gap: 5 },
   ratingLegendDot: { width: 9, height: 9, borderRadius: 5 },
@@ -4565,6 +4756,8 @@ const styles = StyleSheet.create({
   matrixEmptyCell: { width: 48, height: 42, borderRadius: 8, backgroundColor: "rgba(255,255,255,0.05)" },
   matrixCell: { width: 48, height: 42, borderRadius: 8, alignItems: "center", justifyContent: "center" },
   matrixCellText: { fontSize: 14, fontWeight: "900" },
+  dimmedEpisode: { opacity: 0.38 },
+  dimmedEpisodeCard: { opacity: 0.42 },
   mutedBody: { color: colors.muted, fontSize: 13, lineHeight: 20, paddingHorizontal: 18 },
   seasonEpisodeGrid: { paddingHorizontal: 18, paddingVertical: 14, gap: 8 },
   seasonEpisodeCell: { width: 62, height: 54, borderRadius: 9, backgroundColor: "#f5c20b", alignItems: "center", justifyContent: "center" },
