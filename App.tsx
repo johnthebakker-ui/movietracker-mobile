@@ -2064,21 +2064,24 @@ function SeriesEpisodesScreen({ target, session, onBack, onOpenSeason, onOpenEpi
           })}</View>)}
         </>}
       </View></ScrollView> : null}
-      {session?.user.id && watchProgress.total ? (
-        <View style={styles.watchProgressCard}>
-          <View style={styles.watchProgressHeader}>
-            <View>
-              <Text style={styles.watchProgressLabel}>Watch progress</Text>
-              <Text style={styles.watchProgressValue}>{watchProgress.watched} / {watchProgress.total} episodes</Text>
+      <View style={styles.detailSection}>
+        <SectionTitle kicker="Progress and episode guide" title="Seasons & episodes" />
+        {session?.user.id && watchProgress.total ? (
+          <View style={styles.watchProgressCard}>
+            <View style={styles.watchProgressHeader}>
+              <View>
+                <Text style={styles.watchProgressLabel}>Watch progress</Text>
+                <Text style={styles.watchProgressValue}>{watchProgress.watched} / {watchProgress.total} episodes</Text>
+              </View>
+              <Pressable onPress={() => setDimUnwatched(value => !value)} style={[styles.watchProgressToggle, dimUnwatched && styles.watchProgressToggleActive]}>
+                <Ionicons name={dimUnwatched ? "eye-off-outline" : "eye-outline"} size={18} color={dimUnwatched ? colors.text : colors.muted} />
+                <Text style={[styles.watchProgressToggleText, dimUnwatched && styles.watchProgressToggleTextActive]}>Dim unwatched</Text>
+              </Pressable>
             </View>
-            <Pressable onPress={() => setDimUnwatched(value => !value)} style={[styles.watchProgressToggle, dimUnwatched && styles.watchProgressToggleActive]}>
-              <Ionicons name={dimUnwatched ? "eye-off-outline" : "eye-outline"} size={18} color={dimUnwatched ? colors.text : colors.muted} />
-              <Text style={[styles.watchProgressToggleText, dimUnwatched && styles.watchProgressToggleTextActive]}>Dim unwatched</Text>
-            </Pressable>
+            <View style={styles.watchProgressTrack}><View style={[styles.watchProgressFill, { width: `${Math.round((watchProgress.watched / watchProgress.total) * 100)}%` }]} /></View>
           </View>
-          <View style={styles.watchProgressTrack}><View style={[styles.watchProgressFill, { width: `${Math.round((watchProgress.watched / watchProgress.total) * 100)}%` }]} /></View>
-        </View>
-      ) : null}
+        ) : null}
+      </View>
       {seasonRows.map(({ season, payload, episodes }) => {
         return (
           <View key={`${season.id ?? season.seasonNumber}`} style={styles.detailSection}>
@@ -4239,15 +4242,16 @@ async function scheduleEpisodeNotifications(userId: string) {
 async function loadListFeed(listId: string, userId?: string | null): Promise<FeedResult> {
   const client = supabase;
   if (!client) return emptyFeed;
+  const listFeedMediaSelect = "id,tmdb_id,kind,title,overview,poster_path,backdrop_path,release_date,end_date,status,vote_average,vote_count,popularity,genres,original_language,origin_countries,collection_tmdb_id,collection_name,collection_poster_path";
   let result: any = await client
     .from("list_items")
-    .select("position,added_at,franchise_group,media(*)")
+    .select(`position,added_at,franchise_group,media(${listFeedMediaSelect})`)
     .eq("list_id", listId)
     .order("position", { ascending: true });
   if (result.error) {
     result = await client
       .from("list_items")
-      .select("position,added_at,media(*)")
+      .select(`position,added_at,media(${listFeedMediaSelect})`)
       .eq("list_id", listId)
       .order("position", { ascending: true });
   }
