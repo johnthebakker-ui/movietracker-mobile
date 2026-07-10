@@ -628,14 +628,14 @@ export default function App() {
       supabase.from("follows").select("*", { count: "exact", head: true }).eq("following_id", userId).eq("status", "accepted"),
       supabase.from("follows").select("*", { count: "exact", head: true }).eq("follower_id", userId).eq("status", "accepted"),
       supabase.from("progress").select("*", { count: "exact", head: true }).eq("user_id", userId),
-      supabase.from("progress").select("status,updated_at,media(*)").eq("user_id", userId).order("updated_at", { ascending: false }).limit(160),
+      supabase.from("progress").select("status,updated_at,media(id,tmdb_id,kind,title,overview,poster_path,backdrop_path,release_date,end_date,status,vote_average,vote_count,popularity,runtime,genres,original_language,origin_countries,collection_tmdb_id,collection_name,collection_poster_path)").eq("user_id", userId).order("updated_at", { ascending: false }).limit(100),
       supabase.from("ratings").select("score,media_id").eq("user_id", userId),
-      supabase.from("reviews").select("id,title,body,created_at,updated_at,media(id,tmdb_id,kind,title,overview,poster_path,backdrop_path,release_date,end_date,status,vote_average,vote_count,popularity,runtime,genres,original_language,origin_countries,collection_tmdb_id,collection_name,collection_poster_path),ratings(score)").eq("user_id", userId).order("updated_at", { ascending: false }).limit(30),
+      supabase.from("reviews").select("id,title,body,created_at,updated_at,media(id,tmdb_id,kind,title,overview,poster_path,backdrop_path,release_date,end_date,status,vote_average,vote_count,popularity,runtime,genres,original_language,origin_countries,collection_tmdb_id,collection_name,collection_poster_path),ratings(score)").eq("user_id", userId).order("updated_at", { ascending: false }).limit(20),
       supabase.from("reviews").select("*", { count: "exact", head: true }).eq("user_id", userId),
-      supabase.from("favorites").select("media(*)").eq("user_id", userId).order("position").limit(12),
+      supabase.from("favorites").select("media(id,tmdb_id,kind,title,overview,poster_path,backdrop_path,release_date,end_date,status,vote_average,vote_count,popularity,runtime,genres,original_language,origin_countries,collection_tmdb_id,collection_name,collection_poster_path)").eq("user_id", userId).order("position").limit(12),
       loadUserLists(userId),
       supabase.from("lists").select("*", { count: "exact", head: true }).eq("user_id", userId),
-      supabase.from("watch_events").select("id,watched_at,duration_minutes,episode_id,media(id,tmdb_id,kind,title,backdrop_path,poster_path,release_date,end_date,status,vote_average,vote_count,popularity,genres,original_language,origin_countries,runtime),episodes(name,episode_number,still_path,seasons(season_number))").eq("user_id", userId).order("watched_at", { ascending: false, nullsFirst: false }).limit(100),
+      supabase.from("watch_events").select("id,watched_at,duration_minutes,episode_id,media(id,tmdb_id,kind,title,backdrop_path,poster_path,release_date,end_date,status,vote_average,vote_count,popularity,genres,original_language,origin_countries,runtime),episodes(name,episode_number,still_path,seasons(season_number))").eq("user_id", userId).order("watched_at", { ascending: false, nullsFirst: false }).limit(60),
       supabase.from("watch_events").select("duration_minutes,media_id,media(runtime)").eq("user_id", userId).limit(5000),
       supabase.from("watch_events").select("watched_at").eq("user_id", userId).not("watched_at", "is", null).order("watched_at", { ascending: false }).limit(1000),
       supabase.from("watch_events").select("*", { count: "exact", head: true }).eq("user_id", userId)
@@ -2039,21 +2039,6 @@ function SeriesEpisodesScreen({ target, session, onBack, onOpenSeason, onOpenEpi
         <Pressable onPress={() => setInverted(value => !value)} style={[styles.ratingGraphToggle, inverted && styles.ratingGraphToggleActive]}><Text style={styles.ratingGraphToggleText}>Inverted axes</Text><Switch value={inverted} onValueChange={setInverted} trackColor={{ false: "#343a3d", true: colors.accent }} thumbColor={colors.text} /></Pressable>
       </View>
       {colorized ? <RatingLegend /> : null}
-      {session?.user.id && watchProgress.total ? (
-        <View style={styles.watchProgressCard}>
-          <View style={styles.watchProgressHeader}>
-            <View>
-              <Text style={styles.watchProgressLabel}>Watch progress</Text>
-              <Text style={styles.watchProgressValue}>{watchProgress.watched} / {watchProgress.total} episodes</Text>
-            </View>
-            <Pressable onPress={() => setDimUnwatched(value => !value)} style={[styles.watchProgressToggle, dimUnwatched && styles.watchProgressToggleActive]}>
-              <Ionicons name={dimUnwatched ? "eye-off-outline" : "eye-outline"} size={18} color={dimUnwatched ? colors.text : colors.muted} />
-              <Text style={[styles.watchProgressToggleText, dimUnwatched && styles.watchProgressToggleTextActive]}>Dim unwatched</Text>
-            </Pressable>
-          </View>
-          <View style={styles.watchProgressTrack}><View style={[styles.watchProgressFill, { width: `${Math.round((watchProgress.watched / watchProgress.total) * 100)}%` }]} /></View>
-        </View>
-      ) : null}
       {loadingAll ? <ActivityIndicator color={colors.accent} style={{ marginVertical: 18 }} /> : null}
       {seasonRows.length && maxEpisodes ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.fullMatrixScroll}><View style={styles.fullEpisodeMatrix}>
         {!inverted ? <>
@@ -2079,6 +2064,21 @@ function SeriesEpisodesScreen({ target, session, onBack, onOpenSeason, onOpenEpi
           })}</View>)}
         </>}
       </View></ScrollView> : null}
+      {session?.user.id && watchProgress.total ? (
+        <View style={styles.watchProgressCard}>
+          <View style={styles.watchProgressHeader}>
+            <View>
+              <Text style={styles.watchProgressLabel}>Watch progress</Text>
+              <Text style={styles.watchProgressValue}>{watchProgress.watched} / {watchProgress.total} episodes</Text>
+            </View>
+            <Pressable onPress={() => setDimUnwatched(value => !value)} style={[styles.watchProgressToggle, dimUnwatched && styles.watchProgressToggleActive]}>
+              <Ionicons name={dimUnwatched ? "eye-off-outline" : "eye-outline"} size={18} color={dimUnwatched ? colors.text : colors.muted} />
+              <Text style={[styles.watchProgressToggleText, dimUnwatched && styles.watchProgressToggleTextActive]}>Dim unwatched</Text>
+            </Pressable>
+          </View>
+          <View style={styles.watchProgressTrack}><View style={[styles.watchProgressFill, { width: `${Math.round((watchProgress.watched / watchProgress.total) * 100)}%` }]} /></View>
+        </View>
+      ) : null}
       {seasonRows.map(({ season, payload, episodes }) => {
         return (
           <View key={`${season.id ?? season.seasonNumber}`} style={styles.detailSection}>
@@ -4126,24 +4126,24 @@ async function loadUserLists(userId: string): Promise<UserList[]> {
   if (listError) throw listError;
   const lists = rawLists ?? [];
   if (!lists.length) return [];
-  const listIds = lists.map((list: any) => list.id);
   const featuredIds = lists.flatMap((list: any) => list.featured_media_id ? [list.featured_media_id] : []);
-  const [featuredResult, itemsResult] = await Promise.all([
+  const [featuredResult, itemResults] = await Promise.all([
     featuredIds.length ? client.from("media").select("id,poster_path,backdrop_path,title").in("id", featuredIds) : Promise.resolve({ data: [] }),
-    client.from("list_items").select("list_id,position,media(id,poster_path,backdrop_path,title)").in("list_id", listIds).order("position", { ascending: true })
+    Promise.all(lists.map((list: any) => client
+      .from("list_items")
+      .select("list_id,position,media(id,poster_path,backdrop_path,title)", { count: "exact" })
+      .eq("list_id", list.id)
+      .order("position", { ascending: true })
+      .limit(4)))
   ]);
   if ((featuredResult as any).error) throw (featuredResult as any).error;
-  if ((itemsResult as any).error) throw (itemsResult as any).error;
+  const firstItemError = (itemResults as any[]).find(result => result.error)?.error;
+  if (firstItemError) throw firstItemError;
   const featuredRows = featuredResult.data ?? [];
-  const itemsByList = new Map<string, any[]>();
-  (itemsResult.data ?? []).forEach((item: any) => {
-    const items = itemsByList.get(item.list_id) ?? [];
-    items.push(item);
-    itemsByList.set(item.list_id, items);
-  });
   const featuredById = new Map((featuredRows ?? []).map((media: any) => [media.id, media]));
-  return lists.map((list: any) => {
-    const listItems = itemsByList.get(list.id) ?? [];
+  return lists.map((list: any, index: number) => {
+    const preview = (itemResults as any[])[index];
+    const listItems = preview?.data ?? [];
     const featured = list.featured_media_id ? featuredById.get(list.featured_media_id) : null;
     const featuredPoster = tmdbImage(featured?.backdrop_path || featured?.poster_path, "w500");
     const posters = listItems.slice(0, 4).flatMap((item: any) => {
@@ -4151,7 +4151,7 @@ async function loadUserLists(userId: string): Promise<UserList[]> {
       const poster = tmdbImage(media?.poster_path || media?.backdrop_path, "w342");
       return poster ? [poster] : [];
     });
-    return { id: list.id, name: list.name, description: list.description, visibility: list.visibility, cover_url: list.cover_url, count: listItems.length, posters: list.cover_url ? [list.cover_url] : featuredPoster ? [featuredPoster, ...posters].slice(0, 4) : posters };
+    return { id: list.id, name: list.name, description: list.description, visibility: list.visibility, cover_url: list.cover_url, count: preview?.count ?? listItems.length, posters: list.cover_url ? [list.cover_url] : featuredPoster ? [featuredPoster, ...posters].slice(0, 4) : posters };
   });
 }
 
