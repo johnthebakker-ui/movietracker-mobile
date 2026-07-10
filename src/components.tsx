@@ -1,4 +1,5 @@
 import { BlurView } from "expo-blur";
+import { Image as ExpoImage } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
 import type { Session } from "@supabase/supabase-js";
 import React, { useEffect, useRef, useState } from "react";
@@ -32,16 +33,26 @@ export function resolveRemoteImageUri(uri: string | null | undefined) {
 
 export function RemoteImage({ uri, style, resizeMode = "cover" }: { uri: string; style: any; resizeMode?: "cover" | "contain" | "stretch" | "repeat" | "center" }) {
   const [attempt, setAttempt] = useState(0);
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const resolvedUri = resolveRemoteImageUri(uri);
-  useEffect(() => setAttempt(0), [resolvedUri]);
+  useEffect(() => {
+    setAttempt(0);
+    return () => { if (retryTimer.current) clearTimeout(retryTimer.current); };
+  }, [resolvedUri]);
   const retryUri = attempt ? `${resolvedUri}${resolvedUri.includes("?") ? "&" : "?"}retry=${attempt}` : resolvedUri;
   return (
-    <Image
+    <ExpoImage
       key={`${resolvedUri}-${attempt}`}
       source={{ uri: retryUri }}
       style={style}
-      resizeMode={resizeMode}
-      onError={() => setAttempt(value => (value < 2 ? value + 1 : value))}
+      contentFit={resizeMode === "stretch" ? "fill" : resizeMode === "repeat" ? "cover" : resizeMode === "center" ? "none" : resizeMode}
+      cachePolicy="memory-disk"
+      transition={120}
+      recyclingKey={resolvedUri}
+      onError={() => {
+        if (attempt >= 3) return;
+        retryTimer.current = setTimeout(() => setAttempt(value => Math.min(3, value + 1)), 350 * (attempt + 1));
+      }}
     />
   );
 }

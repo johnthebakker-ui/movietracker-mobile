@@ -22,6 +22,15 @@
         {
           "photosPermission": "MovieTracker uses your photos to update your profile picture and banner."
         }
+      ],
+      "expo-image",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/android-icon-monochrome.png",
+          "color": "#ff563d",
+          "defaultChannel": "episode-releases"
+        }
       ]
     ],
     "ios": {
