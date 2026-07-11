@@ -158,9 +158,9 @@ export async function fetchSearch(query: string, token?: string): Promise<FeedRe
   return request<FeedResult>(`/api/mobile/search?${params}`, token);
 }
 
-export async function fetchWebsiteHome(): Promise<HomePayload> {
+export async function fetchWebsiteHome(token?: string): Promise<HomePayload> {
   try {
-    const feed = await request<HomePayload>("/api/mobile/home");
+    const feed = await request<HomePayload>("/api/mobile/home", token);
     if (feed.hero.length || feed.sections.some(section => section.items.length)) return feed;
   } catch {
     // Older deployments do not expose the JSON home feed yet; fall back to HTML scraping.

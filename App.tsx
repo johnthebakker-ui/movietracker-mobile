@@ -398,15 +398,15 @@ export default function App() {
 
   const loadHome = useCallback(async () => {
     try {
-      const home = await fetchWebsiteHome();
+      const home = await fetchWebsiteHome(usableSession?.access_token);
       setHomeHero(home.hero.slice(0, 6));
       setHomeSections(home.sections);
     } catch {
       const today = localDateKey();
       const [popular, movies, shows] = await Promise.all([
-        fetchDiscover(initialDiscoverFilters, 1),
-        fetchDiscover({ ...initialDiscoverFilters, kind: "movie", sort: "newest", year: today.slice(0, 4) }, 1),
-        fetchDiscover({ ...initialDiscoverFilters, kind: "show", sort: "newest", year: today.slice(0, 4) }, 1)
+        fetchDiscover(initialDiscoverFilters, 1, usableSession?.access_token),
+        fetchDiscover({ ...initialDiscoverFilters, kind: "movie", sort: "newest", year: today.slice(0, 4) }, 1, usableSession?.access_token),
+        fetchDiscover({ ...initialDiscoverFilters, kind: "show", sort: "newest", year: today.slice(0, 4) }, 1, usableSession?.access_token)
       ]);
       const heroItems = popular.items.filter(item => item.backdropPath && item.overview).slice(0, 6);
       setHomeHero(heroItems.length ? heroItems : popular.items.slice(0, 6));
@@ -417,7 +417,7 @@ export default function App() {
       ]);
     }
     setHeroIndex(0);
-  }, []);
+  }, [usableSession?.access_token]);
 
   useEffect(() => {
     if (tab !== "home" || homeHero.length < 2) return;
@@ -670,10 +670,9 @@ export default function App() {
     } catch {
       // Fall back to the legacy direct Supabase loader when the site API is not deployed yet.
     }
-    const [followers, following, progressCount, progressStatuses, ratings, reviews, reviewCount, favorites, lists, listCount, history, historySummary, streakEvents, watchCount] = await Promise.all([
+    const [followers, following, progressStatuses, ratings, reviews, reviewCount, favorites, lists, listCount, history, historySummary, streakEvents, watchCount] = await Promise.all([
       supabase.from("follows").select("*", { count: "exact", head: true }).eq("following_id", userId).eq("status", "accepted"),
       supabase.from("follows").select("*", { count: "exact", head: true }).eq("follower_id", userId).eq("status", "accepted"),
-      supabase.from("progress").select("*", { count: "exact", head: true }).eq("user_id", userId),
       supabase.from("progress").select("status,updated_at,media(id,tmdb_id,kind,title,overview,poster_path,backdrop_path,release_date,end_date,status,vote_average,vote_count,popularity,runtime,genres,original_language,origin_countries,collection_tmdb_id,collection_name,collection_poster_path)").eq("user_id", userId).order("updated_at", { ascending: false }).limit(100),
       supabase.from("ratings").select("score,media_id").eq("user_id", userId),
       supabase.from("reviews").select("id,title,body,created_at,updated_at,media(id,tmdb_id,kind,title,overview,poster_path,backdrop_path,release_date,end_date,status,vote_average,vote_count,popularity,runtime,genres,original_language,origin_countries,collection_tmdb_id,collection_name,collection_poster_path),ratings(score)").eq("user_id", userId).order("updated_at", { ascending: false }).limit(20),
@@ -789,7 +788,7 @@ export default function App() {
     const nextProfileData: ProfileData = {
       followers: followers.count ?? 0,
       following: following.count ?? 0,
-      tracked: progressCount.count ?? 0,
+      tracked: historyUniqueTitles.size,
       watchEvents: watchCount.count ?? 0,
       screenTimeHours: Math.round(screenTimeMinutes / 60),
       historyUniqueTitles: historyUniqueTitles.size,
@@ -1117,7 +1116,7 @@ export default function App() {
     }
   }
 
-  async function removeHistoryEvent(eventId: string, title: string) {
+  async function removeHistoryEvent(eventId: string, title: string, onSuccess?: () => void) {
     if (!usableSession?.user.id || !supabase) return;
     const client = supabase;
     const userId = usableSession.user.id;
@@ -1131,6 +1130,7 @@ export default function App() {
           try {
             const { error: deleteError } = await client.from("watch_events").delete().eq("id", eventId).eq("user_id", userId);
             if (deleteError) throw deleteError;
+            onSuccess?.();
             await loadProfileData();
           } catch (reason) {
             Alert.alert("Could not remove watch", reason instanceof Error ? reason.message : "Try again.");
@@ -1284,7 +1284,7 @@ export default function App() {
             ) : usableSession && profileView === "notifications" ? (
               <NotificationScreen session={usableSession} onBack={() => openProfileView("profile")} />
             ) : usableSession && profileView === "history" ? (
-              <FullHistoryPage data={profileData} token={usableSession.access_token} onOpen={openHistoryItem} onMenu={setActionItem} onBack={() => openProfileView("profile")} onRemove={removeHistoryEvent} />
+              <FullHistoryPage data={profileData} token={usableSession.access_token} onOpen={openHistoryItem} onMenu={setActionItem} onBack={() => openProfileView("profile")} onRemove={removeHistoryEvent} onScrollTop={scrollToTop} />
             ) : usableSession && profileView === "reviews" ? (
               <FullReviewsPage reviews={profileData.reviews} onBack={() => openProfileView("profile")} onOpen={openItem} />
             ) : usableSession && profileView === "statistics" ? (
@@ -1615,7 +1615,7 @@ function NotificationScreen({ session, onBack }: { session: Session; onBack: () 
 
 function ProfileStatBand({ data }: { data: ProfileData }) {
   const stats = [
-    { icon: "film-outline" as const, value: data.tracked, label: "tracked titles" },
+    { icon: "film-outline" as const, value: data.tracked, label: "unique watched titles" },
     { icon: "time-outline" as const, value: data.watchEvents, label: "watch events" },
     { icon: "speedometer-outline" as const, value: data.averageRating, label: "average rating" },
     { icon: "chatbox-outline" as const, value: data.reviewCount, label: "reviews" },
@@ -1661,7 +1661,7 @@ function ProfileHistorySection({ items, onOpen, onMenu, onHistory }: { items: Hi
   return <View style={styles.profileSection}><SectionTitle kicker="A dated viewing diary" title="Recent history" action="See complete history ->" onAction={onHistory} /><View style={styles.historyGrid}>{items.slice(0, 6).map(item => <HistoryCard key={item.id} item={item} onOpen={onOpen} onMenu={onMenu} />)}</View></View>;
 }
 
-function FullHistoryPage({ data, token, onOpen, onMenu, onBack, onRemove }: { data: ProfileData; token: string; onOpen: (item: HistoryItem) => void; onMenu: (item: MediaSummary) => void; onBack: () => void; onRemove: (id: string, title: string) => void }) {
+function FullHistoryPage({ data, token, onOpen, onMenu, onBack, onRemove, onScrollTop }: { data: ProfileData; token: string; onOpen: (item: HistoryItem) => void; onMenu: (item: MediaSummary) => void; onBack: () => void; onRemove: (id: string, title: string, onSuccess?: () => void) => void; onScrollTop: () => void }) {
   const [items, setItems] = useState(() => data.history.map(normalizeHistoryItemTime));
   const [filter, setFilter] = useState<HistoryFilter>("all");
   const [queryDraft, setQueryDraft] = useState("");
@@ -1694,18 +1694,27 @@ function FullHistoryPage({ data, token, onOpen, onMenu, onBack, onRemove }: { da
   }, [filter, page, query, token]);
 
   function changeFilter(next: HistoryFilter) {
+    setLoadingHistory(true);
     setFilter(next);
     setPage(1);
+    onScrollTop();
   }
 
   function submitSearch() {
+    setLoadingHistory(true);
     setQuery(queryDraft.trim());
     setPage(1);
+    onScrollTop();
+  }
+
+  function changePage(nextPage: number) {
+    setLoadingHistory(true);
+    setPage(Math.max(1, nextPage));
+    onScrollTop();
   }
 
   function removeItem(id: string, title: string) {
-    setItems(current => current.filter(item => item.id !== id));
-    onRemove(id, title);
+    onRemove(id, title, () => setItems(current => current.filter(item => item.id !== id)));
   }
 
   return (
@@ -1715,10 +1724,10 @@ function FullHistoryPage({ data, token, onOpen, onMenu, onBack, onRemove }: { da
         <View style={styles.historySearchRow}>
           <Ionicons name="search-outline" size={19} color={colors.muted} />
           <TextInput value={queryDraft} onChangeText={setQueryDraft} onSubmitEditing={submitSearch} returnKeyType="search" placeholder="Search your watch history" placeholderTextColor={colors.muted} style={styles.historySearchInput} />
-          {queryDraft ? <Pressable onPress={() => { setQueryDraft(""); setQuery(""); setPage(1); }} hitSlop={8}><Ionicons name="close-circle" size={20} color={colors.muted} /></Pressable> : null}
-          <Pressable onPress={submitSearch} style={styles.historySearchButton}><Text style={styles.historySearchButtonText}>Search</Text></Pressable>
+          {queryDraft ? <Pressable onPress={() => { setLoadingHistory(true); setQueryDraft(""); setQuery(""); setPage(1); onScrollTop(); }} hitSlop={8}><Ionicons name="close-circle" size={20} color={colors.muted} /></Pressable> : null}
+          <Pressable disabled={loadingHistory} onPress={submitSearch} style={[styles.historySearchButton, loadingHistory && styles.historySearchButtonBusy]}>{loadingHistory ? <ActivityIndicator size="small" color={colors.text} /> : <Text style={styles.historySearchButtonText}>Search</Text>}</Pressable>
         </View>
-        <View style={styles.historyFilterRow}>{([['all', 'Everything'], ['movies', 'Movies'], ['episodes', 'Episodes']] as Array<[HistoryFilter, string]>).map(([value, label]) => <Pressable key={value} onPress={() => changeFilter(value)} style={[styles.historyFilterPill, filter === value && styles.historyFilterPillActive]}><Text style={[styles.historyFilterText, filter === value && styles.historyFilterTextActive]}>{label}</Text></Pressable>)}</View>
+        <View style={styles.historyFilterRow}>{([['all', 'Everything'], ['movies', 'Movies'], ['episodes', 'Episodes']] as Array<[HistoryFilter, string]>).map(([value, label]) => <Pressable key={value} onPress={() => changeFilter(value)} style={[styles.historyFilterPill, filter === value && styles.historyFilterPillActive]}><Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78} style={[styles.historyFilterText, filter === value && styles.historyFilterTextActive]}>{label}</Text></Pressable>)}</View>
       </View>
       {items.length ? (
         <>
@@ -1731,9 +1740,9 @@ function FullHistoryPage({ data, token, onOpen, onMenu, onBack, onRemove }: { da
             {groups.map(group => <MemoHistoryDay key={group.dateKey} group={group} onOpen={onOpen} onMenu={onMenu} onRemove={removeItem} />)}
           </View>
           <View style={styles.historyPager}>
-            <Pressable disabled={page === 1 || loadingHistory} onPress={() => setPage(current => Math.max(1, current - 1))} style={[styles.historyPageButton, (page === 1 || loadingHistory) && styles.historyPageButtonDisabled]}><Ionicons name="chevron-back" size={18} color={colors.text} /><Text style={styles.historyPageButtonText}>Newer</Text></Pressable>
+            <Pressable disabled={page === 1 || loadingHistory} onPress={() => changePage(page - 1)} style={[styles.historyPageButton, (page === 1 || loadingHistory) && styles.historyPageButtonDisabled]}><Ionicons name="chevron-back" size={18} color={colors.text} /><Text style={styles.historyPageButtonText}>Newer</Text></Pressable>
             <Text style={styles.historyPageLabel}>Page {page}</Text>
-            <Pressable disabled={!hasMore || loadingHistory} onPress={() => setPage(current => current + 1)} style={[styles.historyPageButton, (!hasMore || loadingHistory) && styles.historyPageButtonDisabled]}><Text style={styles.historyPageButtonText}>Older</Text><Ionicons name="chevron-forward" size={18} color={colors.text} /></Pressable>
+            <Pressable disabled={!hasMore || loadingHistory} onPress={() => changePage(page + 1)} style={[styles.historyPageButton, (!hasMore || loadingHistory) && styles.historyPageButtonDisabled]}><Text style={styles.historyPageButtonText}>Older</Text><Ionicons name="chevron-forward" size={18} color={colors.text} /></Pressable>
           </View>
         </>
       ) : !loadingHistory ? <EmptyPanel title={query || filter !== "all" ? "No matching watches" : "No watch history yet"} body={query || filter !== "all" ? "Try another search or history filter." : "Your watched movies and episodes will appear here."} /> : null}
@@ -4728,10 +4737,11 @@ const styles = StyleSheet.create({
   historyTools: { marginHorizontal: 18, marginBottom: 18, gap: 12 },
   historySearchRow: { minHeight: 52, borderRadius: 16, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel, paddingHorizontal: 13, flexDirection: "row", alignItems: "center", gap: 9 },
   historySearchInput: { flex: 1, minWidth: 0, color: colors.text, fontSize: 15 },
-  historySearchButton: { minHeight: 36, borderRadius: 12, backgroundColor: colors.accent, paddingHorizontal: 13, alignItems: "center", justifyContent: "center" },
+  historySearchButton: { minWidth: 72, minHeight: 36, borderRadius: 12, backgroundColor: colors.accent, paddingHorizontal: 13, alignItems: "center", justifyContent: "center" },
+  historySearchButtonBusy: { opacity: 0.82 },
   historySearchButtonText: { color: colors.text, fontSize: 12, fontWeight: "900" },
-  historyFilterRow: { flexDirection: "row", gap: 8 },
-  historyFilterPill: { flex: 1, minHeight: 42, borderRadius: 14, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel, alignItems: "center", justifyContent: "center" },
+  historyFilterRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  historyFilterPill: { flexGrow: 1, flexBasis: "30%", minWidth: 92, minHeight: 42, borderRadius: 14, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel, alignItems: "center", justifyContent: "center", paddingHorizontal: 8 },
   historyFilterPillActive: { borderColor: colors.accent, backgroundColor: colors.accentSoft },
   historyFilterText: { color: colors.muted, fontSize: 13, fontWeight: "900" },
   historyFilterTextActive: { color: colors.text },
@@ -4912,7 +4922,7 @@ const styles = StyleSheet.create({
   searchPanel: { marginHorizontal: 18, marginTop: 4, marginBottom: 18, gap: 12 },
   searchResultsLoading: { minHeight: 140, marginHorizontal: 18, borderRadius: 18, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel, alignItems: "center", justifyContent: "center", gap: 10 },
   searchResultsLoadingText: { color: colors.muted, fontSize: 14, fontWeight: "800" },
-  lastWatchedText: { color: colors.muted, fontSize: 13, fontWeight: "800", marginTop: 10 },
+  lastWatchedText: { color: colors.muted, fontSize: 13, fontWeight: "800", lineHeight: 19, marginTop: 10, marginBottom: 14 },
   searchBox: { minHeight: 60, borderRadius: 18, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel, flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 14 },
   searchInput: { flex: 1, color: colors.text, fontSize: 18 },
   searchClearButton: { minHeight: 38, borderRadius: 19, flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 4 },
