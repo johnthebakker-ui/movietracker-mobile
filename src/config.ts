@@ -7,12 +7,10 @@ export const HAS_SUPABASE = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 
 export const genres = [
   { value: "", label: "Every genre" },
-  { value: "kdrama", label: "K-Drama" },
-  { value: "superhero", label: "Superhero" },
-  { value: "christmas", label: "Christmas" },
   { value: "28", label: "Action" },
   { value: "12", label: "Adventure" },
   { value: "16", label: "Animation" },
+  { value: "christmas", label: "Christmas" },
   { value: "35", label: "Comedy" },
   { value: "80", label: "Crime" },
   { value: "99", label: "Documentary" },
@@ -20,17 +18,33 @@ export const genres = [
   { value: "10751", label: "Family" },
   { value: "14", label: "Fantasy" },
   { value: "27", label: "Horror" },
+  { value: "kdrama", label: "K-Drama" },
   { value: "9648", label: "Mystery" },
   { value: "10749", label: "Romance" },
   { value: "878", label: "Sci-Fi" },
+  { value: "superhero", label: "Superhero" },
   { value: "53", label: "Thriller" }
 ];
 
 export const excludeGenreOptions = [
+  { value: "28", label: "Action" },
+  { value: "12", label: "Adventure" },
   { value: "anime", label: "Anime" },
   { value: "16", label: "Animation / cartoons" },
+  { value: "christmas", label: "Christmas" },
+  { value: "35", label: "Comedy" },
+  { value: "80", label: "Crime" },
+  { value: "99", label: "Documentary" },
+  { value: "18", label: "Drama" },
+  { value: "10751", label: "Family" },
+  { value: "14", label: "Fantasy" },
+  { value: "27", label: "Horror" },
+  { value: "kdrama", label: "K-Drama" },
+  { value: "9648", label: "Mystery" },
+  { value: "10749", label: "Romance" },
+  { value: "878", label: "Sci-Fi" },
   { value: "superhero", label: "Superhero" },
-  ...genres.filter(genre => genre.value && !["kdrama", "superhero", "christmas", "16"].includes(genre.value))
+  { value: "53", label: "Thriller" }
 ];
 
 export const countries = [

@@ -23,6 +23,7 @@ export type MobileTitlePayload = {
   progressStatus: string | null;
   favorite: boolean;
   watched?: boolean;
+  lastWatchedAt?: string | null;
   notInterested?: boolean;
   lists: Array<{ id: string; name: string; description?: string | null; visibility?: string | null; count?: number; posters?: string[]; contains: boolean }>;
   cast: any[];
@@ -59,6 +60,7 @@ export type MobileEpisodePayload = {
   userRating: number | null;
   communityRating: number | null;
   watched: boolean;
+  lastWatchedAt?: string | null;
   reviews: any[];
   myReview: any | null;
   externalRatings: Array<{ label: string; value: string }>;
@@ -230,6 +232,11 @@ export async function fetchMobileSeason(showId: number, season: number, token?: 
 
 export async function fetchMobileProfile(token: string): Promise<any> {
   return request<any>("/api/mobile/profile", token);
+}
+
+export async function fetchMobileHistory(token: string, page = 1, type: "all" | "movies" | "episodes" = "all", query = "") {
+  const params = queryString({ page, type, q: query.trim() });
+  return request<{ items: any[]; page: number; pageSize: number; hasMore: boolean }>(`/api/mobile/history?${params}`, token);
 }
 
 export async function refreshRecommendations(token: string) {

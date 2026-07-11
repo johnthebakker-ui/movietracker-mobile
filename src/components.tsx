@@ -2,8 +2,8 @@ import { BlurView } from "expo-blur";
 import { Image as ExpoImage } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
 import type { Session } from "@supabase/supabase-js";
-import React, { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Dimensions, Image, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { ActivityIndicator, Dimensions, Image, Modal, PanResponder, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { colors, shadow } from "./theme";
 import { countries, excludeGenreOptions, genres, ratingLabel, SUPABASE_URL, titleYear, tmdbImage, userRatingLabel } from "./config";
 import type { AppTab, DiscoverFilters, MediaSummary, RecommendationFilters } from "./types";
@@ -114,6 +114,13 @@ export function BottomNav({ tab, onTab }: { tab: AppTab; onTab: (tab: AppTab) =>
 }
 
 export function Hero({ item, index, count, onOpen, onPrevious, onNext }: { item: MediaSummary | null; index?: number; count?: number; onOpen: (item: MediaSummary) => void; onPrevious?: () => void; onNext?: () => void }) {
+  const swipe = useMemo(() => PanResponder.create({
+    onMoveShouldSetPanResponder: (_, gesture) => Math.abs(gesture.dx) > 18 && Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.4,
+    onPanResponderRelease: (_, gesture) => {
+      if (gesture.dx > 55) onPrevious?.();
+      if (gesture.dx < -55) onNext?.();
+    }
+  }), [onNext, onPrevious]);
   if (!item) {
     return (
       <View style={[styles.hero, styles.heroEmpty]}>
@@ -124,7 +131,7 @@ export function Hero({ item, index, count, onOpen, onPrevious, onNext }: { item:
 
   const backdrop = tmdbImage(item.backdropPath || item.posterPath, "w780");
   return (
-    <View style={styles.hero}>
+    <View style={styles.hero} {...swipe.panHandlers}>
       {backdrop ? <RemoteImage uri={backdrop} style={StyleSheet.absoluteFill} resizeMode="cover" /> : null}
       <View style={styles.heroShade} />
       <View style={styles.heroCopy}>
