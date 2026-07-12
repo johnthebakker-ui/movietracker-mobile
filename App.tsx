@@ -2348,7 +2348,6 @@ function groupedListItems(items: MediaSummary[], groupBy: ListGroup) {
 function listFranchiseName(item: MediaSummary): { name: string; explicit: boolean } | null {
   const manual = item.franchiseGroup?.trim();
   if (manual) return { name: manual, explicit: true };
-  if (item.collectionName) return { name: item.collectionName, explicit: false };
   const title = item.title.toLowerCase().replace(/[-_]/g, " ");
   const rules: Array<[RegExp, string]> = [
     [/\bharry potter\b/i, "Harry Potter Collection"],
@@ -2357,7 +2356,7 @@ function listFranchiseName(item: MediaSummary): { name: string; explicit: boolea
     [/\blord of the rings\b|\bthe hobbit\b/i, "The Lord of the Rings Collection"],
     [/\bmaze runner\b/i, "Maze Runner Collection"],
     [/\bpirates of the caribbean\b/i, "Pirates of the Caribbean Collection"],
-    [/\bthe purge\b|\bpurge:/i, "The Purge Collection"],
+    [/\bpurge\b/i, "The Purge Collection"],
     [/\bnow you see me\b/i, "Now You See Me Collection"],
     [/\bdivergent\b|\binsurgent\b|\ballegiant\b/i, "Divergent Collection"],
     [/\bthe conjuring\b|\bannabelle\b|\bthe nun\b|\bla llorona\b/i, "The Conjuring Universe"],
@@ -2404,6 +2403,7 @@ function listFranchiseName(item: MediaSummary): { name: string; explicit: boolea
   ];
   const match = rules.find(([pattern]) => pattern.test(title));
   if (match) return { name: match[1], explicit: false };
+  if (item.collectionName) return { name: item.collectionName, explicit: false };
   return null;
 }
 
