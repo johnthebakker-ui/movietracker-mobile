@@ -57,15 +57,17 @@ export function RemoteImage({ uri, style, resizeMode = "cover" }: { uri: string;
   );
 }
 
-export function AppHeader({ session, onProfile, onSearch, onNotifications }: { session: Session | null; onProfile: () => void; onSearch: () => void; onNotifications?: () => void }) {
+export function AppHeader({ session, onProfile, onSearch, onNotifications, onHome }: { session: Session | null; onProfile: () => void; onSearch: () => void; onNotifications?: () => void; onHome?: () => void }) {
   const avatarUrl = (session?.user.user_metadata?.avatar_url || session?.user.user_metadata?.picture) as string | undefined;
 
   return (
     <View style={styles.header}>
-      <View style={styles.logoDot}>
-        <Image source={logoIcon} style={styles.logoImage} resizeMode="contain" />
-      </View>
-      <Text style={styles.logoText}>MovieTracker</Text>
+      <Pressable onPress={onHome} disabled={!onHome} style={styles.logoButton} hitSlop={8}>
+        <View style={styles.logoDot}>
+          <Image source={logoIcon} style={styles.logoImage} resizeMode="contain" />
+        </View>
+        <Text style={styles.logoText}>MovieTracker</Text>
+      </Pressable>
       <View style={styles.headerSpacer} />
       <HeaderButton icon="search-outline" onPress={onSearch} />
       <HeaderButton icon="notifications-outline" onPress={onNotifications} />
@@ -433,6 +435,7 @@ function ActionRow({ icon, label, danger, onPress }: { icon: keyof typeof Ionico
 
 export const styles = StyleSheet.create({
   header: { height: 82, paddingHorizontal: 18, paddingTop: 22, borderBottomWidth: 1, borderBottomColor: colors.line, flexDirection: "row", alignItems: "center", backgroundColor: "#080a0a" },
+  logoButton: { flexDirection: "row", alignItems: "center" },
   logoDot: { width: 42, height: 42, borderRadius: 21, backgroundColor: colors.accent, alignItems: "center", justifyContent: "center", overflow: "hidden" },
   logoImage: { width: 39, height: 39 },
   logoText: { color: colors.text, fontSize: 24, fontWeight: "900", marginLeft: 10, letterSpacing: -0.8 },

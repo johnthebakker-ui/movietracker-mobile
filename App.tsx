@@ -593,7 +593,7 @@ export default function App() {
         const season = firstRow(episode?.seasons);
         return [{
           id: row.id,
-          date: row.watched_at.slice(0, 10),
+          date: viewingDateKey(row.watched_at),
           title: media.title ?? "Unknown title",
           subtitle: episode ? `S${season?.season_number ?? "?"} E${episode.episode_number} - ${episode.name}` : "Movie watched",
           artwork: episode?.still_path ?? media.backdrop_path ?? media.poster_path ?? null,
@@ -670,10 +670,11 @@ export default function App() {
     } catch {
       // Fall back to the legacy direct Supabase loader when the site API is not deployed yet.
     }
-    const [followers, following, progressStatuses, ratings, reviews, reviewCount, favorites, lists, listCount, history, historySummary, streakEvents, watchCount] = await Promise.all([
+    const [followers, following, progressStatuses, completedCount, ratings, reviews, reviewCount, favorites, lists, listCount, history, historySummary, streakEvents, watchCount] = await Promise.all([
       supabase.from("follows").select("*", { count: "exact", head: true }).eq("following_id", userId).eq("status", "accepted"),
       supabase.from("follows").select("*", { count: "exact", head: true }).eq("follower_id", userId).eq("status", "accepted"),
       supabase.from("progress").select("status,updated_at,media(id,tmdb_id,kind,title,overview,poster_path,backdrop_path,release_date,end_date,status,vote_average,vote_count,popularity,runtime,genres,original_language,origin_countries,collection_tmdb_id,collection_name,collection_poster_path)").eq("user_id", userId).order("updated_at", { ascending: false }).limit(100),
+      supabase.from("progress").select("*", { count: "exact", head: true }).eq("user_id", userId).eq("status", "completed"),
       supabase.from("ratings").select("score,media_id").eq("user_id", userId),
       supabase.from("reviews").select("id,title,body,created_at,updated_at,media(id,tmdb_id,kind,title,overview,poster_path,backdrop_path,release_date,end_date,status,vote_average,vote_count,popularity,runtime,genres,original_language,origin_countries,collection_tmdb_id,collection_name,collection_poster_path),ratings(score)").eq("user_id", userId).order("updated_at", { ascending: false }).limit(20),
       supabase.from("reviews").select("*", { count: "exact", head: true }).eq("user_id", userId),
@@ -698,6 +699,7 @@ export default function App() {
     });
     const favoriteItemsWithRuns = favoriteItems;
     const currentWithRuns = current;
+    const completedStatusCount = completedCount.count ?? statusRows.filter((row: any) => row.status === "completed").length;
     const progressGroups = [
       { key: "completed" as const, label: "Completed", rows: statusRows.filter((row: any) => row.status === "completed") },
       { key: "active" as const, label: "In progress", rows: statusRows.filter((row: any) => row.status === "watching" || row.status === "paused") },
@@ -705,7 +707,7 @@ export default function App() {
     ].map(group => ({
       key: group.key,
       label: group.label,
-      count: group.rows.length,
+      count: group.key === "completed" ? completedStatusCount : group.rows.length,
       posters: group.rows.flatMap((row: any) => {
         const media = firstRow(row.media);
         return media?.poster_path ? [tmdbImage(media.poster_path, "w342")!] : [];
@@ -726,7 +728,7 @@ export default function App() {
       });
     });
     const genreStats = [...genreMap.values()].sort((left, right) => right.total - left.total || left.name.localeCompare(right.name)).slice(0, 12);
-    const watchedDays = [...new Set((streakEvents.data ?? []).filter((event: any) => event.watched_at).map((event: any) => event.watched_at.slice(0, 10)))].sort().reverse();
+    const watchedDays = [...new Set((streakEvents.data ?? []).filter((event: any) => event.watched_at).map((event: any) => viewingDateKey(event.watched_at)))].sort().reverse();
     const { currentStreak, longestStreak } = streaksFromDays(watchedDays);
     const historyRows = history.data ?? [];
     const historyUniqueTitles = new Set<string>();
@@ -747,7 +749,7 @@ export default function App() {
       if (!media) return [];
       const episode = firstRow(event.episodes);
       const season = firstRow(episode?.seasons);
-      const day = event.watched_at ? event.watched_at.slice(0, 10) : "unknown";
+      const day = event.watched_at ? viewingDateKey(event.watched_at) : "unknown";
       const key = event.episode_id ? `episode-${event.episode_id}` : `media-${media.tmdb_id ?? media.id}`;
       const watchNumber = remainingOccurrences.get(key) ?? 1;
       remainingOccurrences.set(key, watchNumber - 1);
@@ -788,10 +790,10 @@ export default function App() {
     const nextProfileData: ProfileData = {
       followers: followers.count ?? 0,
       following: following.count ?? 0,
-      tracked: historyUniqueTitles.size,
+      tracked: completedStatusCount,
       watchEvents: watchCount.count ?? 0,
       screenTimeHours: Math.round(screenTimeMinutes / 60),
-      historyUniqueTitles: historyUniqueTitles.size,
+      historyUniqueTitles: completedStatusCount,
       averageRating: ratingsRows.length ? (ratingsRows.reduce((sum: number, row: any) => sum + Number(row.score), 0) / ratingsRows.length).toFixed(1) : "-",
       reviewCount: reviewCount.count ?? 0,
       listCount: listCount.count ?? 0,
@@ -1183,7 +1185,7 @@ export default function App() {
     if (searchMode) {
       return (
         <>
-          <AppHeader session={headerSession} onSearch={() => undefined} onNotifications={() => openProfileView("notifications")} onProfile={() => { setSearchMode(false); openProfileView("profile"); }} />
+          <AppHeader session={headerSession} onHome={() => goTab("home")} onSearch={() => undefined} onNotifications={() => openProfileView("notifications")} onProfile={() => { setSearchMode(false); openProfileView("profile"); }} />
           <SectionTitle kicker="Across films and television" title="Search" action="Close" onAction={() => { setSearchMode(false); setSearchFeed(emptyFeed); }} />
           <SearchPanel query={searchQuery} onQuery={setSearchQuery} onSearch={() => loadSearch()} onClear={() => { setSearchQuery(""); setSearchFeed(emptyFeed); }} />
           {searchLoading ? <View style={styles.searchResultsLoading}><ActivityIndicator color={colors.accent} /><Text style={styles.searchResultsLoadingText}>Searching titles and people...</Text></View> : null}
@@ -1193,7 +1195,7 @@ export default function App() {
     if (selectedList) {
       return (
         <>
-          <AppHeader session={headerSession} onSearch={() => setSearchMode(true)} onNotifications={() => openProfileView("notifications")} onProfile={() => { setSelectedList(null); openProfileView("profile"); }} />
+          <AppHeader session={headerSession} onHome={() => goTab("home")} onSearch={() => setSearchMode(true)} onNotifications={() => openProfileView("notifications")} onProfile={() => { setSelectedList(null); openProfileView("profile"); }} />
           <ListDetailHeader
             list={selectedList}
             sort={listSort}
@@ -1216,7 +1218,7 @@ export default function App() {
     }
     return (
       <>
-        <AppHeader session={headerSession} onSearch={() => setSearchMode(true)} onNotifications={() => openProfileView("notifications")} onProfile={() => openProfileView("profile")} />
+        <AppHeader session={headerSession} onHome={() => goTab("home")} onSearch={() => setSearchMode(true)} onNotifications={() => openProfileView("notifications")} onProfile={() => openProfileView("profile")} />
         {tab === "home" ? (
           <>
             <Hero item={homeHero[heroIndex] ?? null} index={heroIndex} count={homeHero.length} onOpen={openItem} onPrevious={() => setHeroIndex(index => (index - 1 + homeHero.length) % homeHero.length)} onNext={() => setHeroIndex(index => (index + 1) % homeHero.length)} />
@@ -1241,7 +1243,7 @@ export default function App() {
             {!authReady ? (
               <EmptyPanel title="Checking your account" body="Restoring your saved MovieTracker session." />
             ) : usableSession ? (
-              <CalendarPanel mode={calendarMode} month={calendarMonth} events={calendarEvents} onMode={setCalendarMode} onMonth={setCalendarMonth} onOpen={openCalendarEvent} />
+              <CalendarPanel mode={calendarMode} month={calendarMonth} events={calendarEvents} onMode={setCalendarMode} onMonth={setCalendarMonth} onOpen={openCalendarEvent} onMenu={setActionItem} />
             ) : (
               <EmptyPanel title="Sign in for your calendar" body="The app can show upcoming episodes and watched history after you sign in." action="Go to profile" onAction={() => goTab("profile")} />
             )}
@@ -1299,7 +1301,12 @@ export default function App() {
                   else if (next === "lists") { setLibraryFilter("lists"); goTab("library"); }
                   else setProfilePanel(next);
                 }} />
-                {(profilePanel === "overview" || profilePanel === "statistics") ? <ProfileStatBand data={profileData} /> : null}
+                {(profilePanel === "overview" || profilePanel === "statistics") ? <ProfileStatBand data={profileData} onNavigate={target => {
+                  if (target === "completed") { setLibraryFilter("completed"); goTab("library"); }
+                  if (target === "history") openProfileView("history");
+                  if (target === "reviews") openProfileView("reviews");
+                  if (target === "lists") { setLibraryFilter("lists"); goTab("library"); }
+                }} /> : null}
                 {(profilePanel === "overview" || profilePanel === "history" || profilePanel === "activity") ? <ProfileHistorySection items={profileData.history} onOpen={openHistoryItem} onMenu={setActionItem} onHistory={() => openProfileView("history")} /> : null}
                 {(profilePanel === "overview" || profilePanel === "statistics") ? <ProfileProgressSection data={profileData} onLibrary={() => { setLibraryFilter("all"); goTab("library"); }} onWatching={() => { setLibraryFilter("watching"); goTab("library"); }} onOpen={openItem} onMenu={setActionItem} /> : null}
                 {(profilePanel === "overview" || profilePanel === "reviews") ? <ReviewSection reviews={profileData.reviews} onAll={() => openProfileView("reviews")} onOpen={openItem} /> : null}
@@ -1521,7 +1528,7 @@ function LibraryFilters({ value, onChange }: { value: LibraryFilter; onChange: (
   );
 }
 
-function CalendarPanel({ mode, month, events, onMode, onMonth, onOpen }: { mode: CalendarMode; month: string; events: CalendarEvent[]; onMode: (mode: CalendarMode) => void; onMonth: (month: string) => void; onOpen: (event: CalendarEvent) => void }) {
+function CalendarPanel({ mode, month, events, onMode, onMonth, onOpen, onMenu }: { mode: CalendarMode; month: string; events: CalendarEvent[]; onMode: (mode: CalendarMode) => void; onMonth: (month: string) => void; onOpen: (event: CalendarEvent) => void; onMenu: (item: MediaSummary) => void }) {
   const { cells, label } = calendarCells(month);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const eventsByDate = new Map<string, CalendarEvent[]>();
@@ -1557,7 +1564,7 @@ function CalendarPanel({ mode, month, events, onMode, onMonth, onOpen }: { mode:
           {orderedEventDays.map(([date, dayEvents]) => (
             <View key={date} style={styles.agendaDay}>
               <View style={styles.agendaHeader}><Text style={styles.agendaDate}>{formatCalendarDate(date)}</Text><Text style={styles.agendaCount}>{dayEvents.length}</Text></View>
-              {dayEvents.map(event => <AgendaRow key={event.id} event={event} onOpen={onOpen} />)}
+              {dayEvents.map(event => <AgendaRow key={event.id} event={event} onOpen={onOpen} onMenu={onMenu} />)}
             </View>
           ))}
         </View>
@@ -1568,10 +1575,10 @@ function CalendarPanel({ mode, month, events, onMode, onMonth, onOpen }: { mode:
   );
 }
 
-function AgendaRow({ event, onOpen }: { event: CalendarEvent; onOpen: (event: CalendarEvent) => void }) {
+function AgendaRow({ event, onOpen, onMenu }: { event: CalendarEvent; onOpen: (event: CalendarEvent) => void; onMenu: (item: MediaSummary) => void }) {
   const image = tmdbImage(event.artwork, "w342");
   return (
-    <Pressable onPress={() => onOpen(event)} style={styles.agendaRow}>
+    <Pressable onPress={() => onOpen(event)} onLongPress={() => event.item && onMenu(event.item)} delayLongPress={280} style={styles.agendaRow}>
       <View style={styles.agendaImage}>{image ? <RemoteImage uri={image} style={styles.posterImage} resizeMode="cover" /> : <Ionicons name="calendar-outline" size={20} color={colors.muted} />}</View>
       <View style={styles.agendaCopy}><Text style={styles.agendaTitle} numberOfLines={1}>{event.title}</Text><Text style={styles.agendaSub} numberOfLines={1}>{event.subtitle}</Text></View>
       <Ionicons name="chevron-forward" size={18} color={colors.muted} />
@@ -1613,22 +1620,22 @@ function NotificationScreen({ session, onBack }: { session: Session; onBack: () 
   </View>;
 }
 
-function ProfileStatBand({ data }: { data: ProfileData }) {
+function ProfileStatBand({ data, onNavigate }: { data: ProfileData; onNavigate?: (target: "completed" | "history" | "reviews" | "lists") => void }) {
   const stats = [
-    { icon: "film-outline" as const, value: data.tracked, label: "unique watched titles" },
-    { icon: "time-outline" as const, value: data.watchEvents, label: "watch events" },
-    { icon: "speedometer-outline" as const, value: data.averageRating, label: "average rating" },
-    { icon: "chatbox-outline" as const, value: data.reviewCount, label: "reviews" },
-    { icon: "list-outline" as const, value: data.listCount, label: "lists" }
+    { icon: "film-outline" as const, value: data.tracked, label: "unique watched titles", target: "completed" as const },
+    { icon: "time-outline" as const, value: data.watchEvents, label: "watch events", target: "history" as const },
+    { icon: "speedometer-outline" as const, value: data.averageRating, label: "average rating", target: "reviews" as const },
+    { icon: "chatbox-outline" as const, value: data.reviewCount, label: "reviews", target: "reviews" as const },
+    { icon: "list-outline" as const, value: data.listCount, label: "lists", target: "lists" as const }
   ];
   return (
     <View style={styles.profileStats}>
       {stats.map((stat, index) => (
-        <View key={stat.label} style={[styles.profileStat, index % 2 === 0 && styles.profileStatRight, index < 4 && styles.profileStatBottom]}>
+        <Pressable key={stat.label} onPress={() => onNavigate?.(stat.target)} style={[styles.profileStat, index % 2 === 0 && styles.profileStatRight, index < 4 && styles.profileStatBottom]}>
           <Ionicons name={stat.icon} size={19} color={colors.accent} />
           <Text style={styles.profileStatValue}>{stat.value}</Text>
           <Text style={styles.profileStatLabel}>{stat.label}</Text>
-        </View>
+        </Pressable>
       ))}
     </View>
   );
@@ -1791,7 +1798,8 @@ const MemoHistoryEventRow = React.memo(HistoryEventRow);
 
 function HistoryCard({ item, onOpen, onMenu }: { item: HistoryItem; onOpen: (item: HistoryItem) => void; onMenu: (item: MediaSummary) => void }) {
   const image = tmdbImage(item.artwork, "w500");
-  return <Pressable onPress={() => onOpen(item)} onLongPress={() => item.item && onMenu(item.item)} delayLongPress={280} style={styles.historyCard}><View style={styles.historyArt}>{image ? <RemoteImage uri={image} style={styles.posterImage} resizeMode="cover" /> : null}{item.rating != null ? <Text style={styles.historyRating}>{item.rating.toFixed(1)}/10</Text> : null}<Text style={styles.historyDate}>{formatShortDate(item.date)}</Text></View><Text style={styles.historyTitle} numberOfLines={1}>{item.title}</Text><Text style={styles.historySub} numberOfLines={1}>{item.subtitle}</Text></Pressable>;
+  const badgeDate = item.dateKey && item.dateKey !== "unknown" ? new Date(`${item.dateKey}T12:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : formatShortDate(item.date);
+  return <Pressable onPress={() => onOpen(item)} onLongPress={() => item.item && onMenu(item.item)} delayLongPress={280} style={styles.historyCard}><View style={styles.historyArt}>{image ? <RemoteImage uri={image} style={styles.posterImage} resizeMode="cover" /> : null}{item.rating != null ? <Text style={styles.historyRating}>{item.rating.toFixed(1)}/10</Text> : null}<Text style={styles.historyDate}>{badgeDate}</Text></View><Text style={styles.historyTitle} numberOfLines={1}>{item.title}</Text><Text style={styles.historySub} numberOfLines={1}>{item.subtitle}</Text></Pressable>;
 }
 
 function ProfileProgressSection({ data, onLibrary, onWatching, onOpen, onMenu }: { data: ProfileData; onLibrary: () => void; onWatching: () => void; onOpen: (item: MediaSummary) => void; onMenu: (item: MediaSummary) => void }) {
@@ -2316,13 +2324,28 @@ function listFranchiseName(item: MediaSummary): { name: string; explicit: boolea
   if (manual) return { name: manual, explicit: true };
   if (item.collectionName) return { name: item.collectionName, explicit: false };
   const title = item.title.toLowerCase().replace(/[-_]/g, " ");
-  if (title.includes("attack on titan")) return { name: "Attack on Titan Collection", explicit: true };
-  if (title.includes("chainsaw man")) return { name: "Chainsaw Man Collection", explicit: true };
-  if ((title.includes("avatar") && title.includes("last airbender")) || title.includes("legend of korra")) return { name: "Avatar: The Last Airbender Collection", explicit: true };
-  if (title.includes("wreck it ralph") || title.includes("ralph breaks the internet")) return { name: "Wreck-It Ralph Collection", explicit: true };
-  if (title.includes("incredibles")) return { name: "The Incredibles Collection", explicit: true };
-  if (title.includes("ice age")) return { name: "Ice Age Collection", explicit: true };
-  if (title.includes("madagascar")) return { name: "Madagascar Collection", explicit: true };
+  const rules: Array<[RegExp, string]> = [
+    [/\bharry potter\b/i, "Harry Potter Collection"],
+    [/\bplanet of the apes\b/i, "Planet of the Apes Collection"],
+    [/\bhunger games\b|\bballad of songbirds\b|\bsunrise on the reaping\b/i, "The Hunger Games Collection"],
+    [/\blord of the rings\b|\bthe hobbit\b/i, "The Lord of the Rings Collection"],
+    [/\bmaze runner\b/i, "Maze Runner Collection"],
+    [/\bpirates of the caribbean\b/i, "Pirates of the Caribbean Collection"],
+    [/\bthe purge\b|\bpurge:/i, "The Purge Collection"],
+    [/\bnow you see me\b/i, "Now You See Me Collection"],
+    [/\bdivergent\b|\binsurgent\b|\ballegiant\b/i, "Divergent Collection"],
+    [/\bthe conjuring\b|\bannabelle\b|\bthe nun\b/i, "The Conjuring Universe"],
+    [/\bsaw\b|\bjigsaw\b/i, "Saw Collection"],
+    [/\bavatar\b.*\b(last airbender|legend of aang)\b|\blegend of korra\b/i, "Avatar: The Last Airbender Collection"],
+    [/\battack on titan\b/i, "Attack on Titan Collection"],
+    [/\bchainsaw man\b/i, "Chainsaw Man Collection"],
+    [/\bwreck it ralph\b|\bralph breaks the internet\b/i, "Wreck-It Ralph Collection"],
+    [/\bincredibles\b/i, "The Incredibles Collection"],
+    [/\bice age\b/i, "Ice Age Collection"],
+    [/\bmadagascar\b/i, "Madagascar Collection"]
+  ];
+  const match = rules.find(([pattern]) => pattern.test(title));
+  if (match) return { name: match[1], explicit: false };
   return null;
 }
 
@@ -2683,6 +2706,8 @@ function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity, on
   const [communityRating, setCommunityRating] = useState<number | null>(null);
   const [reviews, setReviews] = useState<ReviewItem[]>([]);
   const [myReview, setMyReview] = useState<ReviewItem | null>(null);
+  const [episodeExternalRatings, setEpisodeExternalRatings] = useState<Array<{ label: string; value: string }>>([]);
+  const [episodeCompanies, setEpisodeCompanies] = useState<DetailCompany[]>([]);
   const [episodeRecommendations, setEpisodeRecommendations] = useState<MediaSummary[]>([]);
   const [busy, setBusy] = useState(false);
   const [ratingSheetVisible, setRatingSheetVisible] = useState(false);
@@ -2707,6 +2732,8 @@ function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity, on
       setCommunityRating(mobileEpisode.communityRating ?? null);
       setReviews(mobileEpisode.reviews ?? []);
       setMyReview(mobileEpisode.myReview ?? null);
+      setEpisodeExternalRatings(mobileEpisode.externalRatings ?? []);
+      setEpisodeCompanies(mobileEpisode.companies ?? []);
       setEpisodeRecommendations(dedupeMedia(mobileEpisode.recommendations ?? []).filter(recommendation => !(recommendation.kind === mobileEpisode.show.kind && recommendation.id === mobileEpisode.show.id)));
       return;
     }
@@ -2722,6 +2749,7 @@ function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity, on
     fetchWebsiteTitleMetadata(show.kind, show.id).then(metadata => {
       const recommendations = dedupeMedia(metadata.recommendations ?? []).filter(recommendation => !(recommendation.kind === show.kind && recommendation.id === show.id));
       setEpisodeRecommendations(recommendations);
+      setEpisodeExternalRatings(metadata.ratings ?? []);
     }).catch(() => setEpisodeRecommendations([]));
     if (episodeId) {
       const reviewSelect = "id,title,body,created_at,updated_at,user_id,rating_id,contains_spoilers,ratings(score)";
@@ -2802,6 +2830,11 @@ function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity, on
   const videos = (episode?.raw?.videos?.results ?? []).filter((video: any) => video.site === "YouTube");
   const trailer = videos.find((video: any) => video.type === "Trailer") ?? videos[0];
   const seasonTarget: DetailSeason = { id: season?.id, seasonNumber: target.seasonNumber, name: season?.name || `Season ${target.seasonNumber}`, overview: null, posterPath: null, airDate: null, episodeCount: null };
+  const episodeRatingSources = [
+    ...(communityRating != null ? [{ label: "MovieTracker", value: `${communityRating.toFixed(1)}/10` }] : []),
+    ...(episode?.vote_average ? [{ label: "TMDB", value: `${Number(episode.vote_average).toFixed(1)}/10` }] : []),
+    ...episodeExternalRatings.filter(source => source.label.toLowerCase() !== "tmdb")
+  ];
 
   async function saveEpisodeRating(score: number | null) {
     if (!session?.user.id || !supabase || !episodeId) return Alert.alert("Unavailable", "This episode is not ready for rating yet.");
@@ -2856,7 +2889,7 @@ function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity, on
           <Text style={styles.detailKicker}>Season {target.seasonNumber} · Episode {target.episodeNumber}</Text>
           <Text style={styles.detailTitleV2}>{title}</Text>
           <Text style={styles.detailMeta}>{show.title} · {episode?.air_date ?? target.airDate ?? "Air date TBA"}{episode?.runtime ? ` · ${episode.runtime} min` : ""}</Text>
-          <View style={styles.ratingSourceRow}>{communityRating != null ? <RatingSource label="MovieTracker" value={`${communityRating.toFixed(1)}/10`} /> : null}{episode?.vote_average ? <RatingSource label="TMDB" value={`${Number(episode.vote_average).toFixed(1)}/10`} /> : null}</View>
+          <View style={styles.ratingSourceRow}>{episodeRatingSources.map(source => <RatingSource key={source.label} label={source.label} value={source.value} />)}</View>
           <Text style={styles.detailOverview}>{episode?.overview || "No description has been released for this episode yet."}</Text>
           <View style={styles.detailQuickActions}>
             <Pressable onPress={() => onOpen(show)} style={styles.quickAction}><Ionicons name="albums-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>Open show</Text></Pressable>
@@ -2874,6 +2907,7 @@ function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity, on
         <WatchLogSheet visible={watchSheetVisible} title={`${show.title} - ${title}`} releaseDate={episode?.air_date ?? target.airDate ?? null} runtime={episode?.runtime ?? null} busy={busy} watched={watched} onClose={() => setWatchSheetVisible(false)} onSave={saveEpisodeWatchLog} />
         {images.length || trailer ? <TitleMediaPreview trailer={trailer} images={images} /> : null}
         {cast.length ? <CastSection cast={cast} onOpen={onOpenEntity} /> : null}
+        {episodeCompanies.length ? <CompanySection companies={episodeCompanies} onOpen={onOpenEntity} /> : null}
         {session?.user.id && episodeId ? <ReviewComposerPanel existingReview={myReview} currentRating={userRating} busy={busy} onSubmit={saveEpisodeReview} /> : null}
         <DetailReviewsSection reviews={reviews} onOpen={onOpen} />
         {episodeRecommendations.length ? <DetailMediaSection kicker="If this stayed with you" title="More like this" items={episodeRecommendations} onOpen={onOpen} /> : null}
@@ -4161,6 +4195,13 @@ function localDateKey(date = new Date()) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
+function viewingDateKey(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "unknown";
+  if (date.getHours() < 3) date.setDate(date.getDate() - 1);
+  return localDateKey(date);
+}
+
 function fromDbMedia(row: any, ratingByMedia?: Map<any, number>): MediaSummary {
   return {
     id: Number(row.tmdb_id),
@@ -4636,7 +4677,7 @@ function normalizeHistoryItemTime(item: HistoryItem): HistoryItem {
   if (!item.date) return { ...item, dateKey: "unknown", dateTitle: "Unknown date", dateSubtitle: "Watched date not specified", timeLabel: "No date" };
   const value = new Date(item.date);
   if (Number.isNaN(value.getTime())) return item;
-  const dateKey = localDateKey(value);
+  const dateKey = viewingDateKey(item.date);
   return { ...item, dateKey, dateTitle: formatHistoryDay(dateKey), dateSubtitle: formatHistoryMonth(dateKey), timeLabel: formatHistoryTime(item.date) };
 }
 

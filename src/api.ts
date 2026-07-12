@@ -64,6 +64,7 @@ export type MobileEpisodePayload = {
   reviews: any[];
   myReview: any | null;
   externalRatings: Array<{ label: string; value: string }>;
+  companies?: any[];
   recommendations: MediaSummary[];
 };
 
