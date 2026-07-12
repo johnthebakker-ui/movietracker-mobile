@@ -2817,6 +2817,8 @@ function ActionRow({ icon, label, danger, onPress }: { icon: keyof typeof Ionico
 
 function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity, onOpenSeason, onChanged }: { target: EpisodeTarget; session: Session | null; onBack: () => void; onOpen: (item: MediaSummary) => void; onOpenEntity: (entity: EntityTarget) => void; onOpenSeason: (season: DetailSeason) => void; onChanged?: (reason?: ActionRefreshReason) => Promise<void> }) {
   const [episode, setEpisode] = useState<any | null>(null);
+  const [episodeLoading, setEpisodeLoading] = useState(true);
+  const [episodeLoadError, setEpisodeLoadError] = useState<string | null>(null);
   const [watched, setWatched] = useState(false);
   const [lastWatchedAt, setLastWatchedAt] = useState<string | null>(null);
   const [userRating, setUserRating] = useState<number | null>(null);
@@ -2832,23 +2834,9 @@ function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity, on
   const art = tmdbImage(episode?.still_path ?? target.artwork ?? target.show.backdropPath ?? target.show.posterPath, "w780");
 
   const loadEpisode = useCallback(async () => {
-    setEpisode((current: any | null) => current ?? {
-      id: target.episodeId,
-      name: target.title ?? `Episode ${target.episodeNumber}`,
-      overview: null,
-      episode_number: target.episodeNumber,
-      episodeNumber: target.episodeNumber,
-      air_date: target.airDate ?? null,
-      airDate: target.airDate ?? null,
-      still_path: target.artwork ?? null,
-      runtime: null,
-      vote_average: null,
-      seasons: [{
-        season_number: target.seasonNumber,
-        seasonNumber: target.seasonNumber,
-        media: [target.show]
-      }]
-    });
+    setEpisode(null);
+    setEpisodeLoading(true);
+    setEpisodeLoadError(null);
     const mobileEpisode = await fetchMobileEpisode(target.show.id, target.seasonNumber, target.episodeNumber, session?.access_token).catch(() => null);
     if (mobileEpisode) {
       setEpisode({
@@ -2869,9 +2857,14 @@ function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity, on
       setEpisodeExternalRatings(mobileEpisode.externalRatings ?? []);
       setEpisodeCompanies(mobileEpisode.companies ?? []);
       setEpisodeRecommendations(dedupeMedia(mobileEpisode.recommendations ?? []).filter(recommendation => !(recommendation.kind === mobileEpisode.show.kind && recommendation.id === mobileEpisode.show.id)));
+      setEpisodeLoading(false);
       return;
     }
-    if (!supabase) return;
+    if (!supabase) {
+      setEpisodeLoadError("Episode details did not load. Please try again.");
+      setEpisodeLoading(false);
+      return;
+    }
     const query = supabase.from("episodes").select("id,name,overview,episode_number,air_date,still_path,runtime,vote_average,credits,raw,seasons(season_number,name,media_id,media(*))");
     const result = target.episodeId
       ? await query.eq("id", target.episodeId).maybeSingle()
@@ -2906,10 +2899,14 @@ function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity, on
         setLastWatchedAt(data?.watched_at ?? null);
       }
     }
+    setEpisodeLoading(false);
   }, [session?.access_token, session?.user.id, target.episodeId, target.episodeNumber, target.seasonNumber, target.show]);
 
   useEffect(() => {
-    loadEpisode().catch(() => undefined);
+    loadEpisode().catch(() => {
+      setEpisodeLoadError("Episode details did not load. Please try again.");
+      setEpisodeLoading(false);
+    });
   }, [loadEpisode]);
 
   async function withEpisodeBusy(work: () => Promise<void>, reason: ActionRefreshReason = "watch") {
@@ -3011,6 +3008,37 @@ function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity, on
       if (result.error) throw result.error;
     });
     Alert.alert(myReview ? "Review updated" : "Review published", "Your episode review is saved.");
+  }
+
+  if (episodeLoading && !episode) {
+    return (
+      <View style={styles.detailLoadingScreen}>
+        {art ? <RemoteImage uri={art} style={StyleSheet.absoluteFill} resizeMode="cover" /> : null}
+        <View style={styles.detailShadeV2} />
+        <Pressable onPress={onBack} style={styles.backButton} hitSlop={10}><Ionicons name="chevron-back" size={22} color={colors.text} /><Text style={styles.backText}>Back</Text></Pressable>
+        <View style={styles.detailLoadingCard}>
+          <ActivityIndicator color={colors.accent} size="large" />
+          <Text style={styles.detailLoadingTitle}>Loading episode details</Text>
+          <Text style={styles.detailLoadingText}>Getting ratings, description, watch history and episode extras...</Text>
+        </View>
+      </View>
+    );
+  }
+
+  if (episodeLoadError && !episode) {
+    return (
+      <View style={styles.detailLoadingScreen}>
+        {art ? <RemoteImage uri={art} style={StyleSheet.absoluteFill} resizeMode="cover" /> : null}
+        <View style={styles.detailShadeV2} />
+        <Pressable onPress={onBack} style={styles.backButton} hitSlop={10}><Ionicons name="chevron-back" size={22} color={colors.text} /><Text style={styles.backText}>Back</Text></Pressable>
+        <View style={styles.detailLoadingCard}>
+          <Ionicons name="warning-outline" size={32} color={colors.accent} />
+          <Text style={styles.detailLoadingTitle}>Episode did not load</Text>
+          <Text style={styles.detailLoadingText}>{episodeLoadError}</Text>
+          <Pressable onPress={() => loadEpisode().catch(() => undefined)} style={styles.trailerButton}><Text style={styles.trailerButtonText}>Try again</Text></Pressable>
+        </View>
+      </View>
+    );
   }
 
   return (
@@ -3163,6 +3191,8 @@ function EntityScreen({ target, session, onBack, onOpen, onMenu }: { target: Ent
 
 function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSeason, onOpenAllSeasons, onHide, onChanged }: { item: MediaSummary; session: Session | null; onBack: () => void; onOpen: (item: MediaSummary) => void; onOpenEntity: (entity: EntityTarget) => void; onOpenSeason: (season: DetailSeason) => void; onOpenAllSeasons: (seasons: DetailSeason[]) => void; onHide: (item: MediaSummary) => void; onChanged: (reason?: ActionRefreshReason) => Promise<void> }) {
   const [detail, setDetail] = useState<DetailData | null>(null);
+  const [detailLoading, setDetailLoading] = useState(true);
+  const [detailLoadError, setDetailLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [listSheetVisible, setListSheetVisible] = useState(false);
   const [ratingSheetVisible, setRatingSheetVisible] = useState(false);
@@ -3186,40 +3216,9 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
   ];
 
   const loadDetail = useCallback(async () => {
-    const rawRuntime = Number(item.raw?.runtime ?? item.raw?.episode_run_time?.[0] ?? 0) || null;
-    const preview: DetailData = {
-      dbId: null,
-      overview: item.overview || null,
-      tagline: null,
-      releaseDate: item.releaseDate ?? null,
-      endDate: item.endDate ?? null,
-      genres: item.genres ?? [],
-      voteAverage: item.voteAverage ?? null,
-      runtime: rawRuntime,
-      originalLanguage: item.originalLanguage ?? null,
-      status: item.status ?? null,
-      userRating: item.userRating ?? null,
-      communityRating: trustedCommunityRating(item),
-      externalRatings: [],
-      pendingExternalRatingSources: [],
-      progressStatus: null,
-      watched: false,
-      lastWatchedAt: null,
-      favorite: false,
-      lists: [],
-      cast: [],
-      crew: [],
-      companies: item.companies ?? [],
-      videos: [],
-      images: [],
-      seasons: [],
-      reviews: [],
-      myReview: null,
-      collectionName: item.collectionName ?? null,
-      collection: [],
-      recommendations: []
-    };
-    setDetail(preview);
+    setDetail(null);
+    setDetailLoading(true);
+    setDetailLoadError(null);
     const applyMobileDetail = (mobileDetail: any) => {
       const next: DetailData = {
         dbId: mobileDetail.dbId,
@@ -3277,22 +3276,21 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
       try {
         const parsed = JSON.parse(cached) as { detail?: any; savedAt?: number };
         if (parsed.detail) {
-          applyMobileDetail(parsed.detail);
-          if (Date.now() - (parsed.savedAt ?? 0) < 300000) return;
+          if (Date.now() - (parsed.savedAt ?? 0) < 300000) {
+            applyMobileDetail(parsed.detail);
+            setDetailLoading(false);
+            return;
+          }
         }
       } catch { /* Ignore stale detail cache. */ }
     }
-    const coreDetailPromise = fetchMobileTitle(item.kind, item.id, session?.access_token, "core").catch(() => null);
-    const fullDetailPromise = fetchMobileTitle(item.kind, item.id, session?.access_token, "full").catch(() => null);
-    const coreDetail = await coreDetailPromise;
-    if (coreDetail) applyMobileDetail(coreDetail);
-    const mobileDetail = await fullDetailPromise;
+    const mobileDetail = await fetchMobileTitle(item.kind, item.id, session?.access_token).catch(() => null);
     if (mobileDetail) {
       applyMobileDetail(mobileDetail);
       await AsyncStorage.setItem(detailCacheKey, JSON.stringify({ detail: mobileDetail, savedAt: Date.now() })).catch(() => undefined);
+      setDetailLoading(false);
       return;
     }
-    if (coreDetail) return;
     const [mediaResult, websiteMetadata] = await Promise.all([
       supabase ? supabase.from("media").select("*").eq("tmdb_id", item.id).eq("kind", item.kind).maybeSingle() : Promise.resolve({ data: null }),
       fetchWebsiteTitleMetadata(item.kind, item.id).catch(() => ({ overview: "", ratings: [], collectionTitle: undefined, collectionItems: [], recommendations: [] }))
@@ -3302,6 +3300,7 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
     const media = mediaResult.data;
     if (!media) {
       setDetail({ dbId: null, overview: websiteOverview || item.overview || null, tagline: null, releaseDate: item.releaseDate ?? null, endDate: item.endDate ?? null, genres: item.genres ?? [], voteAverage: item.voteAverage ?? null, runtime: null, originalLanguage: item.originalLanguage ?? null, status: item.status ?? null, userRating: item.userRating ?? null, communityRating: trustedCommunityRating(item), externalRatings, pendingExternalRatingSources: [], progressStatus: null, watched: false, favorite: false, lists: [], cast: [], crew: [], companies: [], videos: [], images: [], seasons: [], reviews: [], myReview: null, collectionName: item.collectionName ?? null, collection: [], recommendations: [] });
+      setDetailLoading(false);
       return;
     }
     const client = supabase!;
@@ -3383,10 +3382,14 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
       collection,
       recommendations
     });
+    setDetailLoading(false);
   }, [detailCacheKey, item, session?.access_token]);
 
   useEffect(() => {
-    loadDetail().catch(() => undefined);
+    loadDetail().catch(() => {
+      setDetailLoadError("Details did not load. Please try again.");
+      setDetailLoading(false);
+    });
   }, [loadDetail]);
 
   async function withBusy(work: () => Promise<void>, reason: ActionRefreshReason = "profile") {
@@ -3502,6 +3505,37 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
       { text: "Cancel", style: "cancel" },
       { text: "Remove", style: "destructive", onPress: () => void performToggleDetailList(list) }
     ]);
+  }
+
+  if (detailLoading && !detail) {
+    return (
+      <View style={styles.detailLoadingScreen}>
+        {backdrop ? <RemoteImage uri={backdrop} style={StyleSheet.absoluteFill} resizeMode="cover" /> : null}
+        <View style={styles.detailShadeV2} />
+        <Pressable onPress={onBack} style={styles.backButton} hitSlop={10}><Ionicons name="chevron-back" size={22} color={colors.text} /><Text style={styles.backText}>Back</Text></Pressable>
+        <View style={styles.detailLoadingCard}>
+          <ActivityIndicator color={colors.accent} size="large" />
+          <Text style={styles.detailLoadingTitle}>Loading full details</Text>
+          <Text style={styles.detailLoadingText}>Getting ratings, description, lists and your status...</Text>
+        </View>
+      </View>
+    );
+  }
+
+  if (detailLoadError && !detail) {
+    return (
+      <View style={styles.detailLoadingScreen}>
+        {backdrop ? <RemoteImage uri={backdrop} style={StyleSheet.absoluteFill} resizeMode="cover" /> : null}
+        <View style={styles.detailShadeV2} />
+        <Pressable onPress={onBack} style={styles.backButton} hitSlop={10}><Ionicons name="chevron-back" size={22} color={colors.text} /><Text style={styles.backText}>Back</Text></Pressable>
+        <View style={styles.detailLoadingCard}>
+          <Ionicons name="warning-outline" size={32} color={colors.accent} />
+          <Text style={styles.detailLoadingTitle}>Details did not load</Text>
+          <Text style={styles.detailLoadingText}>{detailLoadError}</Text>
+          <Pressable onPress={() => loadDetail().catch(() => undefined)} style={styles.trailerButton}><Text style={styles.trailerButtonText}>Try again</Text></Pressable>
+        </View>
+      </View>
+    );
   }
 
   return (
@@ -5239,6 +5273,10 @@ const styles = StyleSheet.create({
   entitySubtitle: { color: colors.muted, fontSize: 15, lineHeight: 22, marginTop: 8 },
   entityLoadMore: { minHeight: 70, alignItems: "center", justifyContent: "center", paddingBottom: 18 },
   entityLoadMoreText: { color: colors.muted, fontSize: 13, fontWeight: "800" },
+  detailLoadingScreen: { flex: 1, minHeight: 760, backgroundColor: colors.bg, justifyContent: "center", overflow: "hidden", paddingHorizontal: 22 },
+  detailLoadingCard: { borderRadius: 26, borderWidth: 1, borderColor: colors.line, backgroundColor: "rgba(13,17,17,0.86)", alignItems: "center", gap: 10, paddingHorizontal: 24, paddingVertical: 30 },
+  detailLoadingTitle: { color: colors.text, fontFamily: "serif", fontSize: 30, fontWeight: "700", marginTop: 6, textAlign: "center" },
+  detailLoadingText: { color: colors.muted, fontSize: 14, fontWeight: "800", lineHeight: 20, textAlign: "center" },
   detailHeroV2: { minHeight: 760, backgroundColor: colors.panel, justifyContent: "flex-end", overflow: "hidden" },
   detailShadeV2: { ...StyleSheet.absoluteFill, backgroundColor: "rgba(0,0,0,0.48)" },
   detailHeroCopyV2: { padding: 22, paddingTop: 150 },
