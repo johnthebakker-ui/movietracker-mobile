@@ -20,6 +20,7 @@ export type MobileTitlePayload = {
   userRating: number | null;
   communityRating: number | null;
   externalRatings: Array<{ label: string; value: string }>;
+  pendingExternalRatingSources?: string[];
   progressStatus: string | null;
   favorite: boolean;
   watched?: boolean;

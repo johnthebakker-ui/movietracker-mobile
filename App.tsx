@@ -107,6 +107,7 @@ type DetailData = {
   userRating: number | null;
   communityRating: number | null;
   externalRatings: Array<{ label: string; value: string }>;
+  pendingExternalRatingSources?: string[];
   progressStatus: string | null;
   watched: boolean;
   lastWatchedAt?: string | null;
@@ -3174,10 +3175,14 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
   const detailYearItem = { ...item, releaseDate: detail?.releaseDate ?? item.releaseDate, endDate: detail?.endDate ?? item.endDate, status: detail?.status ?? item.status };
   const detailGenres = detail?.genres?.length ? detail.genres : item.genres ?? [];
   const detailOverview = detail?.overview || item.overview || "No overview has been published yet.";
+  const loadedExternalRatingLabels = new Set((detail?.externalRatings ?? []).map(source => source.label.toLowerCase()));
   const ratingSources = [
     { label: "MovieTracker", value: detail?.communityRating != null ? `${detail.communityRating.toFixed(1)}/10` : "—/10" },
     { label: "TMDB", value: detail?.voteAverage != null ? `${detail.voteAverage.toFixed(1)}/10` : item.voteAverage ? `${item.voteAverage.toFixed(1)}/10` : "New" },
-    ...(detail?.externalRatings ?? [])
+    ...(detail?.externalRatings ?? []),
+    ...((detail?.pendingExternalRatingSources ?? [])
+      .filter(label => !loadedExternalRatingLabels.has(label.toLowerCase()))
+      .map(label => ({ label, value: "Loading", loading: true })))
   ];
 
   const loadDetail = useCallback(async () => {
@@ -3196,6 +3201,7 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
       userRating: item.userRating ?? null,
       communityRating: trustedCommunityRating(item),
       externalRatings: [],
+      pendingExternalRatingSources: [],
       progressStatus: null,
       watched: false,
       lastWatchedAt: null,
@@ -3229,6 +3235,7 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
         userRating: mobileDetail.userRating ?? item.userRating ?? null,
         communityRating: mobileDetail.communityRating ?? trustedCommunityRating(item),
         externalRatings: mobileDetail.externalRatings ?? [],
+        pendingExternalRatingSources: mobileDetail.pendingExternalRatingSources ?? [],
         progressStatus: mobileDetail.progressStatus ?? null,
         watched: Boolean(mobileDetail.watched ?? mobileDetail.progressStatus === "completed"),
         lastWatchedAt: mobileDetail.lastWatchedAt ?? null,
@@ -3294,7 +3301,7 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
     const externalRatings = websiteMetadata.ratings;
     const media = mediaResult.data;
     if (!media) {
-      setDetail({ dbId: null, overview: websiteOverview || item.overview || null, tagline: null, releaseDate: item.releaseDate ?? null, endDate: item.endDate ?? null, genres: item.genres ?? [], voteAverage: item.voteAverage ?? null, runtime: null, originalLanguage: item.originalLanguage ?? null, status: item.status ?? null, userRating: item.userRating ?? null, communityRating: trustedCommunityRating(item), externalRatings, progressStatus: null, watched: false, favorite: false, lists: [], cast: [], crew: [], companies: [], videos: [], images: [], seasons: [], reviews: [], myReview: null, collectionName: item.collectionName ?? null, collection: [], recommendations: [] });
+      setDetail({ dbId: null, overview: websiteOverview || item.overview || null, tagline: null, releaseDate: item.releaseDate ?? null, endDate: item.endDate ?? null, genres: item.genres ?? [], voteAverage: item.voteAverage ?? null, runtime: null, originalLanguage: item.originalLanguage ?? null, status: item.status ?? null, userRating: item.userRating ?? null, communityRating: trustedCommunityRating(item), externalRatings, pendingExternalRatingSources: [], progressStatus: null, watched: false, favorite: false, lists: [], cast: [], crew: [], companies: [], videos: [], images: [], seasons: [], reviews: [], myReview: null, collectionName: item.collectionName ?? null, collection: [], recommendations: [] });
       return;
     }
     const client = supabase!;
@@ -3359,6 +3366,7 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
       userRating: typeof userRating.data?.score === "number" ? Number(userRating.data.score) : item.userRating ?? null,
       communityRating: communityRows.length ? communityRows.reduce((sum: number, row: any) => sum + Number(row.score), 0) / communityRows.length : trustedCommunityRating(item),
       externalRatings,
+      pendingExternalRatingSources: [],
       progressStatus: progress.data?.status ?? null,
       watched: progress.data?.status === "completed",
       favorite: Boolean(favorite.data),
@@ -3507,7 +3515,7 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
           <Text style={styles.detailKicker}>{item.kind === "show" ? "Television series" : "Film"}</Text>
           <Text style={styles.detailTitleV2}>{item.title}</Text>
           <Text style={styles.detailMeta}>{titleYear(detailYearItem)} · {detail?.runtime ? minutesToLabel(detail.runtime) : item.kind === "show" ? "Series" : "Film"} · {detail?.status ?? item.status ?? "Released"}</Text>
-          <View style={styles.ratingSourceRow}>{ratingSources.map(source => <RatingSource key={`${source.label}-${source.value}`} label={source.label} value={source.value} />)}</View>
+          <View style={styles.ratingSourceRow}>{ratingSources.map(source => <RatingSource key={`${source.label}-${source.value}`} label={source.label} value={source.value} loading={"loading" in source && Boolean(source.loading)} />)}</View>
           {detail?.tagline ? <Text style={styles.detailTagline}>"{detail.tagline}"</Text> : null}
           <Text style={styles.detailOverview}>{detailOverview}</Text>
           {trailer ? <Pressable style={styles.trailerButton} onPress={() => WebBrowser.openBrowserAsync(`https://www.youtube.com/watch?v=${trailer.key}`)}><Ionicons name="play" size={17} color={colors.text} /><Text style={styles.trailerButtonText}>View trailer</Text></Pressable> : null}
@@ -3598,8 +3606,8 @@ function DetailListSheet({ visible, lists, busy, onClose, onToggle }: { visible:
   );
 }
 
-function RatingSource({ label, value }: { label: string; value: string }) {
-  return <View style={styles.ratingSource}><Text style={styles.ratingSourceLabel}>{label}</Text><Text style={styles.ratingSourceValue}>{value}</Text></View>;
+function RatingSource({ label, value, loading = false }: { label: string; value: string; loading?: boolean }) {
+  return <View style={[styles.ratingSource, loading && styles.ratingSourceLoading]}><Text style={styles.ratingSourceLabel}>{label}</Text><View style={styles.ratingSourceValueRow}>{loading ? <ActivityIndicator size="small" color={colors.accent} /> : null}<Text style={[styles.ratingSourceValue, loading && styles.ratingSourceValueLoading]}>{value}</Text></View></View>;
 }
 
 function mapDetailReview(review: any): ReviewItem[] {
@@ -5238,8 +5246,11 @@ const styles = StyleSheet.create({
   detailTitleV2: { color: colors.text, fontFamily: "serif", fontSize: 46, lineHeight: 48, marginTop: 8 },
   ratingSourceRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 18 },
   ratingSource: { minWidth: 112, borderRadius: 14, borderWidth: 1, borderColor: "rgba(255,255,255,0.18)", backgroundColor: "rgba(0,0,0,0.34)", padding: 12 },
+  ratingSourceLoading: { borderColor: "rgba(255,84,57,0.32)", backgroundColor: "rgba(0,0,0,0.24)" },
   ratingSourceLabel: { color: colors.muted, fontSize: 11, fontWeight: "900", letterSpacing: 1.4, textTransform: "uppercase" },
-  ratingSourceValue: { color: colors.text, fontSize: 20, fontWeight: "900", marginTop: 4 },
+  ratingSourceValue: { color: colors.text, fontSize: 20, fontWeight: "900", marginTop: 0 },
+  ratingSourceValueRow: { minHeight: 28, flexDirection: "row", alignItems: "center", gap: 8, marginTop: 4 },
+  ratingSourceValueLoading: { color: colors.muted, fontSize: 16, marginTop: 0 },
   detailTagline: { color: colors.text, fontFamily: "serif", fontSize: 24, fontStyle: "italic", lineHeight: 32, marginTop: 24 },
   trailerButton: { alignSelf: "flex-start", marginTop: 22, height: 58, borderRadius: 26, backgroundColor: colors.accent, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 20 },
   trailerButtonText: { color: colors.text, fontSize: 17, fontWeight: "900" },
