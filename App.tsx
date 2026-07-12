@@ -1212,6 +1212,7 @@ export default function App() {
           <AppHeader session={headerSession} onHome={() => goTab("home")} onSearch={() => setSearchMode(true)} onNotifications={() => openProfileView("notifications")} onProfile={() => { setSelectedList(null); openProfileView("profile"); }} />
           <ListDetailHeader
             list={selectedList}
+            loadedCount={selectedListFeed.items.length}
             sort={listSort}
             groupBy={listGroup}
             onSort={() => setPicker({ title: "Sort titles", value: listSort, options: listSortOptions, onPick: value => setListSort(value as ListSort) })}
@@ -1495,8 +1496,9 @@ function DiscoverHeading({ view, onForYou }: { view?: string; onForYou: () => vo
   );
 }
 
-function ListDetailHeader({ list, sort, groupBy, onSort, onGroupBy, onBack }: { list: UserList; sort: ListSort; groupBy: ListGroup; onSort: () => void; onGroupBy: (value: ListGroup) => void; onBack: () => void }) {
+function ListDetailHeader({ list, loadedCount, sort, groupBy, onSort, onGroupBy, onBack }: { list: UserList; loadedCount?: number; sort: ListSort; groupBy: ListGroup; onSort: () => void; onGroupBy: (value: ListGroup) => void; onBack: () => void }) {
   const sortLabel = listSortOptions.find(option => option.value === sort)?.label ?? "Name A-Z";
+  const displayCount = loadedCount ?? list.count;
   return (
     <View style={styles.listDetailHeader}>
       <Pressable onPress={onBack} style={styles.backChip}><Ionicons name="chevron-back" size={18} color={colors.text} /><Text style={styles.backChipText}>Lists</Text></Pressable>
@@ -1504,7 +1506,7 @@ function ListDetailHeader({ list, sort, groupBy, onSort, onGroupBy, onBack }: { 
       <Text style={styles.listVisibility}>{list.visibility ?? "private"}</Text>
       <Text style={styles.listDetailTitle}>{list.name}</Text>
       <Text style={styles.listDetailBody}>{list.description || "A hand-picked collection."}</Text>
-      <Text style={styles.listCount}>{list.count} {list.count === 1 ? "title" : "titles"}</Text>
+      <Text style={styles.listCount}>{displayCount} {displayCount === 1 ? "title" : "titles"}</Text>
       <View style={styles.listDetailTools}>
         <Pressable onPress={onSort} style={styles.groupChip}>
           <Ionicons name="swap-vertical-outline" size={15} color={colors.muted} />
