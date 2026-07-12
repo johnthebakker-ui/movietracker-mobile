@@ -3275,12 +3275,17 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
         }
       } catch { /* Ignore stale detail cache. */ }
     }
-    const mobileDetail = await fetchMobileTitle(item.kind, item.id, session?.access_token).catch(() => null);
+    const coreDetailPromise = fetchMobileTitle(item.kind, item.id, session?.access_token, "core").catch(() => null);
+    const fullDetailPromise = fetchMobileTitle(item.kind, item.id, session?.access_token, "full").catch(() => null);
+    const coreDetail = await coreDetailPromise;
+    if (coreDetail) applyMobileDetail(coreDetail);
+    const mobileDetail = await fullDetailPromise;
     if (mobileDetail) {
       applyMobileDetail(mobileDetail);
       await AsyncStorage.setItem(detailCacheKey, JSON.stringify({ detail: mobileDetail, savedAt: Date.now() })).catch(() => undefined);
       return;
     }
+    if (coreDetail) return;
     const [mediaResult, websiteMetadata] = await Promise.all([
       supabase ? supabase.from("media").select("*").eq("tmdb_id", item.id).eq("kind", item.kind).maybeSingle() : Promise.resolve({ data: null }),
       fetchWebsiteTitleMetadata(item.kind, item.id).catch(() => ({ overview: "", ratings: [], collectionTitle: undefined, collectionItems: [], recommendations: [] }))

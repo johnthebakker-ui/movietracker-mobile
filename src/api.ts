@@ -210,8 +210,9 @@ export async function disconnectTrakt(token: string): Promise<{ success: boolean
   return request("/api/mobile/integrations/trakt/disconnect", token, { method: "POST" });
 }
 
-export async function fetchMobileTitle(kind: MediaSummary["kind"], id: number, token?: string) {
-  return request<MobileTitlePayload>(`/api/mobile/title/${kind}/${id}`, token);
+export async function fetchMobileTitle(kind: MediaSummary["kind"], id: number, token?: string, mode?: "core" | "full") {
+  const query = mode === "core" ? "?mode=core" : "";
+  return request<MobileTitlePayload>(`/api/mobile/title/${kind}/${id}${query}`, token);
 }
 
 export async function fetchMobilePerson(id: number, token?: string) {
