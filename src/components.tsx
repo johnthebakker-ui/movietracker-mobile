@@ -5,7 +5,7 @@ import type { Session } from "@supabase/supabase-js";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Dimensions, Image, Modal, PanResponder, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { colors, shadow } from "./theme";
-import { countries, excludeGenreOptions, genres, ratingLabel, SUPABASE_URL, titleYear, tmdbImage, userRatingLabel } from "./config";
+import { communityRatingLabel, countries, excludeGenreOptions, genres, SUPABASE_URL, titleYear, tmdbImage, userRatingLabel } from "./config";
 import type { AppTab, DiscoverFilters, MediaSummary, RecommendationFilters } from "./types";
 
 const logoIcon = require("../assets/logo.png");
@@ -132,6 +132,7 @@ export function Hero({ item, index, count, onOpen, onPrevious, onNext }: { item:
   }
 
   const backdrop = tmdbImage(item.backdropPath || item.posterPath, "w780");
+  const heroMeta = [titleYear(item), item.kind === "show" ? "Series" : "Film", communityRatingLabel(item, " MovieTracker")].filter(Boolean).join(" - ");
   return (
     <View style={styles.hero} {...swipe.panHandlers}>
       {backdrop ? <RemoteImage uri={backdrop} style={StyleSheet.absoluteFill} resizeMode="cover" /> : null}
@@ -139,7 +140,7 @@ export function Hero({ item, index, count, onOpen, onPrevious, onNext }: { item:
       <View style={styles.heroCopy}>
         <Text style={styles.kicker}>THIS WEEK'S ESSENTIAL WATCHES{count ? ` · ${(index ?? 0) + 1} OF ${count}` : ""}</Text>
         <Text style={styles.heroTitle} numberOfLines={2}>{item.title}</Text>
-        <Text style={styles.meta}>{titleYear(item)} - {item.kind === "show" ? "Series" : "Film"} - {ratingLabel(item)}</Text>
+        <Text style={styles.meta}>{heroMeta}</Text>
         <Text style={styles.heroOverview} numberOfLines={4}>{item.overview || "A cinematic pick from the MovieTracker catalog."}</Text>
         <Pressable onPress={() => onOpen(item)} style={styles.heroButton}>
           <Ionicons name="play" size={16} color={colors.text} />

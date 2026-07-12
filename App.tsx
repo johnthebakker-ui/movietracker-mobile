@@ -33,7 +33,7 @@ import {
 
 import { AppHeader, BottomNav, DiscoverFiltersCard, Hero, PickerSheet, RecommendationFiltersCard, RemoteImage, resolveRemoteImageUri, SectionTitle, TitleCard, type PickerAnchor } from "./src/components";
 import { disconnectTrakt, fetchDiscover, fetchMobileCompany, fetchMobileEpisode, fetchMobileHistory, fetchMobilePerson, fetchMobileProfile, fetchMobileSeason, fetchMobileTitle, fetchRecommendations, fetchSearch, fetchTraktStatus, fetchWebsiteEntityMetadata, fetchWebsiteHome, fetchWebsiteTitleMetadata, refreshRecommendations, setNotInterested, startTraktConnect, syncTrakt, type MobileTraktStatus } from "./src/api";
-import { API_URL, countries, excludeGenreOptions, genres, HAS_SUPABASE, ratingLabel, titleYear, tmdbImage, userRatingLabel } from "./src/config";
+import { API_URL, communityRatingLabel, countries, excludeGenreOptions, genres, HAS_SUPABASE, titleYear, tmdbImage, userRatingLabel } from "./src/config";
 import { supabase } from "./src/supabase";
 import { colors } from "./src/theme";
 import type { AppTab, DiscoverFilters, FeedResult, MediaKind, MediaSummary, RecommendationFilters } from "./src/types";
@@ -151,8 +151,13 @@ const trackedStatusOrder: TrackedStatus[] = ["completed", "watching", "planned",
 const profileCachePrefix = "movietracker-profile-v1";
 const profileDataCachePrefix = "movietracker-profile-data-v2";
 const libraryCachePrefix = "movietracker-library-v2";
+const titleDetailCachePrefix = "movietracker-title-detail-v2";
 const episodeNotificationIdsKey = "movietracker-episode-notification-ids-v1";
 const searchCache = new Map<string, { savedAt: number; feed: FeedResult }>();
+
+function titleDetailCacheKey(item: MediaSummary, userId?: string | null) {
+  return `${titleDetailCachePrefix}:${userId ?? "guest"}:${item.kind}:${item.id}`;
+}
 const listSortOptions: Array<{ value: ListSort; label: string }> = [
   { value: "title_asc", label: "Name A-Z" },
   { value: "title_desc", label: "Name Z-A" },
@@ -241,6 +246,9 @@ export default function App() {
   const listRef = useRef<FlatList<MediaSummary>>(null);
   const profileDataLoadedFor = useRef<string | null>(null);
   const profileDataLoadedAt = useRef(0);
+  const homeLoadedKey = useRef<string | null>(null);
+  const homeLoadedAt = useRef(0);
+  const homeDetailPrefetchKeys = useRef(new Set<string>());
   const libraryLoadedKey = useRef<string | null>(null);
   const libraryLoadedAt = useRef(0);
   const recommendationLoadedKey = useRef<string | null>(null);
@@ -396,14 +404,18 @@ export default function App() {
     return () => subscription.remove();
   }, []);
 
-  const loadHome = useCallback(async () => {
+  const loadHome = useCallback(async (force = false) => {
     const cacheKey = `home:v3:${usableSession?.user.id ?? "guest"}`;
+    if (!force && homeLoadedKey.current === cacheKey && Date.now() - homeLoadedAt.current < 180000 && (homeHero.length || homeSections.length)) return;
     const cached = await AsyncStorage.getItem(cacheKey).catch(() => null);
     if (cached) {
       try {
-        const parsed = JSON.parse(cached) as { hero?: MediaSummary[]; sections?: HomeSection[] };
+        const parsed = JSON.parse(cached) as { hero?: MediaSummary[]; sections?: HomeSection[]; savedAt?: number };
         if (parsed.hero?.length) setHomeHero(parsed.hero);
         if (parsed.sections?.length) setHomeSections(parsed.sections);
+        homeLoadedKey.current = cacheKey;
+        homeLoadedAt.current = parsed.savedAt || Date.now();
+        if (!force && Date.now() - homeLoadedAt.current < 180000) return;
       } catch {}
     }
     try {
@@ -411,7 +423,9 @@ export default function App() {
       const hero = home.hero.slice(0, 6);
       setHomeHero(hero);
       setHomeSections(home.sections);
-      await AsyncStorage.setItem(cacheKey, JSON.stringify({ hero, sections: home.sections, savedAt: Date.now() })).catch(() => undefined);
+      homeLoadedKey.current = cacheKey;
+      homeLoadedAt.current = Date.now();
+      await AsyncStorage.setItem(cacheKey, JSON.stringify({ hero, sections: home.sections, savedAt: homeLoadedAt.current })).catch(() => undefined);
     } catch {
       const today = localDateKey();
       const [popular, movies, shows] = await Promise.all([
@@ -428,10 +442,52 @@ export default function App() {
       ];
       setHomeHero(hero);
       setHomeSections(sections);
-      await AsyncStorage.setItem(cacheKey, JSON.stringify({ hero, sections, savedAt: Date.now() })).catch(() => undefined);
+      homeLoadedKey.current = cacheKey;
+      homeLoadedAt.current = Date.now();
+      await AsyncStorage.setItem(cacheKey, JSON.stringify({ hero, sections, savedAt: homeLoadedAt.current })).catch(() => undefined);
     }
     setHeroIndex(0);
-  }, [usableSession?.access_token, usableSession?.user.id]);
+  }, [homeHero.length, homeSections.length, usableSession?.access_token, usableSession?.user.id]);
+
+  useEffect(() => {
+    const picks: MediaSummary[] = [];
+    const seen = new Set<string>();
+    const add = (candidate?: MediaSummary | null) => {
+      if (!candidate) return;
+      const key = `${candidate.kind}:${candidate.id}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      picks.push(candidate);
+    };
+    homeHero.slice(0, 6).forEach(add);
+    homeSections.slice(0, 3).forEach(section => section.items.slice(0, 5).forEach(add));
+    if (!picks.length) return;
+
+    let cancelled = false;
+    const userId = usableSession?.user.id ?? "guest";
+    const token = usableSession?.access_token;
+    const timer = setTimeout(() => {
+      void (async () => {
+        for (const item of picks.slice(0, 14)) {
+          if (cancelled) break;
+          const cacheKey = titleDetailCacheKey(item, userId);
+          if (homeDetailPrefetchKeys.current.has(cacheKey)) continue;
+          homeDetailPrefetchKeys.current.add(cacheKey);
+          const cached = await AsyncStorage.getItem(cacheKey).catch(() => null);
+          if (cached) continue;
+          const mobileDetail = await fetchMobileTitle(item.kind, item.id, token).catch(() => null);
+          if (cancelled) break;
+          if (mobileDetail) await AsyncStorage.setItem(cacheKey, JSON.stringify({ detail: mobileDetail, savedAt: Date.now() })).catch(() => undefined);
+          await new Promise(resolve => setTimeout(resolve, 75));
+        }
+      })();
+    }, 500);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [homeHero, homeSections, usableSession?.access_token, usableSession?.user.id]);
 
   useEffect(() => {
     if (tab !== "home" || homeHero.length < 2) return;
@@ -866,16 +922,18 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     setRefreshing(true);
+    homeLoadedKey.current = null;
+    homeLoadedAt.current = 0;
     libraryLoadedKey.current = null;
     libraryLoadedAt.current = 0;
     recommendationLoadedKey.current = null;
     recommendationLoadedAt.current = 0;
     profileDataLoadedFor.current = null;
     profileDataLoadedAt.current = 0;
-    const work = tab === "library" ? loadLibrary(true) : tab === "profile" && profileView !== "recommendations" ? loadProfileData(true) : loadActive();
+    const work = tab === "home" ? loadHome(true) : tab === "library" ? loadLibrary(true) : tab === "profile" && profileView !== "recommendations" ? loadProfileData(true) : loadActive();
     await work.catch(reason => setError(reason instanceof Error ? reason.message : "Could not refresh."));
     setRefreshing(false);
-  }, [loadActive, loadLibrary, loadProfileData, profileView, tab]);
+  }, [loadActive, loadHome, loadLibrary, loadProfileData, profileView, tab]);
 
   const openItem = useCallback((item: MediaSummary) => {
     setActionItem(null);
@@ -3108,6 +3166,7 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
   const [listSheetVisible, setListSheetVisible] = useState(false);
   const [ratingSheetVisible, setRatingSheetVisible] = useState(false);
   const [watchSheetVisible, setWatchSheetVisible] = useState(false);
+  const detailCacheKey = titleDetailCacheKey(item, session?.user.id);
   const backdrop = tmdbImage(item.backdropPath || item.posterPath, "w780");
   const poster = tmdbImage(item.posterPath, "w500");
   const director = detail?.crew.find(person => person.job === "Director" || person.job === "Creator");
@@ -3116,14 +3175,14 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
   const detailGenres = detail?.genres?.length ? detail.genres : item.genres ?? [];
   const detailOverview = detail?.overview || item.overview || "No overview has been published yet.";
   const ratingSources = [
-    { label: "MovieTracker", value: detail?.communityRating != null ? `${detail.communityRating.toFixed(1)}/10` : ratingLabel(item) },
+    { label: "MovieTracker", value: detail?.communityRating != null ? `${detail.communityRating.toFixed(1)}/10` : "—/10" },
     { label: "TMDB", value: detail?.voteAverage != null ? `${detail.voteAverage.toFixed(1)}/10` : item.voteAverage ? `${item.voteAverage.toFixed(1)}/10` : "New" },
     ...(detail?.externalRatings ?? [])
   ];
 
   const loadDetail = useCallback(async () => {
     const rawRuntime = Number(item.raw?.runtime ?? item.raw?.episode_run_time?.[0] ?? 0) || null;
-    setDetail({
+    const preview: DetailData = {
       dbId: null,
       overview: item.overview || null,
       tagline: null,
@@ -3135,7 +3194,7 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
       originalLanguage: item.originalLanguage ?? null,
       status: item.status ?? null,
       userRating: item.userRating ?? null,
-      communityRating: item.communityRating ?? null,
+      communityRating: trustedCommunityRating(item),
       externalRatings: [],
       progressStatus: null,
       watched: false,
@@ -3153,10 +3212,10 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
       collectionName: item.collectionName ?? null,
       collection: [],
       recommendations: []
-    });
-    const mobileDetail = await fetchMobileTitle(item.kind, item.id, session?.access_token).catch(() => null);
-    if (mobileDetail) {
-      setDetail({
+    };
+    setDetail(preview);
+    const applyMobileDetail = (mobileDetail: any) => {
+      const next: DetailData = {
         dbId: mobileDetail.dbId,
         overview: mobileDetail.overview || item.overview || null,
         tagline: mobileDetail.tagline ?? null,
@@ -3168,13 +3227,13 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
         originalLanguage: mobileDetail.originalLanguage ?? item.originalLanguage ?? null,
         status: mobileDetail.status ?? item.status ?? null,
         userRating: mobileDetail.userRating ?? item.userRating ?? null,
-        communityRating: mobileDetail.communityRating ?? item.communityRating ?? null,
+        communityRating: mobileDetail.communityRating ?? trustedCommunityRating(item),
         externalRatings: mobileDetail.externalRatings ?? [],
         progressStatus: mobileDetail.progressStatus ?? null,
         watched: Boolean(mobileDetail.watched ?? mobileDetail.progressStatus === "completed"),
         lastWatchedAt: mobileDetail.lastWatchedAt ?? null,
         favorite: Boolean(mobileDetail.favorite),
-        lists: (mobileDetail.lists ?? []).map(list => ({
+        lists: (mobileDetail.lists ?? []).map((list: any) => ({
           id: list.id,
           name: list.name,
           description: list.description ?? null,
@@ -3202,7 +3261,24 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
         collectionName: mobileDetail.collectionName ?? item.collectionName ?? null,
         collection: mobileDetail.collection ?? [],
         recommendations: mobileDetail.recommendations ?? []
-      });
+      };
+      setDetail(next);
+      return next;
+    };
+    const cached = await AsyncStorage.getItem(detailCacheKey).catch(() => null);
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached) as { detail?: any; savedAt?: number };
+        if (parsed.detail) {
+          applyMobileDetail(parsed.detail);
+          if (Date.now() - (parsed.savedAt ?? 0) < 300000) return;
+        }
+      } catch { /* Ignore stale detail cache. */ }
+    }
+    const mobileDetail = await fetchMobileTitle(item.kind, item.id, session?.access_token).catch(() => null);
+    if (mobileDetail) {
+      applyMobileDetail(mobileDetail);
+      await AsyncStorage.setItem(detailCacheKey, JSON.stringify({ detail: mobileDetail, savedAt: Date.now() })).catch(() => undefined);
       return;
     }
     const [mediaResult, websiteMetadata] = await Promise.all([
@@ -3213,7 +3289,7 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
     const externalRatings = websiteMetadata.ratings;
     const media = mediaResult.data;
     if (!media) {
-      setDetail({ dbId: null, overview: websiteOverview || item.overview || null, tagline: null, releaseDate: item.releaseDate ?? null, endDate: item.endDate ?? null, genres: item.genres ?? [], voteAverage: item.voteAverage ?? null, runtime: null, originalLanguage: item.originalLanguage ?? null, status: item.status ?? null, userRating: item.userRating ?? null, communityRating: item.communityRating ?? null, externalRatings, progressStatus: null, watched: false, favorite: false, lists: [], cast: [], crew: [], companies: [], videos: [], images: [], seasons: [], reviews: [], myReview: null, collectionName: item.collectionName ?? null, collection: [], recommendations: [] });
+      setDetail({ dbId: null, overview: websiteOverview || item.overview || null, tagline: null, releaseDate: item.releaseDate ?? null, endDate: item.endDate ?? null, genres: item.genres ?? [], voteAverage: item.voteAverage ?? null, runtime: null, originalLanguage: item.originalLanguage ?? null, status: item.status ?? null, userRating: item.userRating ?? null, communityRating: trustedCommunityRating(item), externalRatings, progressStatus: null, watched: false, favorite: false, lists: [], cast: [], crew: [], companies: [], videos: [], images: [], seasons: [], reviews: [], myReview: null, collectionName: item.collectionName ?? null, collection: [], recommendations: [] });
       return;
     }
     const client = supabase!;
@@ -3276,7 +3352,7 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
       originalLanguage: media.original_language ?? null,
       status: media.status ?? item.status ?? null,
       userRating: typeof userRating.data?.score === "number" ? Number(userRating.data.score) : item.userRating ?? null,
-      communityRating: communityRows.length ? communityRows.reduce((sum: number, row: any) => sum + Number(row.score), 0) / communityRows.length : item.communityRating ?? null,
+      communityRating: communityRows.length ? communityRows.reduce((sum: number, row: any) => sum + Number(row.score), 0) / communityRows.length : trustedCommunityRating(item),
       externalRatings,
       progressStatus: progress.data?.status ?? null,
       watched: progress.data?.status === "completed",
@@ -3294,7 +3370,7 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
       collection,
       recommendations
     });
-  }, [item, session?.access_token, session?.user.id]);
+  }, [detailCacheKey, item, session?.access_token]);
 
   useEffect(() => {
     loadDetail().catch(() => undefined);
@@ -3304,6 +3380,7 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
     setBusy(true);
     try {
       await work();
+      await AsyncStorage.removeItem(detailCacheKey).catch(() => undefined);
       await onChanged(reason);
     } finally {
       setBusy(false);
@@ -3827,6 +3904,7 @@ function DetailMediaSection({ kicker, title, items, onOpen }: { kicker: string; 
 function DetailScreen({ item, token, onBack, onHide }: { item: MediaSummary; token?: string; onBack: () => void; onHide: (item: MediaSummary) => void }) {
   const backdrop = tmdbImage(item.backdropPath || item.posterPath, "w780");
   const poster = tmdbImage(item.posterPath, "w500");
+  const detailMeta = [titleYear(item), communityRatingLabel(item, " MovieTracker")].filter(Boolean).join(" - ");
 
   return (
     <ScrollView contentContainerStyle={styles.detailContent}>
@@ -3842,7 +3920,7 @@ function DetailScreen({ item, token, onBack, onHide }: { item: MediaSummary; tok
           <View style={styles.detailText}>
             <Text style={styles.detailKicker}>{item.kind === "show" ? "Series" : "Film"}</Text>
             <Text style={styles.detailTitle} numberOfLines={3}>{item.title}</Text>
-            <Text style={styles.detailMeta}>{titleYear(item)} - {ratingLabel(item)}</Text>
+            <Text style={styles.detailMeta}>{detailMeta}</Text>
           </View>
         </View>
       </View>
@@ -4307,6 +4385,10 @@ function viewingDateKey(value: string) {
   if (Number.isNaN(date.getTime())) return "unknown";
   if (date.getHours() < 3) date.setDate(date.getDate() - 1);
   return localDateKey(date);
+}
+
+function trustedCommunityRating(item: Pick<MediaSummary, "communityRating" | "communityRatingCount">) {
+  return typeof item.communityRating === "number" && Boolean(item.communityRatingCount) ? item.communityRating : null;
 }
 
 function fromDbMedia(row: any, ratingByMedia?: Map<any, number>): MediaSummary {

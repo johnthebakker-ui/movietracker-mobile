@@ -80,6 +80,11 @@ export function ratingLabel(item: MediaSummary) {
   return item.voteAverage ? `${item.voteAverage.toFixed(1)}/10` : "New";
 }
 
+export function communityRatingLabel(item: MediaSummary, suffix = "") {
+  if (typeof item.communityRating === "number" && item.communityRatingCount) return `${item.communityRating.toFixed(1)}/10${suffix}`;
+  return null;
+}
+
 export function userRatingLabel(item: MediaSummary) {
   return typeof item.userRating === "number" ? `${item.userRating.toFixed(1)}/10` : null;
 }
