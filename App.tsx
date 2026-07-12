@@ -397,10 +397,21 @@ export default function App() {
   }, []);
 
   const loadHome = useCallback(async () => {
+    const cacheKey = `home:v3:${usableSession?.user.id ?? "guest"}`;
+    const cached = await AsyncStorage.getItem(cacheKey).catch(() => null);
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached) as { hero?: MediaSummary[]; sections?: HomeSection[] };
+        if (parsed.hero?.length) setHomeHero(parsed.hero);
+        if (parsed.sections?.length) setHomeSections(parsed.sections);
+      } catch {}
+    }
     try {
       const home = await fetchWebsiteHome(usableSession?.access_token);
-      setHomeHero(home.hero.slice(0, 6));
+      const hero = home.hero.slice(0, 6);
+      setHomeHero(hero);
       setHomeSections(home.sections);
+      await AsyncStorage.setItem(cacheKey, JSON.stringify({ hero, sections: home.sections, savedAt: Date.now() })).catch(() => undefined);
     } catch {
       const today = localDateKey();
       const [popular, movies, shows] = await Promise.all([
@@ -409,15 +420,18 @@ export default function App() {
         fetchDiscover({ ...initialDiscoverFilters, kind: "show", sort: "newest", year: today.slice(0, 4) }, 1, usableSession?.access_token)
       ]);
       const heroItems = popular.items.filter(item => item.backdropPath && item.overview).slice(0, 6);
-      setHomeHero(heroItems.length ? heroItems : popular.items.slice(0, 6));
-      setHomeSections([
+      const hero = heroItems.length ? heroItems : popular.items.slice(0, 6);
+      const sections = [
         { kicker: "Everyone is watching", title: "Trending now", items: popular.items.slice(0, 12) },
         { kicker: "Fresh from the cinema", title: "New & upcoming films", items: movies.items.slice(0, 12) },
         { kicker: "Stories worth settling into", title: "Series premieres", items: shows.items.slice(0, 12) }
-      ]);
+      ];
+      setHomeHero(hero);
+      setHomeSections(sections);
+      await AsyncStorage.setItem(cacheKey, JSON.stringify({ hero, sections, savedAt: Date.now() })).catch(() => undefined);
     }
     setHeroIndex(0);
-  }, [usableSession?.access_token]);
+  }, [usableSession?.access_token, usableSession?.user.id]);
 
   useEffect(() => {
     if (tab !== "home" || homeHero.length < 2) return;
@@ -1492,9 +1506,9 @@ function ListDetailHeader({ list, sort, groupBy, onSort, onGroupBy, onBack }: { 
       <Text style={styles.listDetailBody}>{list.description || "A hand-picked collection."}</Text>
       <Text style={styles.listCount}>{list.count} {list.count === 1 ? "title" : "titles"}</Text>
       <View style={styles.listDetailTools}>
-        <Pressable onPress={onSort} style={[styles.groupChip, styles.groupChipActive]}>
-          <Ionicons name="swap-vertical-outline" size={15} color={colors.text} />
-          <Text style={[styles.groupChipText, styles.groupChipTextActive]} numberOfLines={1}>{sortLabel}</Text>
+        <Pressable onPress={onSort} style={styles.groupChip}>
+          <Ionicons name="swap-vertical-outline" size={15} color={colors.muted} />
+          <Text style={styles.groupChipText} numberOfLines={1}>{sortLabel}</Text>
         </Pressable>
         <Pressable onPress={() => onGroupBy(groupBy === "collections" ? "none" : "collections")} style={[styles.groupChip, groupBy === "collections" && styles.groupChipActive]}>
           <Ionicons name="git-branch-outline" size={15} color={groupBy === "collections" ? colors.text : colors.muted} />
@@ -1531,6 +1545,7 @@ function LibraryFilters({ value, onChange }: { value: LibraryFilter; onChange: (
 function CalendarPanel({ mode, month, events, onMode, onMonth, onOpen, onMenu }: { mode: CalendarMode; month: string; events: CalendarEvent[]; onMode: (mode: CalendarMode) => void; onMonth: (month: string) => void; onOpen: (event: CalendarEvent) => void; onMenu: (item: MediaSummary) => void }) {
   const { cells, label } = calendarCells(month);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const [posterCalendar, setPosterCalendar] = useState(false);
   const eventsByDate = new Map<string, CalendarEvent[]>();
   events.forEach(event => eventsByDate.set(event.date, [...(eventsByDate.get(event.date) ?? []), event]));
   const eventDays = [...eventsByDate.entries()].sort(([a], [b]) => b.localeCompare(a));
@@ -1546,15 +1561,24 @@ function CalendarPanel({ mode, month, events, onMode, onMonth, onOpen, onMenu }:
         <Text style={styles.monthTitle}>{label}</Text>
         <Pressable onPress={() => onMonth(shiftMonth(month, 1))} style={styles.monthButton}><Ionicons name="chevron-forward" size={22} color={colors.text} /></Pressable>
       </View>
+      <Pressable onPress={() => setPosterCalendar(value => !value)} style={styles.calendarDisplayToggle}>
+        <Ionicons name={posterCalendar ? "grid-outline" : "image-outline"} size={15} color={colors.muted} />
+        <Text style={styles.calendarDisplayToggleText}>{posterCalendar ? "Compact calendar" : "Poster calendar"}</Text>
+      </Pressable>
       <View style={styles.calendarGrid}>
         {["M", "T", "W", "T", "F", "S", "S"].map((day, index) => <Text key={`${day}-${index}`} style={styles.weekday}>{day}</Text>)}
         {cells.map((date, index) => {
-          const count = date ? eventsByDate.get(date)?.length ?? 0 : 0;
+          const dayEvents = date ? eventsByDate.get(date) ?? [] : [];
+          const count = dayEvents.length;
           const today = date === localDateKey();
           return (
-            <Pressable key={date ?? `blank-${index}`} disabled={!date || !count} onPress={() => date && setSelectedDate(date)} style={[styles.dayCell, !date && styles.blankDay, today && styles.todayCell, date === selectedDate && styles.selectedDayCell]}>
+            <Pressable key={date ?? `blank-${index}`} disabled={!date || !count} onPress={() => date && setSelectedDate(date)} style={[styles.dayCell, posterCalendar && styles.dayCellPosterMode, !date && styles.blankDay, today && styles.todayCell, date === selectedDate && styles.selectedDayCell]}>
               {date ? <Text style={[styles.dayText, today && styles.todayText]}>{Number(date.slice(8, 10))}</Text> : null}
               {count ? <Text style={styles.dayCount}>{count}</Text> : null}
+              {posterCalendar && count ? <View style={styles.dayPosterStrip}>{dayEvents.slice(0, 2).map(event => {
+                const thumb = tmdbImage(event.artwork, "w342");
+                return thumb ? <RemoteImage key={event.id} uri={thumb} style={styles.dayPosterThumb} resizeMode="cover" /> : null;
+              })}{count > 2 ? <Text style={styles.dayPosterMore}>+{count - 2}</Text> : null}</View> : null}
             </Pressable>
           );
         })}
@@ -2334,8 +2358,40 @@ function listFranchiseName(item: MediaSummary): { name: string; explicit: boolea
     [/\bthe purge\b|\bpurge:/i, "The Purge Collection"],
     [/\bnow you see me\b/i, "Now You See Me Collection"],
     [/\bdivergent\b|\binsurgent\b|\ballegiant\b/i, "Divergent Collection"],
-    [/\bthe conjuring\b|\bannabelle\b|\bthe nun\b/i, "The Conjuring Universe"],
+    [/\bthe conjuring\b|\bannabelle\b|\bthe nun\b|\bla llorona\b/i, "The Conjuring Universe"],
+    [/\binsidious\b/i, "Insidious Collection"],
+    [/\bhappy death day\b/i, "Happy Death Day Collection"],
+    [/\bevil dead\b|\barmy of darkness\b/i, "Evil Dead Collection"],
+    [/\bsmile\b/i, "Smile Collection"],
+    [/\ba quiet place\b/i, "A Quiet Place Collection"],
+    [/\bdon'?t breathe\b/i, "Don't Breathe Collection"],
+    [/\bfinal destination\b/i, "Final Destination Collection"],
+    [/\bfear street\b/i, "Fear Street Collection"],
+    [/\bscream\b/i, "Scream Collection"],
+    [/\bhalloween\b/i, "Halloween Collection"],
+    [/\bfriday the 13th\b/i, "Friday the 13th Collection"],
+    [/\bnightmare on elm street\b|\bfreddy'?s dead\b|\bnew nightmare\b/i, "A Nightmare on Elm Street Collection"],
+    [/\bterrifier\b/i, "Terrifier Collection"],
+    [/\bthe strangers\b|\bstrangers:/i, "The Strangers Collection"],
+    [/\bhell house llc\b/i, "Hell House LLC Collection"],
+    [/\bv\/h\/s\b|\bvhs\b/i, "V/H/S Collection"],
+    [/\bparanormal activity\b/i, "Paranormal Activity Collection"],
+    [/\bsinister\b/i, "Sinister Collection"],
+    [/\bthe ring\b|\brings\b/i, "The Ring Collection"],
+    [/\bthe grudge\b|\bju on\b/i, "The Grudge Collection"],
+    [/\bescape room\b/i, "Escape Room Collection"],
+    [/\bcloverfield\b/i, "Cloverfield Collection"],
+    [/\b28 days later\b|\b28 weeks later\b|\b28 years later\b/i, "28 Days Later Collection"],
     [/\bsaw\b|\bjigsaw\b/i, "Saw Collection"],
+    [/\balien\b|\bprometheus\b|\balien covenant\b/i, "Alien Collection"],
+    [/\bpredator\b|\bprey\b/i, "Predator Collection"],
+    [/\bjurassic park\b|\bjurassic world\b/i, "Jurassic Park Collection"],
+    [/\bmission:?\s*impossible\b/i, "Mission: Impossible Collection"],
+    [/\bjohn wick\b|\bballerina\b/i, "John Wick Collection"],
+    [/\bfast (and|&) furious\b|\bfast furious\b|\bfast x\b|\bf9\b|\bhobbs\b.*\bshaw\b/i, "Fast & Furious Collection"],
+    [/\bgodzilla\b|\bkong\b|\bskull island\b/i, "Monsterverse Collection"],
+    [/\bstar wars\b/i, "Star Wars Collection"],
+    [/\bindiana jones\b/i, "Indiana Jones Collection"],
     [/\bavatar\b.*\b(last airbender|legend of aang)\b|\blegend of korra\b/i, "Avatar: The Last Airbender Collection"],
     [/\battack on titan\b/i, "Attack on Titan Collection"],
     [/\bchainsaw man\b/i, "Chainsaw Man Collection"],
@@ -2715,6 +2771,23 @@ function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity, on
   const art = tmdbImage(episode?.still_path ?? target.artwork ?? target.show.backdropPath ?? target.show.posterPath, "w780");
 
   const loadEpisode = useCallback(async () => {
+    setEpisode((current: any | null) => current ?? {
+      id: target.episodeId,
+      name: target.title ?? `Episode ${target.episodeNumber}`,
+      overview: null,
+      episode_number: target.episodeNumber,
+      episodeNumber: target.episodeNumber,
+      air_date: target.airDate ?? null,
+      airDate: target.airDate ?? null,
+      still_path: target.artwork ?? null,
+      runtime: null,
+      vote_average: null,
+      seasons: [{
+        season_number: target.seasonNumber,
+        seasonNumber: target.seasonNumber,
+        media: [target.show]
+      }]
+    });
     const mobileEpisode = await fetchMobileEpisode(target.show.id, target.seasonNumber, target.episodeNumber, session?.access_token).catch(() => null);
     if (mobileEpisode) {
       setEpisode({
@@ -3047,6 +3120,38 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
   ];
 
   const loadDetail = useCallback(async () => {
+    const rawRuntime = Number(item.raw?.runtime ?? item.raw?.episode_run_time?.[0] ?? 0) || null;
+    setDetail({
+      dbId: null,
+      overview: item.overview || null,
+      tagline: null,
+      releaseDate: item.releaseDate ?? null,
+      endDate: item.endDate ?? null,
+      genres: item.genres ?? [],
+      voteAverage: item.voteAverage ?? null,
+      runtime: rawRuntime,
+      originalLanguage: item.originalLanguage ?? null,
+      status: item.status ?? null,
+      userRating: item.userRating ?? null,
+      communityRating: item.communityRating ?? null,
+      externalRatings: [],
+      progressStatus: null,
+      watched: false,
+      lastWatchedAt: null,
+      favorite: false,
+      lists: [],
+      cast: [],
+      crew: [],
+      companies: item.companies ?? [],
+      videos: [],
+      images: [],
+      seasons: [],
+      reviews: [],
+      myReview: null,
+      collectionName: item.collectionName ?? null,
+      collection: [],
+      recommendations: []
+    });
     const mobileDetail = await fetchMobileTitle(item.kind, item.id, session?.access_token).catch(() => null);
     if (mobileDetail) {
       setDetail({
@@ -4724,18 +4829,24 @@ const styles = StyleSheet.create({
   segmentActive: { backgroundColor: colors.accent },
   segmentText: { color: colors.text, fontWeight: "900" },
   monthToolbar: { marginHorizontal: 18, marginTop: 20, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  monthButton: { width: 42, height: 42, borderRadius: 21, borderWidth: 1, borderColor: colors.line, alignItems: "center", justifyContent: "center", backgroundColor: colors.panel },
-  monthTitle: { color: colors.text, fontFamily: "serif", fontSize: 27, fontWeight: "700" },
+  monthButton: { width: 46, height: 46, borderRadius: 23, borderWidth: 1, borderColor: colors.line, alignItems: "center", justifyContent: "center", backgroundColor: colors.panel },
+  monthTitle: { color: colors.text, fontFamily: "serif", fontSize: 30, fontWeight: "700" },
+  calendarDisplayToggle: { alignSelf: "center", marginTop: 12, minHeight: 34, borderRadius: 17, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel, paddingHorizontal: 12, flexDirection: "row", alignItems: "center", gap: 6 },
+  calendarDisplayToggleText: { color: colors.muted, fontSize: 12, fontWeight: "900" },
   recommendationIntro: { color: colors.muted, fontSize: 16, lineHeight: 24, marginHorizontal: 18, marginBottom: 8 },
-  calendarGrid: { marginHorizontal: 18, marginTop: 12, padding: 12, borderRadius: 20, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel, flexDirection: "row", flexWrap: "wrap" },
-  weekday: { width: "14.285%", color: colors.muted, textAlign: "center", fontSize: 12, fontWeight: "900", paddingBottom: 8 },
-  dayCell: { width: "14.285%", aspectRatio: 1, borderRadius: 11, backgroundColor: colors.panel2, alignItems: "center", justifyContent: "center", borderWidth: 2, borderColor: colors.panel },
+  calendarGrid: { marginHorizontal: 18, marginTop: 12, padding: 12, borderRadius: 22, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel, flexDirection: "row", flexWrap: "wrap" },
+  weekday: { width: "14.285%", color: colors.muted, textAlign: "center", fontSize: 12, fontWeight: "900", paddingBottom: 10 },
+  dayCell: { width: "14.285%", minHeight: 50, borderRadius: 12, backgroundColor: colors.panel2, alignItems: "flex-start", justifyContent: "flex-start", padding: 7, borderWidth: 2, borderColor: colors.panel },
+  dayCellPosterMode: { minHeight: 70 },
   blankDay: { backgroundColor: "transparent" },
   todayCell: { backgroundColor: colors.accent },
-  dayText: { color: colors.text, fontSize: 13, fontWeight: "900" },
+  dayText: { color: colors.text, fontSize: 13, lineHeight: 16, fontWeight: "900" },
   todayText: { color: colors.text },
   selectedDayCell: { borderColor: colors.accent },
-  dayCount: { position: "absolute", right: 3, bottom: 3, minWidth: 15, height: 15, borderRadius: 8, overflow: "hidden", backgroundColor: "rgba(0,0,0,0.72)", color: colors.text, textAlign: "center", fontSize: 9, fontWeight: "900" },
+  dayCount: { position: "absolute", right: 4, top: 4, minWidth: 16, height: 16, borderRadius: 8, overflow: "hidden", backgroundColor: "rgba(0,0,0,0.72)", color: colors.text, textAlign: "center", lineHeight: 16, fontSize: 9, fontWeight: "900" },
+  dayPosterStrip: { position: "absolute", left: 5, right: 5, bottom: 5, height: 27, flexDirection: "row", gap: 3, alignItems: "center" },
+  dayPosterThumb: { flex: 1, height: 27, borderRadius: 5, overflow: "hidden", backgroundColor: colors.panel },
+  dayPosterMore: { minWidth: 22, height: 22, borderRadius: 11, overflow: "hidden", backgroundColor: "rgba(0,0,0,0.72)", color: colors.text, textAlign: "center", lineHeight: 22, fontSize: 9, fontWeight: "900" },
   agenda: { marginHorizontal: 18, marginTop: 22, gap: 18 },
   agendaDay: { gap: 7 },
   agendaHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
