@@ -93,6 +93,10 @@ type DetailCompany = { id?: number; name: string; logo_path?: string | null };
 type DetailVideo = { key?: string; name?: string; type?: string; official?: boolean };
 type DetailImage = { file_path?: string; filePath?: string };
 type DetailSeason = { id?: number; seasonNumber: number; name: string; overview?: string | null; posterPath?: string | null; airDate?: string | null; episodeCount?: number | null };
+const endedSeriesStatuses = new Set(["Ended", "Canceled", "Cancelled"]);
+function isLimitedSeries(show: Pick<MediaSummary, "status">, seasons: DetailSeason[]) {
+  return endedSeriesStatuses.has(show.status ?? "") && seasons.filter(season => season.seasonNumber > 0).length === 1;
+}
 type DetailData = {
   dbId: number | null;
   overview: string | null;
@@ -469,18 +473,25 @@ export default function App() {
     const token = usableSession?.access_token;
     const timer = setTimeout(() => {
       void (async () => {
-        for (const item of picks.slice(0, 14)) {
-          if (cancelled) break;
-          const cacheKey = titleDetailCacheKey(item, userId);
-          if (homeDetailPrefetchKeys.current.has(cacheKey)) continue;
-          homeDetailPrefetchKeys.current.add(cacheKey);
-          const cached = await AsyncStorage.getItem(cacheKey).catch(() => null);
-          if (cached) continue;
-          const mobileDetail = await fetchMobileTitle(item.kind, item.id, token).catch(() => null);
-          if (cancelled) break;
-          if (mobileDetail) await AsyncStorage.setItem(cacheKey, JSON.stringify({ detail: mobileDetail, savedAt: Date.now() })).catch(() => undefined);
-          await new Promise(resolve => setTimeout(resolve, 75));
-        }
+        const queue = picks.slice(0, 20);
+        const worker = async () => {
+          while (!cancelled) {
+            const item = queue.shift();
+            if (!item) return;
+            const cacheKey = titleDetailCacheKey(item, userId);
+            if (homeDetailPrefetchKeys.current.has(cacheKey)) continue;
+            homeDetailPrefetchKeys.current.add(cacheKey);
+            const cached = await AsyncStorage.getItem(cacheKey).catch(() => null);
+            if (cached) continue;
+            const core = await fetchMobileTitle(item.kind, item.id, token, "core").catch(() => null);
+            if (cancelled) return;
+            if (core) await AsyncStorage.setItem(cacheKey, JSON.stringify({ detail: core, savedAt: Date.now() - 240000 })).catch(() => undefined);
+            const full = await fetchMobileTitle(item.kind, item.id, token, "full").catch(() => null);
+            if (cancelled) return;
+            if (full) await AsyncStorage.setItem(cacheKey, JSON.stringify({ detail: full, savedAt: Date.now() })).catch(() => undefined);
+          }
+        };
+        await Promise.all(Array.from({ length: Math.min(4, queue.length) }, worker));
       })();
     }, 500);
 
@@ -753,7 +764,7 @@ export default function App() {
       loadUserLists(userId),
       supabase.from("lists").select("*", { count: "exact", head: true }).eq("user_id", userId),
       supabase.from("watch_events").select("id,watched_at,duration_minutes,episode_id,media(id,tmdb_id,kind,title,backdrop_path,poster_path,release_date,end_date,status,vote_average,vote_count,popularity,genres,original_language,origin_countries,runtime),episodes(name,episode_number,still_path,seasons(season_number))").eq("user_id", userId).order("watched_at", { ascending: false, nullsFirst: false }).limit(12),
-      supabase.from("watch_events").select("duration_minutes,media_id,media(runtime)").eq("user_id", userId).limit(5000),
+      supabase.from("watch_events").select("id,watched_at,duration_minutes,media_id,episode_id,media(runtime)").eq("user_id", userId).order("watched_at", { ascending: false, nullsFirst: false }).limit(5000),
       supabase.from("watch_events").select("watched_at").eq("user_id", userId).not("watched_at", "is", null).order("watched_at", { ascending: false }).limit(1000),
       supabase.from("watch_events").select("*", { count: "exact", head: true }).eq("user_id", userId)
     ]);
@@ -803,15 +814,15 @@ export default function App() {
     const { currentStreak, longestStreak } = streaksFromDays(watchedDays);
     const historyRows = history.data ?? [];
     const historyUniqueTitles = new Set<string>();
-    const screenTimeMinutes = (historySummary.data ?? historyRows).reduce((sum: number, event: any) => {
+    const summaryRows = historySummary.data ?? historyRows;
+    const screenTimeMinutes = summaryRows.reduce((sum: number, event: any) => {
       const media = firstRow(event.media);
       if (event.media_id) historyUniqueTitles.add(String(event.media_id));
       return sum + Number(event.duration_minutes ?? media?.runtime ?? 0);
     }, 0);
     const occurrenceTotals = new Map<string, number>();
-    historyRows.forEach((event: any) => {
-      const media = firstRow(event.media);
-      const key = event.episode_id ? `episode-${event.episode_id}` : `media-${media?.tmdb_id ?? media?.id ?? "unknown"}`;
+    summaryRows.forEach((event: any) => {
+      const key = event.episode_id ? `episode-${event.episode_id}` : `media-${event.media_id ?? "unknown"}`;
       occurrenceTotals.set(key, (occurrenceTotals.get(key) ?? 0) + 1);
     });
     const remainingOccurrences = new Map(occurrenceTotals);
@@ -821,7 +832,7 @@ export default function App() {
       const episode = firstRow(event.episodes);
       const season = firstRow(episode?.seasons);
       const day = event.watched_at ? viewingDateKey(event.watched_at) : "unknown";
-      const key = event.episode_id ? `episode-${event.episode_id}` : `media-${media.tmdb_id ?? media.id}`;
+      const key = event.episode_id ? `episode-${event.episode_id}` : `media-${media.id}`;
       const watchNumber = remainingOccurrences.get(key) ?? 1;
       remainingOccurrences.set(key, watchNumber - 1);
       return [{
@@ -1003,6 +1014,30 @@ export default function App() {
   }, [libraryFilter, loadCalendar, loadLibrary, loadProfileData, selectedList?.id, tab, usableSession?.access_token, usableSession?.user.id]);
 
   const activeFeed = searchMode ? searchFeed : selectedList ? selectedListFeed : tab === "discover" ? discoverFeed : tab === "calendar" ? calendarFeed : tab === "library" ? libraryFeed : tab === "profile" && profileView === "recommendations" ? recommendationFeed : emptyFeed;
+  useEffect(() => {
+    const items = activeFeed.items.slice(0, 12);
+    if (!items.length) return;
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      void (async () => {
+        const queue = [...items];
+        const worker = async () => {
+          while (!cancelled) {
+            const item = queue.shift();
+            if (!item) return;
+            const cacheKey = titleDetailCacheKey(item, usableSession?.user.id);
+            if (homeDetailPrefetchKeys.current.has(cacheKey)) continue;
+            homeDetailPrefetchKeys.current.add(cacheKey);
+            if (await AsyncStorage.getItem(cacheKey).catch(() => null)) continue;
+            const detail = await fetchMobileTitle(item.kind, item.id, usableSession?.access_token, "full").catch(() => null);
+            if (!cancelled && detail) await AsyncStorage.setItem(cacheKey, JSON.stringify({ detail, savedAt: Date.now() })).catch(() => undefined);
+          }
+        };
+        await Promise.all(Array.from({ length: Math.min(3, queue.length) }, worker));
+      })();
+    }, 350);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [activeFeed.items, usableSession?.access_token, usableSession?.user.id]);
   const profileTitle = profile?.display_name || profile?.username || usableSession?.user.user_metadata?.display_name || usableSession?.user.email || "Your MovieTracker";
   const headerSession = useMemo(() => {
     if (!usableSession || !profile?.avatar_url) return usableSession;
@@ -1409,12 +1444,14 @@ export default function App() {
         {selectedEntity ? (
           <EntityScreen target={selectedEntity} session={usableSession} onBack={() => setSelectedEntity(null)} onOpen={openItem} onMenu={setActionItem} />
         ) : selectedEpisode ? (
-          <EpisodeDetailScreen target={selectedEpisode} session={usableSession} onBack={() => setSelectedEpisode(null)} onOpen={openItem} onOpenEntity={openEntity} onChanged={refreshAfterAction} onOpenSeason={season => {
+          <EpisodeDetailScreen target={selectedEpisode} session={usableSession} onBack={() => setSelectedEpisode(null)} onOpen={openItem} onOpenEntity={openEntity} onChanged={refreshAfterAction} onOpenSeason={(season, show, seasons) => {
             setSelectedEpisode(null);
-            setSelectedSeason({ show: selectedEpisode.show, season });
+            if (isLimitedSeries(show, seasons)) setSelectedSeriesEpisodes({ show, seasons });
+            else setSelectedSeason({ show, season });
           }} />
         ) : selectedSeriesEpisodes ? (
           <SeriesEpisodesScreen target={selectedSeriesEpisodes} session={usableSession} onBack={() => setSelectedSeriesEpisodes(null)} onOpenSeason={season => {
+            if (isLimitedSeries(selectedSeriesEpisodes.show, selectedSeriesEpisodes.seasons)) return;
             setSelectedSeriesEpisodes(null);
             setSelectedSeason({ show: selectedSeriesEpisodes.show, season });
           }} onOpenEpisode={(season, episode) => setSelectedEpisode({
@@ -2021,6 +2058,8 @@ function SeasonDetailScreen({ target, session, onBack, onOpenEpisode }: { target
   const [colorized, setColorized] = useState(false);
   const [busy, setBusy] = useState(false);
   const [ratingSheetVisible, setRatingSheetVisible] = useState(false);
+  const [quickWatchEpisode, setQuickWatchEpisode] = useState<any | null>(null);
+  const heldEpisode = useRef<number | null>(null);
   const season = payload?.season ?? target.season;
   const episodes = [...(payload?.episodes ?? [])].sort((a, b) => Number(a.episode_number ?? a.episodeNumber ?? 0) - Number(b.episode_number ?? b.episodeNumber ?? 0));
   const imdbRatings = new Map<number, number | null>((payload?.imdbRatings ?? []).map((rating: any) => [Number(rating.episode), typeof rating.imdbRating === "number" ? rating.imdbRating : null]));
@@ -2103,6 +2142,32 @@ function SeasonDetailScreen({ target, session, onBack, onOpenEpisode }: { target
     }
   }
 
+  function episodeNumberOf(episode: any) { return Number(episode.episode_number ?? episode.episodeNumber ?? 0); }
+  function openEpisodePress(episode: any) {
+    const episodeNumber = episodeNumberOf(episode);
+    if (heldEpisode.current === episodeNumber) { heldEpisode.current = null; return; }
+    onOpenEpisode(episode);
+  }
+  function openQuickEpisodeWatch(episode: any) {
+    heldEpisode.current = episodeNumberOf(episode);
+    if (!session?.user.id) return Alert.alert("Sign in needed", "Sign in before tracking episodes.");
+    if (!payload?.mediaId || !episode.db_episode_id) return Alert.alert("Unavailable", "This episode is not ready for tracking yet.");
+    setQuickWatchEpisode(episode);
+  }
+  async function saveQuickEpisodeWatch(values: WatchLogValues) {
+    if (!session?.user.id || !payload?.mediaId || !quickWatchEpisode?.db_episode_id || !supabase) return;
+    const watchedAt = resolveWatchLogDate(values, quickWatchEpisode.air_date, quickWatchEpisode.runtime ?? 0);
+    setBusy(true);
+    try {
+      const { error } = await supabase.from("watch_events").insert({ user_id: session.user.id, media_id: payload.mediaId, episode_id: quickWatchEpisode.db_episode_id, duration_minutes: quickWatchEpisode.runtime ?? null, watched_at: watchedAt });
+      if (error) throw error;
+      await supabase.from("progress").upsert({ user_id: session.user.id, media_id: payload.mediaId, status: "watching", updated_at: new Date().toISOString() });
+      const watchedNumber = episodeNumberOf(quickWatchEpisode);
+      setPayload((current: any) => current ? { ...current, episodes: current.episodes.map((episode: any) => episodeNumberOf(episode) === watchedNumber ? { ...episode, watched: true } : episode) } : current);
+      setQuickWatchEpisode(null);
+    } finally { setBusy(false); }
+  }
+
   return (
     <ScrollView contentContainerStyle={styles.detailContent}>
       <View style={styles.episodeHero}>
@@ -2131,6 +2196,7 @@ function SeasonDetailScreen({ target, session, onBack, onOpenEpisode }: { target
           <Ionicons name="chevron-forward" size={18} color={colors.muted} />
         </Pressable>
         <RatingSheet visible={ratingSheetVisible} value={payload?.userRating ?? null} busy={busy} onClose={() => setRatingSheetVisible(false)} onSave={saveSeasonRating} />
+        <WatchLogSheet visible={Boolean(quickWatchEpisode)} title={`${target.show.title} - ${quickWatchEpisode?.name ?? "Episode"}`} releaseDate={quickWatchEpisode?.air_date ?? null} runtime={quickWatchEpisode?.runtime ?? null} busy={busy} watched={Boolean(quickWatchEpisode?.watched)} onClose={() => setQuickWatchEpisode(null)} onSave={saveQuickEpisodeWatch} />
         {session?.user.id && payload?.seasonId ? <ReviewComposerPanel existingReview={payload.myReview} currentRating={payload.userRating} busy={busy} onSubmit={saveSeasonReview} /> : null}
         <View style={styles.sourceTabs}>
           <Pressable disabled={!movieTrackerAvailable} onPress={() => setSource("movietracker")} style={[styles.sourceTab, source === "movietracker" && styles.sourceTabActive, !movieTrackerAvailable && styles.sourceTabDisabled]}><Text style={styles.sourceTabText}>MovieTracker</Text></Pressable>
@@ -2149,7 +2215,7 @@ function SeasonDetailScreen({ target, session, onBack, onOpenEpisode }: { target
             const episodeNumber = Number(episode.episode_number ?? episode.episodeNumber ?? 0);
             const cellColors = ratingCellStyle(score, colorized);
             return (
-              <Pressable key={`${episode.id ?? episodeNumber}`} onPress={() => onOpenEpisode(episode)} style={[styles.seasonEpisodeCell, { backgroundColor: cellColors.backgroundColor }]}>
+              <Pressable key={`${episode.id ?? episodeNumber}`} onPress={() => openEpisodePress(episode)} onLongPress={() => openQuickEpisodeWatch(episode)} delayLongPress={300} style={[styles.seasonEpisodeCell, { backgroundColor: cellColors.backgroundColor }]}>
                 <Text style={[styles.seasonEpisodeCode, { color: cellColors.color }]}>E{episodeNumber}</Text>
                 <Text style={[styles.seasonEpisodeScore, { color: cellColors.color }]}>{score != null ? score.toFixed(1) : "-"}</Text>
               </Pressable>
@@ -2161,7 +2227,7 @@ function SeasonDetailScreen({ target, session, onBack, onOpenEpisode }: { target
             const still = tmdbImage(episode.still_path ?? episode.stillPath, "w342");
             const episodeNumber = Number(episode.episode_number ?? episode.episodeNumber ?? 0);
             return (
-              <Pressable key={`row-${episode.id ?? episodeNumber}`} onPress={() => onOpenEpisode(episode)} style={styles.seasonCard}>
+              <Pressable key={`row-${episode.id ?? episodeNumber}`} onPress={() => openEpisodePress(episode)} onLongPress={() => openQuickEpisodeWatch(episode)} delayLongPress={300} style={styles.seasonCard}>
                 {still ? <RemoteImage uri={still} style={styles.seasonPoster} resizeMode="cover" /> : <View style={styles.seasonPoster}><Ionicons name="film-outline" size={20} color={colors.muted} /></View>}
                 <View style={styles.seasonCopy}>
                   <Text style={styles.seasonName} numberOfLines={1}>E{episodeNumber} - {episode.name ?? "Episode"}</Text>
@@ -2184,6 +2250,9 @@ function SeriesEpisodesScreen({ target, session, onBack, onOpenSeason, onOpenEpi
   const [colorized, setColorized] = useState(false);
   const [inverted, setInverted] = useState(false);
   const [dimUnwatched, setDimUnwatched] = useState(false);
+  const [quickWatch, setQuickWatch] = useState<{ season: DetailSeason; payload: any; episode: any } | null>(null);
+  const [quickWatchBusy, setQuickWatchBusy] = useState(false);
+  const heldEpisode = useRef<string | null>(null);
   const seasons = useMemo(() => [...target.seasons].sort((a, b) => a.seasonNumber - b.seasonNumber), [target.seasons]);
   const payloadBySeason = useMemo(() => new Map(payloads.map(payload => [Number(payload?.season?.season_number ?? payload?.season?.seasonNumber ?? payload?.seasonNumber ?? 0), payload])), [payloads]);
   const hasImdb = payloads.some(payload => (payload?.imdbRatings ?? []).some((rating: any) => typeof rating.imdbRating === "number"));
@@ -2234,6 +2303,33 @@ function SeriesEpisodesScreen({ target, session, onBack, onOpenSeason, onOpenEpi
     return Boolean(episode.watched) || watchProgress.watchedKeys.has(`${seasonNumber}-${episodeNumber}`);
   }
 
+  function episodeKey(season: DetailSeason, episode: any) { return `${season.seasonNumber}-${Number(episode.episode_number ?? episode.episodeNumber ?? 0)}`; }
+  function openEpisodePress(season: DetailSeason, episode: any) {
+    const key = episodeKey(season, episode);
+    if (heldEpisode.current === key) { heldEpisode.current = null; return; }
+    onOpenEpisode(season, episode);
+  }
+  function openQuickEpisodeWatch(season: DetailSeason, payload: any, episode: any) {
+    heldEpisode.current = episodeKey(season, episode);
+    if (!session?.user.id) return Alert.alert("Sign in needed", "Sign in before tracking episodes.");
+    if (!payload?.mediaId || !episode.db_episode_id) return Alert.alert("Unavailable", "This episode is not ready for tracking yet.");
+    setQuickWatch({ season, payload, episode });
+  }
+  async function saveQuickEpisodeWatch(values: WatchLogValues) {
+    if (!session?.user.id || !quickWatch?.payload?.mediaId || !quickWatch.episode?.db_episode_id || !supabase) return;
+    setQuickWatchBusy(true);
+    try {
+    const watchedAt = resolveWatchLogDate(values, quickWatch.episode.air_date, quickWatch.episode.runtime ?? 0);
+    const seasonNumber = quickWatch.season.seasonNumber;
+    const episodeNumber = Number(quickWatch.episode.episode_number ?? quickWatch.episode.episodeNumber ?? 0);
+    const { error } = await supabase.from("watch_events").insert({ user_id: session.user.id, media_id: quickWatch.payload.mediaId, episode_id: quickWatch.episode.db_episode_id, duration_minutes: quickWatch.episode.runtime ?? null, watched_at: watchedAt });
+    if (error) throw error;
+    await supabase.from("progress").upsert({ user_id: session.user.id, media_id: quickWatch.payload.mediaId, status: "watching", updated_at: new Date().toISOString() });
+    setPayloads(current => current.map(payload => Number(payload?.season?.season_number ?? payload?.season?.seasonNumber) === seasonNumber ? { ...payload, episodes: payload.episodes.map((episode: any) => Number(episode.episode_number ?? episode.episodeNumber) === episodeNumber ? { ...episode, watched: true } : episode) } : payload));
+    setQuickWatch(null);
+    } finally { setQuickWatchBusy(false); }
+  }
+
   return (
     <ScrollView contentContainerStyle={styles.detailContent}>
       <View style={styles.entityHeader}>
@@ -2251,6 +2347,7 @@ function SeriesEpisodesScreen({ target, session, onBack, onOpenSeason, onOpenEpi
         <Pressable onPress={() => setColorized(value => !value)} style={[styles.ratingGraphToggle, colorized && styles.ratingGraphToggleActive]}><Text style={styles.ratingGraphToggleText}>Colored scores</Text><Switch value={colorized} onValueChange={setColorized} trackColor={{ false: "#343a3d", true: colors.accent }} thumbColor={colors.text} /></Pressable>
         <Pressable onPress={() => setInverted(value => !value)} style={[styles.ratingGraphToggle, inverted && styles.ratingGraphToggleActive]}><Text style={styles.ratingGraphToggleText}>Inverted axes</Text><Switch value={inverted} onValueChange={setInverted} trackColor={{ false: "#343a3d", true: colors.accent }} thumbColor={colors.text} /></Pressable>
       </View>
+      <WatchLogSheet visible={Boolean(quickWatch)} title={`${target.show.title} - ${quickWatch?.episode?.name ?? "Episode"}`} releaseDate={quickWatch?.episode?.air_date ?? null} runtime={quickWatch?.episode?.runtime ?? null} busy={quickWatchBusy} watched={Boolean(quickWatch?.episode?.watched)} onClose={() => setQuickWatch(null)} onSave={saveQuickEpisodeWatch} />
       {colorized ? <RatingLegend /> : null}
       {loadingAll ? <ActivityIndicator color={colors.accent} style={{ marginVertical: 18 }} /> : null}
       {seasonRows.length && maxEpisodes ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.fullMatrixScroll}><View style={styles.fullEpisodeMatrix}>
@@ -2263,7 +2360,7 @@ function SeriesEpisodesScreen({ target, session, onBack, onOpenSeason, onOpenEpi
             const cellColors = ratingCellStyle(score, colorized);
             const episodeNumber = Number(episode.episode_number ?? episode.episodeNumber ?? 0);
             const dimmed = dimUnwatched && !isEpisodeWatched(season.seasonNumber, episode);
-            return <Pressable key={`${season.seasonNumber}-${episode.id ?? index}`} onPress={() => onOpenEpisode(season, episode)} style={[styles.matrixCell, { backgroundColor: cellColors.backgroundColor }, dimmed && styles.dimmedEpisode]}><Text style={[styles.matrixCellText, { color: cellColors.color }]}>{score != null ? score.toFixed(1) : "-"}</Text></Pressable>;
+            return <Pressable key={`${season.seasonNumber}-${episode.id ?? index}`} onPress={() => openEpisodePress(season, episode)} onLongPress={() => openQuickEpisodeWatch(season, payload, episode)} delayLongPress={300} style={[styles.matrixCell, { backgroundColor: cellColors.backgroundColor }, dimmed && styles.dimmedEpisode]}><Text style={[styles.matrixCellText, { color: cellColors.color }]}>{score != null ? score.toFixed(1) : "-"}</Text></Pressable>;
           })}</View>)}
         </> : <>
           <View style={styles.matrixRow}><Text style={styles.matrixAxisCell}>Episode</Text>{seasonRows.map(({ season }) => <Text key={season.seasonNumber} style={styles.matrixHeaderCell}>S{season.seasonNumber}</Text>)}</View>
@@ -2273,7 +2370,7 @@ function SeriesEpisodesScreen({ target, session, onBack, onOpenSeason, onOpenEpi
             const score = episodeScore(payload, episode);
             const cellColors = ratingCellStyle(score, colorized);
             const dimmed = dimUnwatched && !isEpisodeWatched(season.seasonNumber, episode);
-            return <Pressable key={`${season.seasonNumber}-${episode.id ?? index}`} onPress={() => onOpenEpisode(season, episode)} style={[styles.matrixCell, { backgroundColor: cellColors.backgroundColor }, dimmed && styles.dimmedEpisode]}><Text style={[styles.matrixCellText, { color: cellColors.color }]}>{score != null ? score.toFixed(1) : "-"}</Text></Pressable>;
+            return <Pressable key={`${season.seasonNumber}-${episode.id ?? index}`} onPress={() => openEpisodePress(season, episode)} onLongPress={() => openQuickEpisodeWatch(season, payload, episode)} delayLongPress={300} style={[styles.matrixCell, { backgroundColor: cellColors.backgroundColor }, dimmed && styles.dimmedEpisode]}><Text style={[styles.matrixCellText, { color: cellColors.color }]}>{score != null ? score.toFixed(1) : "-"}</Text></Pressable>;
           })}</View>)}
         </>}
       </View></ScrollView> : null}
@@ -2298,14 +2395,14 @@ function SeriesEpisodesScreen({ target, session, onBack, onOpenSeason, onOpenEpi
       {seasonRows.map(({ season, payload, episodes }) => {
         return (
           <View key={`${season.id ?? season.seasonNumber}`} style={styles.detailSection}>
-            <SectionTitle kicker={`Season ${season.seasonNumber}`} title={season.name || `Season ${season.seasonNumber}`} action="Open season ->" onAction={() => onOpenSeason(season)} />
+            <SectionTitle kicker={`Season ${season.seasonNumber}`} title={isLimitedSeries(target.show, seasons) ? "Limited Series" : season.name || `Season ${season.seasonNumber}`} action={isLimitedSeries(target.show, seasons) ? undefined : "Open season ->"} onAction={isLimitedSeries(target.show, seasons) ? undefined : () => onOpenSeason(season)} />
             <View style={styles.seasonList}>
               {episodes.map(episode => {
                 const still = tmdbImage(episode.still_path ?? episode.stillPath, "w342");
                 const episodeNumber = Number(episode.episode_number ?? episode.episodeNumber ?? 0);
                 const dimmed = dimUnwatched && !isEpisodeWatched(season.seasonNumber, episode);
                 return (
-                  <Pressable key={`row-${season.seasonNumber}-${episode.id ?? episodeNumber}`} onPress={() => onOpenEpisode(season, episode)} style={[styles.seasonCard, dimmed && styles.dimmedEpisodeCard]}>
+                  <Pressable key={`row-${season.seasonNumber}-${episode.id ?? episodeNumber}`} onPress={() => openEpisodePress(season, episode)} onLongPress={() => openQuickEpisodeWatch(season, payload, episode)} delayLongPress={300} style={[styles.seasonCard, dimmed && styles.dimmedEpisodeCard]}>
                     {still ? <RemoteImage uri={still} style={styles.seasonPoster} resizeMode="cover" /> : <View style={styles.seasonPoster}><Ionicons name="film-outline" size={20} color={colors.muted} /></View>}
                     <View style={styles.seasonCopy}>
                       <Text style={styles.seasonName} numberOfLines={1}>E{episodeNumber} - {episode.name ?? "Episode"}</Text>
@@ -2815,7 +2912,7 @@ function ActionRow({ icon, label, danger, onPress }: { icon: keyof typeof Ionico
   );
 }
 
-function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity, onOpenSeason, onChanged }: { target: EpisodeTarget; session: Session | null; onBack: () => void; onOpen: (item: MediaSummary) => void; onOpenEntity: (entity: EntityTarget) => void; onOpenSeason: (season: DetailSeason) => void; onChanged?: (reason?: ActionRefreshReason) => Promise<void> }) {
+function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity, onOpenSeason, onChanged }: { target: EpisodeTarget; session: Session | null; onBack: () => void; onOpen: (item: MediaSummary) => void; onOpenEntity: (entity: EntityTarget) => void; onOpenSeason: (season: DetailSeason, show: MediaSummary, seasons: DetailSeason[]) => void; onChanged?: (reason?: ActionRefreshReason) => Promise<void> }) {
   const [episode, setEpisode] = useState<any | null>(null);
   const [episodeLoading, setEpisodeLoading] = useState(true);
   const [episodeLoadError, setEpisodeLoadError] = useState<string | null>(null);
@@ -2828,13 +2925,19 @@ function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity, on
   const [episodeExternalRatings, setEpisodeExternalRatings] = useState<Array<{ label: string; value: string }>>([]);
   const [episodeCompanies, setEpisodeCompanies] = useState<DetailCompany[]>([]);
   const [episodeRecommendations, setEpisodeRecommendations] = useState<MediaSummary[]>([]);
+  const [showSeasons, setShowSeasons] = useState<DetailSeason[]>([]);
   const [busy, setBusy] = useState(false);
   const [ratingSheetVisible, setRatingSheetVisible] = useState(false);
   const [watchSheetVisible, setWatchSheetVisible] = useState(false);
   const art = tmdbImage(episode?.still_path ?? target.artwork ?? target.show.backdropPath ?? target.show.posterPath, "w780");
 
   const loadEpisode = useCallback(async () => {
-    setEpisode(null);
+    setEpisode((current: any | null) => current ?? {
+      id: target.episodeId, name: target.title ?? `Episode ${target.episodeNumber}`, overview: null,
+      episode_number: target.episodeNumber, episodeNumber: target.episodeNumber, air_date: target.airDate ?? null,
+      airDate: target.airDate ?? null, still_path: target.artwork ?? null, runtime: null, vote_average: null,
+      seasons: [{ season_number: target.seasonNumber, seasonNumber: target.seasonNumber, media: [target.show] }]
+    });
     setEpisodeLoading(true);
     setEpisodeLoadError(null);
     const mobileEpisode = await fetchMobileEpisode(target.show.id, target.seasonNumber, target.episodeNumber, session?.access_token).catch(() => null);
@@ -2857,6 +2960,7 @@ function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity, on
       setEpisodeExternalRatings(mobileEpisode.externalRatings ?? []);
       setEpisodeCompanies(mobileEpisode.companies ?? []);
       setEpisodeRecommendations(dedupeMedia(mobileEpisode.recommendations ?? []).filter(recommendation => !(recommendation.kind === mobileEpisode.show.kind && recommendation.id === mobileEpisode.show.id)));
+      setShowSeasons((mobileEpisode.show as any).seasons?.map((candidate: any) => ({ id: candidate.id, seasonNumber: Number(candidate.seasonNumber ?? candidate.season_number), name: candidate.name, overview: candidate.overview, posterPath: candidate.posterPath ?? candidate.poster_path, airDate: candidate.airDate ?? candidate.air_date, episodeCount: candidate.episodeCount ?? candidate.episode_count })).filter((candidate: DetailSeason) => candidate.seasonNumber > 0) ?? []);
       setEpisodeLoading(false);
       return;
     }
@@ -2909,11 +3013,11 @@ function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity, on
     });
   }, [loadEpisode]);
 
-  async function withEpisodeBusy(work: () => Promise<void>, reason: ActionRefreshReason = "watch") {
+  async function withEpisodeBusy(work: () => Promise<void>, reason: ActionRefreshReason = "watch", reload = true) {
     setBusy(true);
     try {
       await work();
-      await loadEpisode();
+      if (reload) await loadEpisode();
       await onChanged?.(reason);
     } finally {
       setBusy(false);
@@ -2930,7 +3034,8 @@ function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity, on
       await supabase!.from("watch_events").insert({ user_id: session.user.id, media_id: mediaId, episode_id: episodeId, watched_at: new Date().toISOString() });
       await supabase!.from("progress").upsert({ user_id: session.user.id, media_id: mediaId, status: "watching", updated_at: new Date().toISOString() });
       setWatched(true);
-    }, "watch");
+      setLastWatchedAt(new Date().toISOString());
+    }, "watch", false);
   }
 
   async function saveEpisodeWatchLog(values: WatchLogValues) {
@@ -2948,7 +3053,8 @@ function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity, on
       if (watchResult.error) throw watchResult.error;
       if (progressResult.error) throw progressResult.error;
       setWatched(true);
-    }, "watch");
+      setLastWatchedAt(watchedAt);
+    }, "watch", false);
   }
 
   const season = firstRow(episode?.seasons);
@@ -3055,7 +3161,7 @@ function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity, on
           <Text style={styles.detailOverview}>{episode?.overview || "No description has been released for this episode yet."}</Text>
           <View style={styles.detailQuickActions}>
             <Pressable onPress={() => onOpen(show)} style={styles.quickAction}><Ionicons name="albums-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>Open show</Text></Pressable>
-            <Pressable onPress={() => onOpenSeason(seasonTarget)} style={styles.quickAction}><Ionicons name="layers-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>Open season</Text></Pressable>
+            <Pressable onPress={() => onOpenSeason(seasonTarget, show, showSeasons.length ? showSeasons : [seasonTarget])} style={styles.quickAction}><Ionicons name="layers-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>{isLimitedSeries(show, showSeasons.length ? showSeasons : [seasonTarget]) ? "All episodes" : "Open season"}</Text></Pressable>
             <Pressable onPress={() => setWatchSheetVisible(true)} style={styles.quickAction}><Ionicons name="ellipsis-horizontal-circle-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>Actions</Text></Pressable>
             <Pressable disabled={busy} onPress={() => setWatchSheetVisible(true)} style={styles.quickAction}><Ionicons name={watched ? "repeat-outline" : "calendar-outline"} size={19} color={colors.text} /><Text style={styles.quickActionText}>{watched ? "Add another watch" : "Mark watched"}</Text></Pressable>
             <Pressable disabled={busy || !episodeId} onPress={() => setRatingSheetVisible(true)} style={styles.quickAction}><Ionicons name="speedometer-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>{userRating != null ? `${userRating.toFixed(1)}/10` : "Rate"}</Text></Pressable>
@@ -3216,7 +3322,16 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
   ];
 
   const loadDetail = useCallback(async () => {
-    setDetail(null);
+    const rawRuntime = Number((item.raw as any)?.runtime ?? (item.raw as any)?.episode_run_time?.[0] ?? 0) || null;
+    const preview: DetailData = {
+      dbId: null, overview: item.overview || null, tagline: null, releaseDate: item.releaseDate ?? null, endDate: item.endDate ?? null,
+      genres: item.genres ?? [], voteAverage: item.voteAverage ?? null, runtime: rawRuntime, originalLanguage: item.originalLanguage ?? null,
+      status: item.status ?? null, userRating: item.userRating ?? null, communityRating: trustedCommunityRating(item), externalRatings: [],
+      pendingExternalRatingSources: [], progressStatus: null, watched: false, lastWatchedAt: null, favorite: false, lists: [], cast: [], crew: [],
+      companies: (item as any).companies ?? [], videos: [], images: [], seasons: [], reviews: [], myReview: null,
+      collectionName: item.collectionName ?? null, collection: [], recommendations: []
+    };
+    setDetail(preview);
     setDetailLoading(true);
     setDetailLoadError(null);
     const applyMobileDetail = (mobileDetail: any) => {
@@ -3272,22 +3387,32 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
       return next;
     };
     const cached = await AsyncStorage.getItem(detailCacheKey).catch(() => null);
+    let hasCachedDetail = false;
     if (cached) {
       try {
         const parsed = JSON.parse(cached) as { detail?: any; savedAt?: number };
         if (parsed.detail) {
+          hasCachedDetail = true;
+          applyMobileDetail(parsed.detail);
           if (Date.now() - (parsed.savedAt ?? 0) < 300000) {
-            applyMobileDetail(parsed.detail);
             setDetailLoading(false);
             return;
           }
         }
       } catch { /* Ignore stale detail cache. */ }
     }
-    const mobileDetail = await fetchMobileTitle(item.kind, item.id, session?.access_token).catch(() => null);
+    const coreDetailPromise = fetchMobileTitle(item.kind, item.id, session?.access_token, "core").catch(() => null);
+    const fullDetailPromise = fetchMobileTitle(item.kind, item.id, session?.access_token, "full").catch(() => null);
+    const coreDetail = await coreDetailPromise;
+    if (coreDetail) applyMobileDetail(coreDetail);
+    const mobileDetail = await fullDetailPromise;
     if (mobileDetail) {
       applyMobileDetail(mobileDetail);
       await AsyncStorage.setItem(detailCacheKey, JSON.stringify({ detail: mobileDetail, savedAt: Date.now() })).catch(() => undefined);
+      setDetailLoading(false);
+      return;
+    }
+    if (coreDetail || hasCachedDetail) {
       setDetailLoading(false);
       return;
     }
@@ -3581,7 +3706,7 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
         <WatchLogSheet visible={watchSheetVisible} title={item.title} releaseDate={detail?.releaseDate || item.releaseDate} runtime={detail?.runtime ?? null} busy={busy} watched={Boolean(detail?.watched)} onClose={() => setWatchSheetVisible(false)} onSave={saveWatchLog} />
         <DetailListSheet visible={listSheetVisible} lists={detail?.lists ?? []} busy={busy} onClose={() => setListSheetVisible(false)} onToggle={toggleDetailList} />
         <View style={styles.factGrid}><Fact label="Released" value={detail?.releaseDate || item.releaseDate || "TBA"} /><Fact label={director?.job ?? "Director"} value={director?.name ?? "TBA"} /><Fact label="Original language" value={(detail?.originalLanguage || item.originalLanguage || "Unknown").toUpperCase()} /><Fact label="Genres" value={detailGenres.map(genre => genre.name).join(", ") || "Unknown"} /></View>
-        {item.kind === "show" && detail?.seasons.length ? <SeasonsSection seasons={detail.seasons} onOpenSeason={onOpenSeason} onOpenAllSeasons={onOpenAllSeasons} /> : null}
+        {item.kind === "show" && detail?.seasons.length ? <SeasonsSection seasons={detail.seasons} limited={isLimitedSeries({ status: detail.status ?? item.status }, detail.seasons)} onOpenSeason={onOpenSeason} onOpenAllSeasons={onOpenAllSeasons} /> : null}
         {detail?.images.length || trailer ? <TitleMediaPreview trailer={trailer} images={detail?.images ?? []} /> : null}
         {detail?.cast.length ? <CastSection cast={detail.cast} onOpen={onOpenEntity} /> : null}
         {detail?.companies.length ? <CompanySection companies={detail.companies} onOpen={onOpenEntity} /> : null}
@@ -3688,7 +3813,7 @@ function mapTargetReview(review: any, item: MediaSummary, label: "season" | "epi
   }];
 }
 
-function SeasonsSection({ seasons, onOpenSeason, onOpenAllSeasons }: { seasons: DetailSeason[]; onOpenSeason: (season: DetailSeason) => void; onOpenAllSeasons: (seasons: DetailSeason[]) => void }) {
+function SeasonsSection({ seasons, limited, onOpenSeason, onOpenAllSeasons }: { seasons: DetailSeason[]; limited: boolean; onOpenSeason: (season: DetailSeason) => void; onOpenAllSeasons: (seasons: DetailSeason[]) => void }) {
   return (
     <View style={styles.detailSection}>
       <SectionTitle kicker="The full story" title="Seasons & episodes" action="All episodes & ratings ->" onAction={() => onOpenAllSeasons(seasons)} />
@@ -3696,10 +3821,10 @@ function SeasonsSection({ seasons, onOpenSeason, onOpenAllSeasons }: { seasons: 
         {seasons.map(season => {
           const poster = tmdbImage(season.posterPath, "w342");
           return (
-            <Pressable key={`${season.id ?? season.seasonNumber}`} style={styles.seasonCard} onPress={() => onOpenSeason(season)}>
+            <Pressable key={`${season.id ?? season.seasonNumber}`} style={styles.seasonCard} onPress={() => limited ? onOpenAllSeasons(seasons) : onOpenSeason(season)}>
               {poster ? <RemoteImage uri={poster} style={styles.seasonPoster} /> : <View style={styles.seasonPoster}><Ionicons name="albums-outline" size={20} color={colors.muted} /></View>}
               <View style={styles.seasonCopy}>
-                <Text style={styles.seasonName} numberOfLines={1}>{season.name}</Text>
+                <Text style={styles.seasonName} numberOfLines={1}>{limited ? "Limited Series" : season.name}</Text>
                 <Text style={styles.seasonMeta}>{season.episodeCount ?? "?"} episodes · {season.airDate?.slice(0, 4) ?? "TBA"}</Text>
               </View>
               <Ionicons name="chevron-forward" size={18} color={colors.muted} />

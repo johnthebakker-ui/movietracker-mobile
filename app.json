@@ -3,7 +3,7 @@
     "name": "MovieTracker",
     "slug": "movietracker-mobile",
     "scheme": "movietracker",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -38,6 +38,7 @@
     },
     "android": {
       "package": "com.johnthebakker.movietracker",
+      "versionCode": 2,
       "adaptiveIcon": {
         "backgroundColor": "#060808",
         "foregroundImage": "./assets/android-icon-foreground.png",
