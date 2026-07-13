@@ -75,6 +75,8 @@ export type MobileSeasonPayload = {
   seasonId: number | null;
   userRating: number | null;
   communityRating: number | null;
+  tmdbRating: number | null;
+  imdbRating: number | null;
   reviews: any[];
   myReview: any | null;
   season: any;
@@ -231,6 +233,10 @@ export async function fetchMobileEpisode(showId: number, season: number, episode
 
 export async function fetchMobileSeason(showId: number, season: number, token?: string) {
   return request<MobileSeasonPayload>(`/api/mobile/season/${showId}/${season}`, token);
+}
+
+export async function fetchEpisodeNotificationSchedule(token: string) {
+  return request<{ events: Array<{ releaseKey: string; airDate: string; title: string; body: string; href: string; image: string | null }> }>("/api/mobile/notifications/schedule", token);
 }
 
 export async function fetchMobileProfile(token: string): Promise<any> {

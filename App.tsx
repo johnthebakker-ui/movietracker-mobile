@@ -32,7 +32,7 @@ import {
 } from "react-native";
 
 import { AppHeader, BottomNav, DiscoverFiltersCard, Hero, PickerSheet, RecommendationFiltersCard, RemoteImage, resolveRemoteImageUri, SectionTitle, TitleCard, type PickerAnchor } from "./src/components";
-import { disconnectTrakt, fetchDiscover, fetchMobileCompany, fetchMobileEpisode, fetchMobileHistory, fetchMobilePerson, fetchMobileProfile, fetchMobileSeason, fetchMobileTitle, fetchRecommendations, fetchSearch, fetchTraktStatus, fetchWebsiteEntityMetadata, fetchWebsiteHome, fetchWebsiteTitleMetadata, refreshRecommendations, setNotInterested, startTraktConnect, syncTrakt, type MobileTraktStatus } from "./src/api";
+import { disconnectTrakt, fetchDiscover, fetchEpisodeNotificationSchedule, fetchMobileCompany, fetchMobileEpisode, fetchMobileHistory, fetchMobilePerson, fetchMobileProfile, fetchMobileSeason, fetchMobileTitle, fetchRecommendations, fetchSearch, fetchTraktStatus, fetchWebsiteEntityMetadata, fetchWebsiteHome, fetchWebsiteTitleMetadata, refreshRecommendations, setNotInterested, startTraktConnect, syncTrakt, type MobileTraktStatus } from "./src/api";
 import { API_URL, communityRatingLabel, countries, excludeGenreOptions, genres, HAS_SUPABASE, titleYear, tmdbImage, userRatingLabel } from "./src/config";
 import { supabase } from "./src/supabase";
 import { colors } from "./src/theme";
@@ -53,14 +53,14 @@ type WatchDateMode = "now" | "release" | "unknown" | "custom";
 type WatchLogValues = { mode: WatchDateMode; date?: string; time?: string; timePoint: WatchTimePoint };
 type LibraryFilter = "all" | "planned" | "watching" | "completed" | "paused" | "dropped" | "favorites" | "lists";
 type ListGroup = "none" | "collections";
-type ListSort = "title_asc" | "title_desc" | "release_desc" | "release_asc" | "added_desc" | "added_asc" | "list_order";
+type ListSort = "none" | "title_asc" | "title_desc" | "release_desc" | "release_asc" | "added_desc" | "added_asc" | "list_order";
 type ActionRefreshReason = "profile" | "list" | "watch" | "rating";
 type CalendarMode = "upcoming" | "watched";
 type ProfilePanel = "overview" | "activity" | "lists" | "reviews" | "history" | "statistics";
 type ProfileView = "profile" | "recommendations" | "settings" | "history" | "reviews" | "statistics" | "notifications";
 type HistoryFilter = "all" | "movies" | "episodes";
 type CalendarEvent = { id: string; date: string; title: string; subtitle: string; artwork: string | null; item?: MediaSummary | null; href?: string | null; episodeTarget?: EpisodeTarget | null };
-type EpisodeTarget = { episodeId?: number; show: MediaSummary; seasonNumber: number; episodeNumber: number; title?: string | null; airDate?: string | null; artwork?: string | null };
+type EpisodeTarget = { episodeId?: number; show: MediaSummary; seasonNumber: number; episodeNumber: number; title?: string | null; overview?: string | null; airDate?: string | null; artwork?: string | null; runtime?: number | null; voteAverage?: number | null };
 type SeasonTarget = { show: MediaSummary; season: DetailSeason };
 type SeriesEpisodesTarget = { show: MediaSummary; seasons: DetailSeason[] };
 type EntityTarget =
@@ -398,8 +398,12 @@ export default function App() {
 
   useEffect(() => {
     if (!usableSession?.user.id || !supabase) return;
-    scheduleEpisodeNotifications(usableSession.user.id).catch(error => console.warn("Episode notification setup failed", error));
-  }, [usableSession?.user.id]);
+    scheduleEpisodeNotifications(usableSession.user.id, usableSession.access_token).catch(error => console.warn("Episode notification setup failed", error));
+    const subscription = AppState.addEventListener("change", state => {
+      if (state === "active") scheduleEpisodeNotifications(usableSession.user.id, usableSession.access_token).catch(error => console.warn("Episode notification refresh failed", error));
+    });
+    return () => subscription.remove();
+  }, [usableSession?.access_token, usableSession?.user.id]);
 
   useEffect(() => {
     const subscription = Notifications.addNotificationResponseReceivedListener(response => {
@@ -995,6 +999,9 @@ export default function App() {
     libraryLoadedAt.current = 0;
     profileDataLoadedFor.current = null;
     profileDataLoadedAt.current = 0;
+    if (usableSession?.user.id && usableSession.access_token && (reason === "list" || reason === "watch" || reason === "profile")) {
+      void scheduleEpisodeNotifications(usableSession.user.id, usableSession.access_token).catch(() => undefined);
+    }
     if (reason === "list") {
       if (selectedList?.id) setSelectedListFeed(await loadListFeed(selectedList.id, usableSession?.user.id));
       if (usableSession?.user.id && tab === "profile") {
@@ -1310,8 +1317,8 @@ export default function App() {
             loadedCount={selectedListFeed.items.length}
             sort={listSort}
             groupBy={listGroup}
-            onSort={() => setPicker({ title: "Sort titles", value: listSort, options: listSortOptions, onPick: value => setListSort(value as ListSort) })}
-            onGroupBy={setListGroup}
+            onSort={() => setPicker({ title: "Sort titles", value: listSort, options: listSortOptions, onPick: value => { setListSort(value as ListSort); setListGroup("none"); } })}
+            onGroupBy={value => { setListGroup(value); setListSort(value === "collections" ? "none" : "list_order"); }}
             onBack={() => {
               setSelectedList(null);
               setSelectedListFeed(emptyFeed);
@@ -1322,7 +1329,7 @@ export default function App() {
               setProfilePanel("overview");
               goTab("library");
             }} />
-          {listGroup === "collections" ? <GroupedListContent groups={groupedListItems(sortedSelectedListItems, listGroup)} onOpen={openItem} onMenu={setActionItem} /> : null}
+          {listGroup === "collections" ? <GroupedListContent groups={groupedListItems(selectedListFeed.items, listGroup)} onOpen={openItem} onMenu={setActionItem} /> : null}
         </>
       );
     }
@@ -1461,8 +1468,11 @@ export default function App() {
             seasonNumber: season.seasonNumber,
             episodeNumber: Number(episode.episode_number ?? episode.episodeNumber ?? 0),
             title: episode.name ?? null,
+            overview: episode.overview ?? null,
             airDate: episode.air_date ?? episode.airDate ?? null,
-            artwork: episode.still_path ?? episode.stillPath ?? selectedSeriesEpisodes.show.backdropPath ?? selectedSeriesEpisodes.show.posterPath
+            artwork: episode.still_path ?? episode.stillPath ?? selectedSeriesEpisodes.show.backdropPath ?? selectedSeriesEpisodes.show.posterPath,
+            runtime: episode.runtime ?? null,
+            voteAverage: episode.vote_average ?? episode.voteAverage ?? null
           })} />
         ) : selectedSeason ? (
           <SeasonDetailScreen target={selectedSeason} session={usableSession} onBack={() => setSelectedSeason(null)} onOpenEpisode={episode => setSelectedEpisode({
@@ -1471,11 +1481,16 @@ export default function App() {
             seasonNumber: selectedSeason.season.seasonNumber,
             episodeNumber: Number(episode.episode_number ?? episode.episodeNumber ?? 0),
             title: episode.name ?? null,
+            overview: episode.overview ?? null,
             airDate: episode.air_date ?? episode.airDate ?? null,
-            artwork: episode.still_path ?? episode.stillPath ?? selectedSeason.show.backdropPath ?? selectedSeason.show.posterPath
+            artwork: episode.still_path ?? episode.stillPath ?? selectedSeason.show.backdropPath ?? selectedSeason.show.posterPath,
+            runtime: episode.runtime ?? null,
+            voteAverage: episode.vote_average ?? episode.voteAverage ?? null
           })} />
         ) : selected ? (
           <DetailScreenV2 key={`${selected.kind}-${selected.id}`} item={selected} session={usableSession} onBack={closeSelected} onOpen={openItem} onOpenEntity={openEntity} onOpenSeason={season => setSelectedSeason({ show: selected, season })} onOpenAllSeasons={seasons => setSelectedSeriesEpisodes({ show: selected, seasons })} onHide={hideRecommendation} onChanged={refreshAfterAction} />
+        ) : selectedList && listGroup === "collections" ? (
+          <ScrollView contentContainerStyle={styles.listContent} refreshControl={<RefreshControl tintColor={colors.accent} refreshing={refreshing} onRefresh={refresh} />}>{listHeader}</ScrollView>
         ) : (
           <FlatList
             ref={listRef}
@@ -1594,7 +1609,7 @@ function DiscoverHeading({ view, onForYou }: { view?: string; onForYou: () => vo
 }
 
 function ListDetailHeader({ list, loadedCount, sort, groupBy, onSort, onGroupBy, onBack }: { list: UserList; loadedCount?: number; sort: ListSort; groupBy: ListGroup; onSort: () => void; onGroupBy: (value: ListGroup) => void; onBack: () => void }) {
-  const sortLabel = listSortOptions.find(option => option.value === sort)?.label ?? "Name A-Z";
+  const sortLabel = sort === "none" ? "—" : listSortOptions.find(option => option.value === sort)?.label ?? "Name A-Z";
   const displayCount = loadedCount ?? list.count;
   return (
     <View style={styles.listDetailHeader}>
@@ -2067,6 +2082,11 @@ function SeasonDetailScreen({ target, session, onBack, onOpenEpisode }: { target
   const movieTrackerRatings = new Map<number, number | null>((payload?.episodeRatings ?? []).map((rating: any) => [Number(rating.episode), typeof rating.score === "number" ? rating.score : null]));
   const imdbAvailable = [...imdbRatings.values()].some(value => typeof value === "number");
   const movieTrackerAvailable = [...movieTrackerRatings.values()].some(value => typeof value === "number");
+  const seasonRatingSources = [
+    { label: "MovieTracker", value: payload?.communityRating != null ? `${Number(payload.communityRating).toFixed(1)}/10` : "—/10" },
+    ...(payload?.tmdbRating != null ? [{ label: "TMDB", value: `${Number(payload.tmdbRating).toFixed(1)}/10` }] : []),
+    ...(payload?.imdbRating != null ? [{ label: "IMDb", value: `${Number(payload.imdbRating).toFixed(1)}/10` }] : [])
+  ];
   const poster = tmdbImage(season.poster_path ?? season.posterPath ?? target.season.posterPath ?? target.show.posterPath, "w500");
   const backdrop = tmdbImage(target.show.backdropPath || target.show.posterPath, "w780");
 
@@ -2180,6 +2200,7 @@ function SeasonDetailScreen({ target, session, onBack, onOpenEpisode }: { target
           <Text style={styles.detailKicker}>{target.show.title}</Text>
           <Text style={styles.detailTitleV2}>{season.name ?? target.season.name}</Text>
           <Text style={styles.detailMeta}>{episodes.length || target.season.episodeCount || "?"} episodes - {season.air_date?.slice(0, 4) ?? season.airDate?.slice(0, 4) ?? target.season.airDate?.slice(0, 4) ?? "TBA"}</Text>
+          {payload ? <View style={styles.ratingSourceRow}>{seasonRatingSources.map(rating => <RatingSource key={rating.label} label={rating.label} value={rating.value} />)}</View> : null}
           <Text style={styles.detailOverview}>{season.overview || target.season.overview || "No season overview has been published yet."}</Text>
           <View style={styles.detailQuickActions}>
             <Pressable onPress={() => sharePublicTitle(`/title/show/${target.show.id}/season/${target.season.seasonNumber}`, `${target.show.title} - ${season.name ?? target.season.name}`, season.overview || target.season.overview || target.show.overview)} style={styles.quickAction}><Ionicons name="share-social-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>Share</Text></Pressable>
@@ -2464,6 +2485,7 @@ function sortListItems(items: MediaSummary[], sort: ListSort) {
   return [...items].sort((a, b) => {
     const aList = listFields(a);
     const bList = listFields(b);
+    if (sort === "none") return (aList.listPosition ?? 999_999) - (bList.listPosition ?? 999_999);
     if (sort === "title_desc") return b.title.localeCompare(a.title);
     if (sort === "release_desc") return dateValue(b.releaseDate).localeCompare(dateValue(a.releaseDate)) || titleCompare(a, b);
     if (sort === "release_asc") return dateValue(a.releaseDate, false).localeCompare(dateValue(b.releaseDate, false)) || titleCompare(a, b);
@@ -2475,7 +2497,7 @@ function sortListItems(items: MediaSummary[], sort: ListSort) {
 }
 
 function groupedListItems(items: MediaSummary[], groupBy: ListGroup) {
-  const ordered = items;
+  const ordered = sortListItems(items, "list_order");
   if (groupBy === "none") return [{ title: "Titles", items }];
   const groups = new Map<string, MediaSummary[]>();
   if (groupBy === "collections") {
@@ -2498,7 +2520,7 @@ function groupedListItems(items: MediaSummary[], groupBy: ListGroup) {
     if (other.length) groups.set("Other titles", other);
   }
   return [...groups.entries()]
-    .map(([title, groupItems]) => ({ title, items: groupItems }))
+    .map(([title, groupItems]) => ({ title, items: title.startsWith("Other") ? groupItems : sortListItems(groupItems, "release_asc") }))
     .sort((a, b) => (a.title.startsWith("Other") ? 1 : b.title.startsWith("Other") ? -1 : a.title.localeCompare(b.title)));
 }
 
@@ -2914,7 +2936,19 @@ function ActionRow({ icon, label, danger, onPress }: { icon: keyof typeof Ionico
 }
 
 function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity, onOpenSeason, onChanged }: { target: EpisodeTarget; session: Session | null; onBack: () => void; onOpen: (item: MediaSummary) => void; onOpenEntity: (entity: EntityTarget) => void; onOpenSeason: (season: DetailSeason, show: MediaSummary, seasons: DetailSeason[]) => void; onChanged?: (reason?: ActionRefreshReason) => Promise<void> }) {
-  const [episode, setEpisode] = useState<any | null>(null);
+  const [episode, setEpisode] = useState<any | null>(() => ({
+    id: target.episodeId,
+    name: target.title ?? `Episode ${target.episodeNumber}`,
+    overview: target.overview ?? null,
+    episode_number: target.episodeNumber,
+    episodeNumber: target.episodeNumber,
+    air_date: target.airDate ?? null,
+    airDate: target.airDate ?? null,
+    still_path: target.artwork ?? null,
+    runtime: target.runtime ?? null,
+    vote_average: target.voteAverage ?? null,
+    seasons: [{ season_number: target.seasonNumber, seasonNumber: target.seasonNumber, media: [target.show] }]
+  }));
   const [episodeLoading, setEpisodeLoading] = useState(true);
   const [episodeLoadError, setEpisodeLoadError] = useState<string | null>(null);
   const [watched, setWatched] = useState(false);
@@ -2934,9 +2968,9 @@ function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity, on
 
   const loadEpisode = useCallback(async () => {
     setEpisode((current: any | null) => current ?? {
-      id: target.episodeId, name: target.title ?? `Episode ${target.episodeNumber}`, overview: null,
+      id: target.episodeId, name: target.title ?? `Episode ${target.episodeNumber}`, overview: target.overview ?? null,
       episode_number: target.episodeNumber, episodeNumber: target.episodeNumber, air_date: target.airDate ?? null,
-      airDate: target.airDate ?? null, still_path: target.artwork ?? null, runtime: null, vote_average: null,
+      airDate: target.airDate ?? null, still_path: target.artwork ?? null, runtime: target.runtime ?? null, vote_average: target.voteAverage ?? null,
       seasons: [{ season_number: target.seasonNumber, seasonNumber: target.seasonNumber, media: [target.show] }]
     });
     setEpisodeLoading(true);
@@ -4683,7 +4717,7 @@ async function loadUserLists(userId: string): Promise<UserList[]> {
   });
 }
 
-async function scheduleEpisodeNotifications(userId: string) {
+async function scheduleEpisodeNotifications(userId: string, accessToken?: string) {
   const client = supabase;
   if (!client || !Device.isDevice) return;
   const currentPermissions = await Notifications.getPermissionsAsync();
@@ -4710,16 +4744,19 @@ async function scheduleEpisodeNotifications(userId: string) {
     }
   }
 
-  const [progressResult, listResult] = await Promise.all([
-    client.from("progress").select("media_id").eq("user_id", userId).in("status", ["planned", "watching", "paused", "completed"]),
-    client.from("list_items").select("media_id,lists!inner(user_id)").eq("lists.user_id", userId)
+  const [progressResult, favoriteResult, listResult, remoteSchedule] = await Promise.all([
+    client.from("progress").select("media_id").eq("user_id", userId),
+    client.from("favorites").select("media_id").eq("user_id", userId),
+    client.from("list_items").select("media_id,lists!inner(user_id)").eq("lists.user_id", userId),
+    accessToken ? fetchEpisodeNotificationSchedule(accessToken).catch(() => ({ events: [] })) : Promise.resolve({ events: [] })
   ]);
   if (progressResult.error) throw progressResult.error;
+  if (favoriteResult.error) throw favoriteResult.error;
   if (listResult.error) throw listResult.error;
-  const mediaIds = [...new Set([...(progressResult.data ?? []), ...(listResult.data ?? [])].map((row: any) => Number(row.media_id)).filter(Number.isFinite))];
+  const mediaIds = [...new Set([...(progressResult.data ?? []), ...(favoriteResult.data ?? []), ...(listResult.data ?? [])].map((row: any) => Number(row.media_id)).filter(Number.isFinite))];
   const previousIds = JSON.parse(await AsyncStorage.getItem(episodeNotificationIdsKey).catch(() => null) || "[]") as string[];
   await Promise.allSettled(previousIds.map(id => Notifications.cancelScheduledNotificationAsync(id)));
-  if (!mediaIds.length) {
+  if (!mediaIds.length && !remoteSchedule.events.length) {
     await AsyncStorage.setItem(episodeNotificationIdsKey, "[]");
     return;
   }
@@ -4727,39 +4764,57 @@ async function scheduleEpisodeNotifications(userId: string) {
   start.setHours(0, 0, 0, 0);
   const end = new Date(start);
   end.setDate(end.getDate() + 60);
-  const { data: episodes, error } = await client
+  const episodeResult = mediaIds.length ? await client
     .from("episodes")
     .select("id,name,episode_number,air_date,still_path,seasons!inner(season_number,media_id,media(title,tmdb_id,poster_path,backdrop_path))")
     .in("seasons.media_id", mediaIds)
     .gte("air_date", localDateKey(start))
     .lte("air_date", localDateKey(end))
     .order("air_date", { ascending: true })
-    .limit(50);
+    .limit(50) : { data: [], error: null };
+  const { data: episodes, error } = episodeResult;
   if (error) throw error;
 
   const scheduledIds: string[] = [];
+  const scheduledKeys = new Set<string>();
   const today = localDateKey();
+  async function scheduleRelease(release: { key: string; airDate: string; title: string; body: string; href: string; image: string | null; episodeId?: number | string }) {
+    if (scheduledKeys.has(release.key)) return;
+    let date = new Date(`${release.airDate}T09:00:00`);
+    if (date.getTime() <= Date.now() && release.airDate === today) date = new Date(Date.now() + 10_000);
+    if (date.getTime() <= Date.now()) return;
+    const identifier = await Notifications.scheduleNotificationAsync({
+      content: {
+        title: release.title,
+        body: release.body,
+        sound: "default",
+        color: "#ff563d",
+        data: { href: release.href, image: release.image, releaseKey: release.key, episodeId: release.episodeId },
+        ...(Platform.OS === "ios" && release.image ? { attachments: [{ identifier: `episode-${release.episodeId ?? release.key}`, url: release.image, type: "public.image" }] } : {})
+      },
+      trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date, channelId: "episode-releases" }
+    });
+    scheduledKeys.add(release.key);
+    scheduledIds.push(identifier);
+  }
+  for (const event of remoteSchedule.events) {
+    await scheduleRelease({ key: event.releaseKey, airDate: event.airDate, title: event.title, body: event.body, href: event.href, image: event.image });
+  }
   for (const episode of episodes ?? []) {
     const season = firstRow((episode as any).seasons);
     const media = firstRow(season?.media);
     if (!episode.air_date || !media?.tmdb_id) continue;
-    let date = new Date(`${episode.air_date}T09:00:00`);
-    if (date.getTime() <= Date.now() && episode.air_date === today) date = new Date(Date.now() + 10_000);
-    if (date.getTime() <= Date.now()) continue;
     const image = tmdbImage(episode.still_path ?? media.backdrop_path ?? media.poster_path, "w780");
     const href = `/title/show/${media.tmdb_id}/season/${season.season_number}/episode/${episode.episode_number}`;
-    const identifier = await Notifications.scheduleNotificationAsync({
-      content: {
-        title: `New episode of ${media.title}`,
-        body: `S${season.season_number} E${episode.episode_number}${episode.name ? ` - ${episode.name}` : ""} releases today.`,
-        sound: "default",
-        color: "#ff563d",
-        data: { href, image, episodeId: episode.id },
-        ...(Platform.OS === "ios" && image ? { attachments: [{ identifier: `episode-${episode.id}`, url: image, type: "public.image" }] } : {})
-      },
-      trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date, channelId: "episode-releases" }
+    await scheduleRelease({
+      key: `${media.tmdb_id}:${season.season_number}:${episode.episode_number}:${episode.air_date}`,
+      airDate: episode.air_date,
+      title: `New episode of ${media.title}`,
+      body: `S${season.season_number} E${episode.episode_number}${episode.name ? ` - ${episode.name}` : ""} releases today.`,
+      href,
+      image,
+      episodeId: episode.id
     });
-    scheduledIds.push(identifier);
   }
   await AsyncStorage.setItem(episodeNotificationIdsKey, JSON.stringify(scheduledIds));
 }
