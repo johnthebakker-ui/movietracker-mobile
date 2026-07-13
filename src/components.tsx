@@ -62,16 +62,16 @@ export function AppHeader({ session, onProfile, onSearch, onNotifications, onHom
 
   return (
     <View style={styles.header}>
-      <Pressable onPress={onHome} disabled={!onHome} style={styles.logoButton} hitSlop={8}>
+      <Pressable onPress={onHome} disabled={!onHome} style={styles.logoButton} hitSlop={8} accessibilityRole="button" accessibilityLabel="MovieTracker home">
         <View style={styles.logoDot}>
           <Image source={logoIcon} style={styles.logoImage} resizeMode="contain" />
         </View>
         <Text style={styles.logoText}>MovieTracker</Text>
       </Pressable>
       <View style={styles.headerSpacer} />
-      <HeaderButton icon="search-outline" onPress={onSearch} />
-      <HeaderButton icon="notifications-outline" onPress={onNotifications} />
-      <Pressable onPress={onProfile} style={styles.avatar} hitSlop={8}>
+      <HeaderButton icon="search-outline" label="Search" onPress={onSearch} />
+      <HeaderButton icon="notifications-outline" label="Notifications" onPress={onNotifications} />
+      <Pressable onPress={onProfile} style={styles.avatar} hitSlop={8} accessibilityRole="button" accessibilityLabel={session ? "Open profile" : "Sign in"}>
         {avatarUrl ? (
           <RemoteImage uri={avatarUrl} style={styles.avatarImage} />
         ) : (
@@ -82,9 +82,9 @@ export function AppHeader({ session, onProfile, onSearch, onNotifications, onHom
   );
 }
 
-function HeaderButton({ icon, onPress }: { icon: keyof typeof Ionicons.glyphMap; onPress?: () => void }) {
+function HeaderButton({ icon, label, onPress }: { icon: keyof typeof Ionicons.glyphMap; label: string; onPress?: () => void }) {
   return (
-    <Pressable onPress={onPress} style={styles.headerButton} hitSlop={8}>
+    <Pressable onPress={onPress} style={styles.headerButton} hitSlop={8} accessibilityRole="button" accessibilityLabel={label}>
       <Ionicons name={icon} size={23} color={colors.text} />
     </Pressable>
   );
@@ -105,7 +105,7 @@ export function BottomNav({ tab, onTab }: { tab: AppTab; onTab: (tab: AppTab) =>
       {tabs.map(item => {
         const active = tab === item.key;
         return (
-          <Pressable key={item.key} onPress={() => onTab(item.key)} style={styles.navItem} hitSlop={8}>
+          <Pressable key={item.key} onPress={() => onTab(item.key)} style={styles.navItem} hitSlop={8} accessibilityRole="tab" accessibilityLabel={item.label} accessibilityState={{ selected: active }}>
             <Ionicons name={tabIcons[item.key]} size={25} color={active ? colors.accent : colors.muted} />
             <Text style={[styles.navText, active && styles.navActive]}>{item.label}</Text>
           </Pressable>
@@ -142,14 +142,14 @@ export function Hero({ item, index, count, onOpen, onPrevious, onNext }: { item:
         <Text style={styles.heroTitle} numberOfLines={2}>{item.title}</Text>
         <Text style={styles.meta}>{heroMeta}</Text>
         <Text style={styles.heroOverview} numberOfLines={4}>{item.overview || "A cinematic pick from the MovieTracker catalog."}</Text>
-        <Pressable onPress={() => onOpen(item)} style={styles.heroButton}>
+        <Pressable onPress={() => onOpen(item)} style={styles.heroButton} accessibilityRole="button" accessibilityLabel={`Explore ${item.title}`}>
           <Ionicons name="play" size={16} color={colors.text} />
           <Text style={styles.heroButtonText}>Explore title</Text>
         </Pressable>
       </View>
       {count && count > 1 ? (
         <View style={styles.heroControls}>
-          <Pressable onPress={onPrevious} style={styles.heroArrow} hitSlop={8}>
+          <Pressable onPress={onPrevious} style={styles.heroArrow} hitSlop={8} accessibilityRole="button" accessibilityLabel="Previous featured title">
             <Ionicons name="chevron-back" size={24} color={colors.text} />
           </Pressable>
           <View style={styles.heroDots}>
@@ -157,7 +157,7 @@ export function Hero({ item, index, count, onOpen, onPrevious, onNext }: { item:
               <View key={dotIndex} style={[styles.heroDot, dotIndex === index && styles.heroDotActive]} />
             ))}
           </View>
-          <Pressable onPress={onNext} style={styles.heroArrow} hitSlop={8}>
+          <Pressable onPress={onNext} style={styles.heroArrow} hitSlop={8} accessibilityRole="button" accessibilityLabel="Next featured title">
             <Ionicons name="chevron-forward" size={24} color={colors.text} />
           </Pressable>
         </View>
@@ -174,7 +174,7 @@ export function SectionTitle({ kicker, title, action, onAction }: { kicker?: str
         <Text style={styles.sectionHeading}>{title}</Text>
       </View>
       {action ? (
-        <Pressable onPress={onAction} hitSlop={12} style={styles.sectionActionButton}>
+        <Pressable onPress={onAction} hitSlop={12} style={styles.sectionActionButton} accessibilityRole="button" accessibilityLabel={action}>
           <Text style={styles.sectionAction}>{action}</Text>
         </Pressable>
       ) : null}
@@ -201,10 +201,12 @@ export function TitleCard({ item, onOpen, onMenu }: { item: MediaSummary; onOpen
       }}
       delayLongPress={360}
       style={styles.card}
+      accessibilityRole="button"
+      accessibilityLabel={`${item.title}, ${titleYear(item)}, ${item.kind === "show" ? "series" : "film"}`}
     >
       <View style={styles.poster}>
         {image ? <RemoteImage uri={image} style={styles.posterImage} resizeMode="cover" /> : <Text style={styles.posterFallback}>{item.title}</Text>}
-        <Pressable onPress={() => onMenu(item)} style={styles.menuDot} hitSlop={10}>
+        <Pressable onPress={() => onMenu(item)} style={styles.menuDot} hitSlop={10} accessibilityRole="button" accessibilityLabel={`Actions for ${item.title}`}>
           <Ionicons name="ellipsis-vertical" size={22} color={colors.text} />
         </Pressable>
         {userRatingLabel(item) ? (
@@ -230,7 +232,7 @@ export function FilterButton({ icon, label, value, onPress }: { icon: keyof type
   };
 
   return (
-    <Pressable ref={buttonRef} onPress={handlePress} style={styles.filterButton}>
+    <Pressable ref={buttonRef} onPress={handlePress} style={styles.filterButton} accessibilityRole="button" accessibilityLabel={`${label}: ${value}`}>
       <View style={styles.filterIcon}>
         <Ionicons name={icon} size={22} color={colors.accent} />
       </View>

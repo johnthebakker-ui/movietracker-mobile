@@ -3,7 +3,7 @@
     "name": "MovieTracker",
     "slug": "movietracker-mobile",
     "scheme": "movietracker",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -31,6 +31,12 @@
           "color": "#ff563d",
           "defaultChannel": "episode-releases"
         }
+      ],
+      [
+        "expo-secure-store",
+        {
+          "configureAndroidBackup": true
+        }
       ]
     ],
     "ios": {
@@ -38,7 +44,11 @@
     },
     "android": {
       "package": "com.johnthebakker.movietracker",
-      "versionCode": 2,
+      "versionCode": 3,
+      "blockedPermissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.SYSTEM_ALERT_WINDOW"
+      ],
       "adaptiveIcon": {
         "backgroundColor": "#060808",
         "foregroundImage": "./assets/android-icon-foreground.png",

@@ -7,6 +7,7 @@ export type HomePayload = {
 };
 
 export type MobileTitlePayload = {
+  completeness?: "core" | "full";
   dbId: number | null;
   overview: string | null;
   tagline: string | null;
@@ -98,32 +99,66 @@ function queryString(values: Record<string, string | number | boolean | undefine
   return params.toString();
 }
 
-async function request<T>(path: string, token?: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_URL}${path}`, {
-    ...init,
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(init?.headers || {})
+const inflightGets = new Map<string, Promise<unknown>>();
+
+async function executeRequest<T>(path: string, token?: string, init?: RequestInit): Promise<T> {
+  const method = (init?.method ?? "GET").toUpperCase();
+  const attempts = method === "GET" ? 2 : 1;
+  let lastError: unknown;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15_000);
+    try {
+      const response = await fetch(`${API_URL}${path}`, {
+        ...init,
+        signal: controller.signal,
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...(init?.headers || {})
+        }
+      });
+      const json = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const error = new Error(typeof json?.error === "string" ? json.error : `Request failed (${response.status})`);
+        if (attempt + 1 < attempts && [408, 429, 500, 502, 503, 504].includes(response.status)) { lastError = error; continue; }
+        throw error;
+      }
+      return json as T;
+    } catch (error) {
+      lastError = error;
+      if (attempt + 1 >= attempts) throw error instanceof Error && error.name === "AbortError" ? new Error("Request timed out. Check your connection and try again.") : error;
+    } finally {
+      clearTimeout(timer);
     }
-  });
-  const json = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(typeof json?.error === "string" ? json.error : `Request failed (${response.status})`);
-  return json as T;
+  }
+  throw lastError;
+}
+
+async function request<T>(path: string, token?: string, init?: RequestInit): Promise<T> {
+  const method = (init?.method ?? "GET").toUpperCase();
+  if (method !== "GET") return executeRequest(path, token, init);
+  const key = `${token ?? "guest"}:${path}`;
+  const existing = inflightGets.get(key) as Promise<T> | undefined;
+  if (existing) return existing;
+  const pending = executeRequest<T>(path, token, init).finally(() => inflightGets.delete(key));
+  inflightGets.set(key, pending);
+  return pending;
 }
 
 async function requestText(path: string): Promise<string> {
-  const response = await fetch(`${API_URL}${path}`, {
-    headers: {
-      Accept: "text/html,application/xhtml+xml",
-      "Cache-Control": "no-cache",
-      "User-Agent": "MovieTrackerMobile/1.0"
-    }
-  });
-  const text = await response.text();
-  if (!response.ok) throw new Error(`Request failed (${response.status})`);
-  return text;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12_000);
+  try {
+    const response = await fetch(`${API_URL}${path}`, {
+      signal: controller.signal,
+      headers: { Accept: "text/html,application/xhtml+xml", "Cache-Control": "no-cache", "User-Agent": "MovieTrackerMobile/1.0" }
+    });
+    const text = await response.text();
+    if (!response.ok) throw new Error(`Request failed (${response.status})`);
+    return text;
+  } finally { clearTimeout(timer); }
 }
 
 function normalizeRecommendations(data: { items?: Array<{ item?: MediaSummary; reason?: string } | MediaSummary>; nextCursor?: number | null; exhausted?: boolean }): FeedResult {
@@ -163,20 +198,7 @@ export async function fetchSearch(query: string, token?: string): Promise<FeedRe
 }
 
 export async function fetchWebsiteHome(token?: string): Promise<HomePayload> {
-  try {
-    const feed = await request<HomePayload>("/api/mobile/home", token);
-    if (feed.hero.length || feed.sections.some(section => section.items.length)) return feed;
-  } catch {
-    // Older deployments do not expose the JSON home feed yet; fall back to HTML scraping.
-  }
-  const html = await requestText("/");
-  const hero = extractHeroItems(html);
-  const sections = extractHomeSections(html);
-  if (!hero.length && !sections.some(section => section.items.length)) throw new Error("The home page did not expose any titles.");
-  return {
-    hero: hero.length ? hero : sections.flatMap(section => section.items).slice(0, 6),
-    sections
-  };
+  return request<HomePayload>("/api/mobile/home", token);
 }
 
 export async function fetchRecommendations(filters: RecommendationFilters, token: string, cursor = 0): Promise<FeedResult> {
@@ -257,33 +279,15 @@ export async function fetchWebsiteTitleRatings(kind: MediaSummary["kind"], id: n
 }
 
 export async function fetchWebsiteTitleMetadata(kind: MediaSummary["kind"], id: number) {
-  const html = normalizeHtml(await requestText(`/title/${kind}/${id}`));
-  const overview = decodeHtml(stripTags(matchText(html, /<p class="overview">([\s\S]*?)<\/p>/) || ""));
-  const related = extractTitleRelatedSections(html);
-  const rowStart = html.indexOf("rating-source-row");
-  const ratings: Array<{ label: string; value: string }> = [];
-  if (rowStart >= 0) {
-    const chunk = html.slice(rowStart, rowStart + 5000);
-    const pattern = /<small[^>]*>([\s\S]*?)<\/small>\s*<strong[^>]*>([\s\S]*?)<\/strong>/g;
-    let match: RegExpExecArray | null;
-    while ((match = pattern.exec(chunk))) {
-      const label = normalizeRatingLabel(decodeHtml(stripTags(match[1])).trim());
-      const value = decodeHtml(stripTags(match[2])).replace(/\s+/g, "").trim();
-      if (label && value && label !== "MovieTracker" && label !== "TMDB" && !ratings.some(source => source.label === label)) ratings.push({ label, value });
-    }
-  }
-  for (const source of extractExternalRatingsFallback(html)) {
-    if (!ratings.some(rating => rating.label === source.label)) ratings.push(source);
-  }
-  return { overview, ratings, ...related };
+  const payload = await request<MobileTitlePayload>(`/api/mobile/title/${kind}/${id}`);
+  return { overview: payload.overview ?? "", ratings: payload.externalRatings ?? [], collectionTitle: payload.collectionName ?? undefined, collectionItems: payload.collection ?? [], recommendations: payload.recommendations ?? [] };
 }
 
 export async function fetchWebsiteEntityMetadata(type: "person" | "company", id: number) {
-  const html = normalizeHtml(await requestText(`/${type}/${id}`));
-  const items = extractCardsWithStreamed(html, html);
-  const title = decodeHtml(stripTags(matchText(html, /class="display page-title">([\s\S]*?)<\/h1>/) || "")).trim();
-  const bio = decodeHtml(stripTags(matchText(html, /class="overview(?: entity-bio)?">([\s\S]*?)<\/p>/) || "")).trim();
-  return { title, bio, items };
+  const payload = await request<MobileEntityPayload>(`/api/mobile/${type}/${id}`);
+  const entity = type === "person" ? payload.person : payload.company;
+  const items = payload.items ?? payload.person?.credits ?? [...(payload.movies?.items ?? []), ...(payload.shows?.items ?? [])];
+  return { title: entity?.name ?? "", bio: entity?.biography ?? entity?.description ?? "", items };
 }
 
 export async function setNotInterested(item: MediaSummary, token: string) {

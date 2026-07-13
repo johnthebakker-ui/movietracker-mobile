@@ -7,7 +7,7 @@ The app is a native MovieTracker client with:
 - cinematic dark mobile UI matching the website’s phone layout
 - native bottom navigation
 - real catalog discovery from the deployed MovieTracker API
-- Supabase email/password session persistence
+- encrypted Supabase session persistence backed by the platform keystore
 - authenticated recommendation calls using the same Supabase account
 - native detail screens, bottom-sheet actions, and recommendation hiding
 
@@ -25,9 +25,16 @@ Fill `.env` with the same public values used by the website:
 EXPO_PUBLIC_SUPABASE_URL=https://YOUR-PROJECT.supabase.co
 EXPO_PUBLIC_SUPABASE_ANON_KEY=YOUR-PUBLISHABLE-OR-ANON-KEY
 EXPO_PUBLIC_API_URL=https://movietracker-tan.vercel.app
+EXPO_PUBLIC_EAS_PROJECT_ID=YOUR-EXPO-PROJECT-UUID
 ```
 
 Never add service-role keys, TMDB tokens, or other server secrets to this project.
+
+`EXPO_PUBLIC_EAS_PROJECT_ID` is required for Expo push-token registration. Local scheduled release notifications still work without it, but server-initiated delivery does not. Link the app once with `eas init`, then place the resulting project UUID in local/EAS environment settings.
+
+## Release APK
+
+`eas.json` defines an installable production APK profile. EAS manages the production signing credential. For a local release, generate a private upload keystore and point the ignored `android/keystore.properties` file at it; never commit the keystore or passwords. Version `1.0.2` uses Android version code `3`.
 
 ## Android Studio workflow
 

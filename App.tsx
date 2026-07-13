@@ -34,7 +34,9 @@ import {
 import { AppHeader, BottomNav, DiscoverFiltersCard, Hero, PickerSheet, RecommendationFiltersCard, RemoteImage, resolveRemoteImageUri, SectionTitle, TitleCard, type PickerAnchor } from "./src/components";
 import { disconnectTrakt, fetchDiscover, fetchEpisodeNotificationSchedule, fetchMobileCompany, fetchMobileEpisode, fetchMobileHistory, fetchMobilePerson, fetchMobileProfile, fetchMobileSeason, fetchMobileTitle, fetchRecommendations, fetchSearch, fetchTraktStatus, fetchWebsiteEntityMetadata, fetchWebsiteHome, fetchWebsiteTitleMetadata, refreshRecommendations, setNotInterested, startTraktConnect, syncTrakt, type MobileTraktStatus } from "./src/api";
 import { API_URL, communityRatingLabel, countries, excludeGenreOptions, genres, HAS_SUPABASE, titleYear, tmdbImage, userRatingLabel } from "./src/config";
+import { groupFranchises, listFranchiseName } from "./src/franchise-groups";
 import { supabase } from "./src/supabase";
+import { reportError } from "./src/telemetry";
 import { colors } from "./src/theme";
 import type { AppTab, DiscoverFilters, FeedResult, MediaKind, MediaSummary, RecommendationFilters } from "./src/types";
 
@@ -398,9 +400,9 @@ export default function App() {
 
   useEffect(() => {
     if (!usableSession?.user.id || !supabase) return;
-    scheduleEpisodeNotifications(usableSession.user.id, usableSession.access_token).catch(error => console.warn("Episode notification setup failed", error));
+    scheduleEpisodeNotifications(usableSession.user.id, usableSession.access_token).catch(error => { console.warn("Episode notification setup failed", error); reportError("notification-setup", error); });
     const subscription = AppState.addEventListener("change", state => {
-      if (state === "active") scheduleEpisodeNotifications(usableSession.user.id, usableSession.access_token).catch(error => console.warn("Episode notification refresh failed", error));
+      if (state === "active") scheduleEpisodeNotifications(usableSession.user.id, usableSession.access_token).catch(error => { console.warn("Episode notification refresh failed", error); reportError("notification-refresh", error); });
     });
     return () => subscription.remove();
   }, [usableSession?.access_token, usableSession?.user.id]);
@@ -408,10 +410,31 @@ export default function App() {
   useEffect(() => {
     const subscription = Notifications.addNotificationResponseReceivedListener(response => {
       const href = response.notification.request.content.data?.href;
-      if (typeof href === "string" && href.startsWith("/")) void WebBrowser.openBrowserAsync(`${API_URL}${href}`);
+      if (typeof href !== "string" || !href.startsWith("/")) return;
+      const match = href.match(/^\/title\/show\/(\d+)\/season\/(\d+)\/episode\/(\d+)/);
+      if (!match) {
+        void WebBrowser.openBrowserAsync(`${API_URL}${href}`);
+        return;
+      }
+      const [, showId, seasonNumber, episodeNumber] = match.map(Number);
+      void fetchMobileEpisode(showId, seasonNumber, episodeNumber, usableSession?.access_token).then(payload => {
+        const episode = payload.episode ?? {};
+        setSelectedEpisode({
+          episodeId: payload.episodeId ?? undefined,
+          show: payload.show,
+          seasonNumber,
+          episodeNumber,
+          title: episode.name,
+          overview: episode.overview,
+          airDate: episode.air_date,
+          artwork: episode.still_path,
+          runtime: episode.runtime,
+          voteAverage: episode.vote_average
+        });
+      }).catch(() => void WebBrowser.openBrowserAsync(`${API_URL}${href}`));
     });
     return () => subscription.remove();
-  }, []);
+  }, [usableSession?.access_token]);
 
   const loadHome = useCallback(async (force = false) => {
     const cacheKey = `home:v3:${usableSession?.user.id ?? "guest"}`;
@@ -477,7 +500,7 @@ export default function App() {
     const token = usableSession?.access_token;
     const timer = setTimeout(() => {
       void (async () => {
-        const queue = picks.slice(0, 20);
+        const queue = picks.slice(0, 6);
         const worker = async () => {
           while (!cancelled) {
             const item = queue.shift();
@@ -489,13 +512,10 @@ export default function App() {
             if (cached) continue;
             const core = await fetchMobileTitle(item.kind, item.id, token, "core").catch(() => null);
             if (cancelled) return;
-            if (core) await AsyncStorage.setItem(cacheKey, JSON.stringify({ detail: core, savedAt: Date.now() - 240000 })).catch(() => undefined);
-            const full = await fetchMobileTitle(item.kind, item.id, token, "full").catch(() => null);
-            if (cancelled) return;
-            if (full) await AsyncStorage.setItem(cacheKey, JSON.stringify({ detail: full, savedAt: Date.now() })).catch(() => undefined);
+            if (core) await AsyncStorage.setItem(cacheKey, JSON.stringify({ detail: core, savedAt: Date.now() })).catch(() => undefined);
           }
         };
-        await Promise.all(Array.from({ length: Math.min(4, queue.length) }, worker));
+        await Promise.all(Array.from({ length: Math.min(2, queue.length) }, worker));
       })();
     }, 500);
 
@@ -1023,7 +1043,7 @@ export default function App() {
 
   const activeFeed = searchMode ? searchFeed : selectedList ? selectedListFeed : tab === "discover" ? discoverFeed : tab === "calendar" ? calendarFeed : tab === "library" ? libraryFeed : tab === "profile" && profileView === "recommendations" ? recommendationFeed : emptyFeed;
   useEffect(() => {
-    const items = activeFeed.items.slice(0, 12);
+    const items = activeFeed.items.slice(0, 4);
     if (!items.length) return;
     let cancelled = false;
     const timer = setTimeout(() => {
@@ -1037,11 +1057,11 @@ export default function App() {
             if (homeDetailPrefetchKeys.current.has(cacheKey)) continue;
             homeDetailPrefetchKeys.current.add(cacheKey);
             if (await AsyncStorage.getItem(cacheKey).catch(() => null)) continue;
-            const detail = await fetchMobileTitle(item.kind, item.id, usableSession?.access_token, "full").catch(() => null);
+            const detail = await fetchMobileTitle(item.kind, item.id, usableSession?.access_token, "core").catch(() => null);
             if (!cancelled && detail) await AsyncStorage.setItem(cacheKey, JSON.stringify({ detail, savedAt: Date.now() })).catch(() => undefined);
           }
         };
-        await Promise.all(Array.from({ length: Math.min(3, queue.length) }, worker));
+        await Promise.all(Array.from({ length: Math.min(2, queue.length) }, worker));
       })();
     }, 350);
     return () => { cancelled = true; clearTimeout(timer); };
@@ -2300,9 +2320,21 @@ function SeriesEpisodesScreen({ target, session, onBack, onOpenSeason, onOpenEpi
   useEffect(() => {
     let alive = true;
     setLoadingAll(true);
-    Promise.all(seasons.map(season => fetchMobileSeason(target.show.id, season.seasonNumber, session?.access_token).catch(() => ({ season, episodes: [], imdbRatings: [] }))))
-      .then(data => { if (alive) setPayloads(data); })
-      .finally(() => { if (alive) setLoadingAll(false); });
+    const load = async () => {
+      const data = new Array(seasons.length);
+      let cursor = 0;
+      const worker = async () => {
+        while (cursor < seasons.length && alive) {
+          const index = cursor++;
+          const season = seasons[index];
+          data[index] = await fetchMobileSeason(target.show.id, season.seasonNumber, session?.access_token).catch(() => ({ season, episodes: [], imdbRatings: [] }));
+          if (alive) setPayloads(data.filter(Boolean));
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(3, seasons.length) }, worker));
+      if (alive) setLoadingAll(false);
+    };
+    void load();
     return () => { alive = false; };
   }, [seasons, session?.access_token, target.show.id]);
 
@@ -2499,91 +2531,10 @@ function sortListItems(items: MediaSummary[], sort: ListSort) {
 function groupedListItems(items: MediaSummary[], groupBy: ListGroup) {
   const ordered = sortListItems(items, "list_order");
   if (groupBy === "none") return [{ title: "Titles", items }];
-  const groups = new Map<string, MediaSummary[]>();
-  if (groupBy === "collections") {
-    const explicitGroups = new Set<string>();
-    const other: MediaSummary[] = [];
-    ordered.forEach(item => {
-      const key = listFranchiseName(item);
-      if (key) {
-        if (key.explicit) explicitGroups.add(key.name);
-        groups.set(key.name, [...(groups.get(key.name) ?? []), item]);
-      }
-      else other.push(item);
-    });
-    for (const [name, groupItems] of groups.entries()) {
-      if (groupItems.length < 2 && !explicitGroups.has(name)) {
-        groups.delete(name);
-        other.push(...groupItems);
-      }
-    }
-    if (other.length) groups.set("Other titles", other);
-  }
+  const groups = groupBy === "collections" ? groupFranchises(ordered) : new Map<string, MediaSummary[]>();
   return [...groups.entries()]
     .map(([title, groupItems]) => ({ title, items: title.startsWith("Other") ? groupItems : sortListItems(groupItems, "release_asc") }))
     .sort((a, b) => (a.title.startsWith("Other") ? 1 : b.title.startsWith("Other") ? -1 : a.title.localeCompare(b.title)));
-}
-
-function listFranchiseName(item: MediaSummary): { name: string; explicit: boolean } | null {
-  const manual = item.franchiseGroup?.trim();
-  if (manual) return { name: manual, explicit: true };
-  const title = item.title.toLowerCase().replace(/[-_]/g, " ");
-  const rules: Array<[RegExp, string]> = [
-    [/\bharry potter\b/i, "Harry Potter Collection"],
-    [/\bplanet of the apes\b/i, "Planet of the Apes Collection"],
-    [/\bhunger games\b|\bballad of songbirds\b|\bsunrise on the reaping\b/i, "The Hunger Games Collection"],
-    [/\blord of the rings\b|\bthe hobbit\b/i, "The Lord of the Rings Collection"],
-    [/\bmaze runner\b/i, "Maze Runner Collection"],
-    [/\bpirates of the caribbean\b/i, "Pirates of the Caribbean Collection"],
-    [/\bpurge\b/i, "The Purge Collection"],
-    [/\bnow you see me\b/i, "Now You See Me Collection"],
-    [/\bdivergent\b|\binsurgent\b|\ballegiant\b/i, "Divergent Collection"],
-    [/\bthe conjuring\b|\bannabelle\b|\bthe nun\b|\bla llorona\b/i, "The Conjuring Universe"],
-    [/\binsidious\b/i, "Insidious Collection"],
-    [/\bhappy death day\b/i, "Happy Death Day Collection"],
-    [/\bevil dead\b|\barmy of darkness\b/i, "Evil Dead Collection"],
-    [/\bsmile\b/i, "Smile Collection"],
-    [/\ba quiet place\b/i, "A Quiet Place Collection"],
-    [/\bdon'?t breathe\b/i, "Don't Breathe Collection"],
-    [/\bfinal destination\b/i, "Final Destination Collection"],
-    [/\bfear street\b/i, "Fear Street Collection"],
-    [/\bscream\b/i, "Scream Collection"],
-    [/\bhalloween\b/i, "Halloween Collection"],
-    [/\bfriday the 13th\b/i, "Friday the 13th Collection"],
-    [/\bnightmare on elm street\b|\bfreddy'?s dead\b|\bnew nightmare\b/i, "A Nightmare on Elm Street Collection"],
-    [/\bterrifier\b/i, "Terrifier Collection"],
-    [/\bthe strangers\b|\bstrangers:/i, "The Strangers Collection"],
-    [/\bhell house llc\b/i, "Hell House LLC Collection"],
-    [/\bv\/h\/s\b|\bvhs\b/i, "V/H/S Collection"],
-    [/\bparanormal activity\b/i, "Paranormal Activity Collection"],
-    [/\bsinister\b/i, "Sinister Collection"],
-    [/\bthe ring\b|\brings\b/i, "The Ring Collection"],
-    [/\bthe grudge\b|\bju on\b/i, "The Grudge Collection"],
-    [/\bescape room\b/i, "Escape Room Collection"],
-    [/\bcloverfield\b/i, "Cloverfield Collection"],
-    [/\b28 days later\b|\b28 weeks later\b|\b28 years later\b/i, "28 Days Later Collection"],
-    [/\bsaw\b|\bjigsaw\b/i, "Saw Collection"],
-    [/\balien\b|\bprometheus\b|\balien covenant\b/i, "Alien Collection"],
-    [/\bpredator\b|\bprey\b/i, "Predator Collection"],
-    [/\bjurassic park\b|\bjurassic world\b/i, "Jurassic Park Collection"],
-    [/\bmission:?\s*impossible\b/i, "Mission: Impossible Collection"],
-    [/\bjohn wick\b|\bballerina\b/i, "John Wick Collection"],
-    [/\bfast (and|&) furious\b|\bfast furious\b|\bfast x\b|\bf9\b|\bhobbs\b.*\bshaw\b/i, "Fast & Furious Collection"],
-    [/\bgodzilla\b|\bkong\b|\bskull island\b/i, "Monsterverse Collection"],
-    [/\bstar wars\b/i, "Star Wars Collection"],
-    [/\bindiana jones\b/i, "Indiana Jones Collection"],
-    [/\bavatar\b.*\b(last airbender|legend of aang)\b|\blegend of korra\b/i, "Avatar: The Last Airbender Collection"],
-    [/\battack on titan\b/i, "Attack on Titan Collection"],
-    [/\bchainsaw man\b/i, "Chainsaw Man Collection"],
-    [/\bwreck it ralph\b|\bralph breaks the internet\b/i, "Wreck-It Ralph Collection"],
-    [/\bincredibles\b/i, "The Incredibles Collection"],
-    [/\bice age\b/i, "Ice Age Collection"],
-    [/\bmadagascar\b/i, "Madagascar Collection"]
-  ];
-  const match = rules.find(([pattern]) => pattern.test(title));
-  if (match) return { name: match[1], explicit: false };
-  if (item.collectionName) return { name: item.collectionName, explicit: false };
-  return null;
 }
 
 function availableListFranchiseGroups(items: MediaSummary[]) {
@@ -3429,25 +3380,21 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
         if (parsed.detail) {
           hasCachedDetail = true;
           applyMobileDetail(parsed.detail);
-          if (Date.now() - (parsed.savedAt ?? 0) < 300000) {
+          if (parsed.detail.completeness === "full" && Date.now() - (parsed.savedAt ?? 0) < 300000) {
             setDetailLoading(false);
             return;
           }
         }
       } catch { /* Ignore stale detail cache. */ }
     }
-    const coreDetailPromise = fetchMobileTitle(item.kind, item.id, session?.access_token, "core").catch(() => null);
-    const fullDetailPromise = fetchMobileTitle(item.kind, item.id, session?.access_token, "full").catch(() => null);
-    const coreDetail = await coreDetailPromise;
-    if (coreDetail) applyMobileDetail(coreDetail);
-    const mobileDetail = await fullDetailPromise;
+    const mobileDetail = await fetchMobileTitle(item.kind, item.id, session?.access_token, "full").catch(() => null);
     if (mobileDetail) {
       applyMobileDetail(mobileDetail);
       await AsyncStorage.setItem(detailCacheKey, JSON.stringify({ detail: mobileDetail, savedAt: Date.now() })).catch(() => undefined);
       setDetailLoading(false);
       return;
     }
-    if (coreDetail || hasCachedDetail) {
+    if (hasCachedDetail) {
       setDetailLoading(false);
       return;
     }
@@ -4188,6 +4135,7 @@ function SettingsScreen({ session, profile, tab, onTab, onBack, onSignOut, onSav
   const [avatarImage, setAvatarImage] = useState<ProfileImageSelection>({ uri: resolveRemoteImageUri(profile?.avatar_url ?? ""), changed: false });
   const [bannerImage, setBannerImage] = useState<ProfileImageSelection>({ uri: resolveRemoteImageUri(profile?.banner_url ?? ""), changed: false });
   const [privacy, setPrivacy] = useState<Record<string, string>>({});
+  const [notificationPreferences, setNotificationPreferences] = useState<Record<string, boolean>>({ follow_email: true, interaction_email: true, release_email: true, digest_email: false });
   const [saving, setSaving] = useState(false);
   const [traktStatus, setTraktStatus] = useState<MobileTraktStatus | null>(null);
   const [traktBusy, setTraktBusy] = useState(false);
@@ -4218,6 +4166,26 @@ function SettingsScreen({ session, profile, tab, onTab, onBack, onSignOut, onSav
       if (data) setPrivacy({ profile: data.profile, activity: data.activity, history: data.history, ratings: data.ratings, favorites: data.favorites, statistics: data.statistics });
     });
   }, [session.user.id]);
+
+  useEffect(() => {
+    if (!supabase) return;
+    supabase.from("notification_preferences").select("follow_email,interaction_email,release_email,digest_email").eq("user_id", session.user.id).maybeSingle().then(({ data }) => {
+      if (data) setNotificationPreferences(data as Record<string, boolean>);
+    });
+  }, [session.user.id]);
+
+  async function saveNotificationPreference(key: string, enabled: boolean) {
+    if (!supabase) return;
+    const previous = notificationPreferences[key];
+    setNotificationPreferences(current => ({ ...current, [key]: enabled }));
+    const { error } = await supabase.from("notification_preferences").upsert({ user_id: session.user.id, [key]: enabled }, { onConflict: "user_id" });
+    if (error) {
+      setNotificationPreferences(current => ({ ...current, [key]: previous }));
+      Alert.alert("Could not save", error.message);
+    } else if (key === "release_email") {
+      scheduleEpisodeNotifications(session.user.id, session.access_token).catch(reason => reportError("notification-preference", reason));
+    }
+  }
 
   const loadTrakt = useCallback(async () => {
     if (tab !== "integrations") return;
@@ -4475,7 +4443,10 @@ function SettingsScreen({ session, profile, tab, onTab, onBack, onSignOut, onSav
         </View>
         <Pressable onPress={onSignOut} style={styles.settingsGhost}><Text style={styles.settingsGhostText}>Sign out</Text></Pressable>
         <Pressable disabled={securityBusy} onPress={() => Alert.alert("Delete account?", "We'll email a confirmation link before anything is deleted.", [{ text: "Cancel", style: "cancel" }, { text: "Delete account", style: "destructive", onPress: () => requestSecurityEmail("delete_account") }])} style={styles.settingsDanger}><Text style={styles.settingsDangerText}>Delete account</Text></Pressable></View> : null}
-      {tab === "notifications" ? <View style={styles.settingsPanel}><Text style={styles.settingsTitle}>Notifications</Text>{["Follow requests and approvals", "Review and list interactions", "Release reminders", "Recommendation digest"].map(label => <ToggleRow key={label} label={label} />)}</View> : null}
+      {tab === "notifications" ? <View style={styles.settingsPanel}><Text style={styles.settingsTitle}>Notifications</Text>{[
+        ["follow_email", "Follow requests and approvals"], ["interaction_email", "Review and list interactions"],
+        ["release_email", "Release reminders"], ["digest_email", "Recommendation digest"]
+      ].map(([key, label]) => <ToggleRow key={key} label={label} enabled={notificationPreferences[key] ?? false} onChange={enabled => void saveNotificationPreference(key, enabled)} />)}</View> : null}
       {tab === "integrations" ? <View style={styles.settingsPanel}><Text style={styles.settingsTitle}>Integrations</Text><Text style={styles.settingsBody}>Connect Trakt once and MovieTracker will keep your viewing diary synced across the app and website.</Text>
         {!traktStatus ? <ActivityIndicator color={colors.accent} style={{ marginTop: 18 }} /> : !traktStatus.databaseReady ? <Text style={styles.settingsError}>Trakt database migration is not ready yet.</Text> : !traktStatus.environmentReady ? <Text style={styles.settingsError}>Trakt server credentials are not configured yet.</Text> : traktStatus.connection ? (
           <View style={styles.integrationBox}>
@@ -4519,9 +4490,8 @@ function PrivacyRow({ label, value, onChange }: { label: string; value: string; 
   return <Pressable onPress={() => onChange(next)} style={styles.privacyRow}><Text style={styles.privacyLabel}>{label}</Text><Text style={styles.privacyValue}>{value}</Text></Pressable>;
 }
 
-function ToggleRow({ label }: { label: string }) {
-  const [enabled, setEnabled] = useState(true);
-  return <View style={styles.toggleRow}><Text style={styles.privacyLabel}>{label}</Text><Switch value={enabled} onValueChange={setEnabled} thumbColor={enabled ? colors.accent : colors.muted} trackColor={{ false: colors.panel2, true: colors.accentSoft }} /></View>;
+function ToggleRow({ label, enabled, onChange }: { label: string; enabled: boolean; onChange: (value: boolean) => void }) {
+  return <View style={styles.toggleRow}><Text style={styles.privacyLabel}>{label}</Text><Switch accessibilityRole="switch" accessibilityLabel={label} value={enabled} onValueChange={onChange} thumbColor={enabled ? colors.accent : colors.muted} trackColor={{ false: colors.panel2, true: colors.accentSoft }} /></View>;
 }
 
 function AuthPanel({ email, password, mode, busy, onEmail, onPassword, onMode, onSubmit, onGoogle }: { email: string; password: string; mode: "sign-in" | "sign-up"; busy: boolean; onEmail: (value: string) => void; onPassword: (value: string) => void; onMode: (value: "sign-in" | "sign-up") => void; onSubmit: () => void; onGoogle: () => void }) {
@@ -4720,6 +4690,14 @@ async function loadUserLists(userId: string): Promise<UserList[]> {
 async function scheduleEpisodeNotifications(userId: string, accessToken?: string) {
   const client = supabase;
   if (!client || !Device.isDevice) return;
+  const preferenceResult = await client.from("notification_preferences").select("release_email").eq("user_id", userId).maybeSingle();
+  if (preferenceResult.error) throw preferenceResult.error;
+  if (preferenceResult.data?.release_email === false) {
+    const previousIds = JSON.parse(await AsyncStorage.getItem(episodeNotificationIdsKey).catch(() => null) || "[]") as string[];
+    await Promise.allSettled(previousIds.map(id => Notifications.cancelScheduledNotificationAsync(id)));
+    await AsyncStorage.setItem(episodeNotificationIdsKey, "[]");
+    return;
+  }
   const currentPermissions = await Notifications.getPermissionsAsync();
   const permissions = currentPermissions.status === "granted" ? currentPermissions : await Notifications.requestPermissionsAsync();
   if (permissions.status !== "granted") return;
