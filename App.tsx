@@ -546,7 +546,8 @@ export default function App() {
     setSearchLoading(true);
     try {
       try {
-        const feed = await fetchSearch(clean, usableSession?.access_token);
+        const remoteFeed = await fetchSearch(clean, usableSession?.access_token);
+        const feed = { ...remoteFeed, items: await enrichShowRuns(remoteFeed.items, usableSession?.access_token) };
         searchCache.set(cacheKey, { savedAt: Date.now(), feed });
         setSearchFeed(feed);
         return;
@@ -564,7 +565,7 @@ export default function App() {
         .order("popularity", { ascending: false })
         .limit(40);
       if (searchError) throw searchError;
-      const feed = { items: (data ?? []).map(row => fromDbMedia(row)) };
+      const feed = { items: await enrichShowRuns((data ?? []).map(row => fromDbMedia(row)), usableSession?.access_token) };
       searchCache.set(cacheKey, { savedAt: Date.now(), feed });
       setSearchFeed(feed);
     } finally {
@@ -4633,7 +4634,15 @@ function dedupeMedia(items: MediaSummary[]) {
 }
 
 async function enrichShowRuns(items: MediaSummary[], accessToken?: string, limit = 40) {
-  const shows = [...new Map(items.filter(item => item.kind === "show" && (!item.status || !item.releaseDate)).map(item => [item.id, item])).values()].slice(0, Math.min(limit, 12));
+  const currentYear = new Date().getUTCFullYear();
+  const needsRun = (item: MediaSummary) => {
+    if (item.kind !== "show") return false;
+    const status = item.status?.toLowerCase() ?? "";
+    const ended = status.includes("ended") || status.includes("canceled") || status.includes("cancelled");
+    const startYear = Number(item.releaseDate?.slice(0, 4));
+    return !item.status || !item.releaseDate || (ended && !item.endDate) || Boolean(startYear && startYear < currentYear - 2 && !item.endDate);
+  };
+  const shows = [...new Map(items.filter(needsRun).map(item => [item.id, item])).values()].slice(0, Math.min(limit, 12));
   if (!shows.length) return items;
   const details = await Promise.allSettled(shows.map(item => fetchMobileTitle("show", item.id, accessToken).then(detail => ({ id: item.id, detail }))));
   const detailById = new Map(details.flatMap(result => result.status === "fulfilled" ? [[result.value.id, result.value.detail]] : []));
@@ -4786,7 +4795,7 @@ async function loadListFeed(listId: string, userId?: string | null): Promise<Fee
     const item = fromDbMedia(media, ratingByMedia);
     return [{ ...item, listMediaId: media.id, franchiseGroup: row.franchise_group ?? null, listAddedAt: row.added_at ?? null, listPosition: row.position ?? null }];
   });
-  return { items };
+  return { items: await enrichShowRuns(items) };
 }
 
 async function hiddenRecommendationKeys(client: NonNullable<typeof supabase>, userId: string, filters: RecommendationFilters) {
