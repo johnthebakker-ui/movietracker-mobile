@@ -190,6 +190,37 @@ function withTimeout<T>(work: Promise<T>, ms: number, message: string): Promise<
   });
 }
 
+async function reconcileMobileEpisodeProgress(userId: string, mediaId: number) {
+  if (!supabase) return;
+  const [currentResult, mediaResult, watchesResult] = await Promise.all([
+    supabase.from("progress").select("status").eq("user_id", userId).eq("media_id", mediaId).maybeSingle(),
+    supabase.from("media").select("status,number_of_episodes").eq("id", mediaId).maybeSingle(),
+    supabase.from("watch_events").select("episode_id,episodes(seasons(season_number))").eq("user_id", userId).eq("media_id", mediaId).not("episode_id", "is", null)
+  ]);
+  if (currentResult.error) throw currentResult.error;
+  if (mediaResult.error) throw mediaResult.error;
+  if (watchesResult.error) throw watchesResult.error;
+
+  const regularEpisodes = new Set((watchesResult.data ?? []).filter((row: any) => {
+    const episode = firstRow(row.episodes);
+    const season = firstRow(episode?.seasons);
+    return season?.season_number !== 0;
+  }).map((row: any) => Number(row.episode_id)));
+  const totalEpisodes = Number(mediaResult.data?.number_of_episodes ?? 0);
+  const catalogComplete = endedSeriesStatuses.has(String(mediaResult.data?.status ?? "")) && totalEpisodes > 0 && regularEpisodes.size >= totalEpisodes;
+  const status = currentResult.data?.status === "completed" || catalogComplete ? "completed" : "watching";
+  if (currentResult.data?.status === status) return;
+  const now = new Date().toISOString();
+  const { error } = await supabase.from("progress").upsert({
+    user_id: userId,
+    media_id: mediaId,
+    status,
+    completed_at: status === "completed" ? now : null,
+    updated_at: now
+  });
+  if (error) throw error;
+}
+
 WebBrowser.maybeCompleteAuthSession();
 
 Notifications.setNotificationHandler({
@@ -2259,7 +2290,7 @@ function SeasonDetailScreen({ target, session, onBack, onOpenEpisode }: { target
     try {
       const { error } = await supabase.from("watch_events").insert({ user_id: session.user.id, media_id: payload.mediaId, episode_id: quickWatchEpisode.db_episode_id, duration_minutes: quickWatchEpisode.runtime ?? null, watched_at: watchedAt });
       if (error) throw error;
-      await supabase.from("progress").upsert({ user_id: session.user.id, media_id: payload.mediaId, status: "watching", updated_at: new Date().toISOString() });
+      await reconcileMobileEpisodeProgress(session.user.id, payload.mediaId);
       const watchedNumber = episodeNumberOf(quickWatchEpisode);
       setPayload((current: any) => current ? { ...current, episodes: current.episodes.map((episode: any) => episodeNumberOf(episode) === watchedNumber ? { ...episode, watched: true } : episode) } : current);
       setQuickWatchEpisode(null);
@@ -2435,7 +2466,7 @@ function SeriesEpisodesScreen({ target, session, onBack, onOpenSeason, onOpenEpi
     const episodeNumber = Number(quickWatch.episode.episode_number ?? quickWatch.episode.episodeNumber ?? 0);
     const { error } = await supabase.from("watch_events").insert({ user_id: session.user.id, media_id: quickWatch.payload.mediaId, episode_id: quickWatch.episode.db_episode_id, duration_minutes: quickWatch.episode.runtime ?? null, watched_at: watchedAt });
     if (error) throw error;
-    await supabase.from("progress").upsert({ user_id: session.user.id, media_id: quickWatch.payload.mediaId, status: "watching", updated_at: new Date().toISOString() });
+    await reconcileMobileEpisodeProgress(session.user.id, quickWatch.payload.mediaId);
     setPayloads(current => current.map(payload => Number(payload?.season?.season_number ?? payload?.season?.seasonNumber) === seasonNumber ? { ...payload, episodes: payload.episodes.map((episode: any) => Number(episode.episode_number ?? episode.episodeNumber) === episodeNumber ? { ...episode, watched: true } : episode) } : payload));
     setQuickWatch(null);
     } finally { setQuickWatchBusy(false); }
@@ -3074,8 +3105,9 @@ function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity, on
     const episodeId = episode?.id ?? target.episodeId;
     if (!mediaId || !episodeId) return Alert.alert("Unavailable", "This episode is not ready for tracking yet.");
     await withEpisodeBusy(async () => {
-      await supabase!.from("watch_events").insert({ user_id: session.user.id, media_id: mediaId, episode_id: episodeId, watched_at: new Date().toISOString() });
-      await supabase!.from("progress").upsert({ user_id: session.user.id, media_id: mediaId, status: "watching", updated_at: new Date().toISOString() });
+      const { error } = await supabase!.from("watch_events").insert({ user_id: session.user.id, media_id: mediaId, episode_id: episodeId, watched_at: new Date().toISOString() });
+      if (error) throw error;
+      await reconcileMobileEpisodeProgress(session.user.id, mediaId);
       setWatched(true);
       setLastWatchedAt(new Date().toISOString());
     }, "watch", false);
@@ -3089,12 +3121,9 @@ function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity, on
     if (!mediaId || !episodeId) return Alert.alert("Unavailable", "This episode is not ready for tracking yet.");
     const watchedAt = resolveWatchLogDate(values, episode?.air_date ?? target.airDate, episode?.runtime ?? 0);
     await withEpisodeBusy(async () => {
-      const [watchResult, progressResult] = await Promise.all([
-        supabase!.from("watch_events").insert({ user_id: session.user.id, media_id: mediaId, episode_id: episodeId, duration_minutes: episode?.runtime ?? null, watched_at: watchedAt }),
-        supabase!.from("progress").upsert({ user_id: session.user.id, media_id: mediaId, status: "watching", updated_at: new Date().toISOString() })
-      ]);
+      const watchResult = await supabase!.from("watch_events").insert({ user_id: session.user.id, media_id: mediaId, episode_id: episodeId, duration_minutes: episode?.runtime ?? null, watched_at: watchedAt });
       if (watchResult.error) throw watchResult.error;
-      if (progressResult.error) throw progressResult.error;
+      await reconcileMobileEpisodeProgress(session.user.id, mediaId);
       setWatched(true);
       setLastWatchedAt(watchedAt);
     }, "watch", false);
