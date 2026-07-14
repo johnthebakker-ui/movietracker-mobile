@@ -32,7 +32,7 @@ import {
 } from "react-native";
 
 import { AppHeader, BottomNav, DiscoverFiltersCard, Hero, PickerSheet, RecommendationFiltersCard, RemoteImage, resolveRemoteImageUri, SectionTitle, TitleCard, type PickerAnchor } from "./src/components";
-import { disconnectTrakt, fetchDiscover, fetchEpisodeNotificationSchedule, fetchMobileCompany, fetchMobileEpisode, fetchMobileHistory, fetchMobilePerson, fetchMobileProfile, fetchMobileSeason, fetchMobileTitle, fetchRecommendations, fetchSearch, fetchTraktStatus, fetchWebsiteEntityMetadata, fetchWebsiteHome, fetchWebsiteTitleMetadata, refreshRecommendations, setNotInterested, startTraktConnect, syncTrakt, type MobileTraktStatus } from "./src/api";
+import { disconnectTrakt, fetchDiscover, fetchEpisodeNotificationSchedule, fetchMobileCompany, fetchMobileEpisode, fetchMobileHistory, fetchMobilePerson, fetchMobileProfile, fetchMobileSeason, fetchMobileTitle, fetchRecommendations, fetchSearch, fetchTonight, fetchTraktStatus, fetchUpNext, fetchWebsiteEntityMetadata, fetchWebsiteHome, fetchWebsiteTitleMetadata, fetchWrapped, refreshRecommendations, setNotInterested, startTraktConnect, syncTrakt, type MobileTraktStatus } from "./src/api";
 import { API_URL, communityRatingLabel, countries, excludeGenreOptions, genres, HAS_SUPABASE, titleYear, tmdbImage, userRatingLabel } from "./src/config";
 import { groupFranchises, listFranchiseName } from "./src/franchise-groups";
 import { supabase } from "./src/supabase";
@@ -59,7 +59,8 @@ type ListSort = "none" | "title_asc" | "title_desc" | "release_desc" | "release_
 type ActionRefreshReason = "profile" | "list" | "watch" | "rating";
 type CalendarMode = "upcoming" | "watched";
 type ProfilePanel = "overview" | "activity" | "lists" | "reviews" | "history" | "statistics";
-type ProfileView = "profile" | "recommendations" | "settings" | "history" | "reviews" | "statistics" | "notifications";
+type ProfileView = "profile" | "recommendations" | "settings" | "history" | "reviews" | "statistics" | "wrapped" | "notifications";
+type FeatureView = "tonight" | "up-next" | null;
 type HistoryFilter = "all" | "movies" | "episodes";
 type CalendarEvent = { id: string; date: string; title: string; subtitle: string; artwork: string | null; item?: MediaSummary | null; href?: string | null; episodeTarget?: EpisodeTarget | null };
 type EpisodeTarget = { episodeId?: number; show: MediaSummary; seasonNumber: number; episodeNumber: number; title?: string | null; overview?: string | null; airDate?: string | null; artwork?: string | null; runtime?: number | null; voteAverage?: number | null };
@@ -215,6 +216,7 @@ export default function App() {
   const [calendarMonth, setCalendarMonth] = useState(() => monthKey(new Date()));
   const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
   const [profileView, setProfileView] = useState<ProfileView>("profile");
+  const [featureView, setFeatureView] = useState<FeatureView>(null);
   const [profilePanel, setProfilePanel] = useState<ProfilePanel>("overview");
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("profile");
   const [selectedList, setSelectedList] = useState<UserList | null>(null);
@@ -278,6 +280,7 @@ export default function App() {
     setSelectedEntity(null);
     setSelectedList(null);
     setSearchMode(false);
+    setFeatureView(null);
     if (next === "profile") setProfileView("profile");
     setTab(next);
     scrollToTop();
@@ -292,6 +295,7 @@ export default function App() {
     setSelectedEntity(null);
     setSelectedList(null);
     setSearchMode(false);
+    setFeatureView(null);
     setProfileView(next);
     setTab("profile");
     scrollToTop();
@@ -509,8 +513,10 @@ export default function App() {
             if (homeDetailPrefetchKeys.current.has(cacheKey)) continue;
             homeDetailPrefetchKeys.current.add(cacheKey);
             const cached = await AsyncStorage.getItem(cacheKey).catch(() => null);
-            if (cached) continue;
-            const core = await fetchMobileTitle(item.kind, item.id, token, "core").catch(() => null);
+            if (cached) {
+              try { if (JSON.parse(cached)?.detail?.completeness === "full") continue; } catch { /* Replace malformed or core-only cache entries. */ }
+            }
+            const core = await fetchMobileTitle(item.kind, item.id, token, "full").catch(() => null);
             if (cancelled) return;
             if (core) await AsyncStorage.setItem(cacheKey, JSON.stringify({ detail: core, savedAt: Date.now() })).catch(() => undefined);
           }
@@ -1041,7 +1047,7 @@ export default function App() {
     if (tab === "calendar") void loadCalendar().catch(() => undefined);
   }, [libraryFilter, loadCalendar, loadLibrary, loadProfileData, selectedList?.id, tab, usableSession?.access_token, usableSession?.user.id]);
 
-  const activeFeed = searchMode ? searchFeed : selectedList ? selectedListFeed : tab === "discover" ? discoverFeed : tab === "calendar" ? calendarFeed : tab === "library" ? libraryFeed : tab === "profile" && profileView === "recommendations" ? recommendationFeed : emptyFeed;
+  const activeFeed = featureView ? emptyFeed : searchMode ? searchFeed : selectedList ? selectedListFeed : tab === "discover" ? discoverFeed : tab === "calendar" ? calendarFeed : tab === "library" ? libraryFeed : tab === "profile" && profileView === "recommendations" ? recommendationFeed : emptyFeed;
   useEffect(() => {
     const items = activeFeed.items.slice(0, 4);
     if (!items.length) return;
@@ -1056,8 +1062,11 @@ export default function App() {
             const cacheKey = titleDetailCacheKey(item, usableSession?.user.id);
             if (homeDetailPrefetchKeys.current.has(cacheKey)) continue;
             homeDetailPrefetchKeys.current.add(cacheKey);
-            if (await AsyncStorage.getItem(cacheKey).catch(() => null)) continue;
-            const detail = await fetchMobileTitle(item.kind, item.id, usableSession?.access_token, "core").catch(() => null);
+            const cached = await AsyncStorage.getItem(cacheKey).catch(() => null);
+            if (cached) {
+              try { if (JSON.parse(cached)?.detail?.completeness === "full") continue; } catch { /* Replace malformed or core-only cache entries. */ }
+            }
+            const detail = await fetchMobileTitle(item.kind, item.id, usableSession?.access_token, "full").catch(() => null);
             if (!cancelled && detail) await AsyncStorage.setItem(cacheKey, JSON.stringify({ detail, savedAt: Date.now() })).catch(() => undefined);
           }
         };
@@ -1318,6 +1327,12 @@ export default function App() {
   const sortedSelectedListItems = useMemo(() => sortListItems(selectedListFeed.items, listSort), [listSort, selectedListFeed.items]);
 
   function renderHeader() {
+    if (featureView === "tonight") {
+      return <><AppHeader session={headerSession} onHome={() => goTab("home")} onSearch={() => setSearchMode(true)} onNotifications={() => openProfileView("notifications")} onProfile={() => openProfileView("profile")} /><TonightScreen token={usableSession?.access_token} onBack={() => setFeatureView(null)} onOpen={openItem} /></>;
+    }
+    if (featureView === "up-next") {
+      return <><AppHeader session={headerSession} onHome={() => goTab("home")} onSearch={() => setSearchMode(true)} onNotifications={() => openProfileView("notifications")} onProfile={() => openProfileView("profile")} />{usableSession ? <UpNextScreen token={usableSession.access_token} onBack={() => setFeatureView(null)} onOpen={openItem} /> : <><SectionTitle kicker="Your unfinished viewing" title="Up Next" action="Back" onAction={() => setFeatureView(null)} /><EmptyPanel title="Sign in for Up Next" body="Your unfinished episodes and evening queue are private to your account." /></>}</>;
+    }
     if (searchMode) {
       return (
         <>
@@ -1369,7 +1384,7 @@ export default function App() {
         ) : null}
         {tab === "discover" ? (
             <>
-              <DiscoverHeading view={discoverFilters.view} onForYou={() => openProfileView("recommendations")} />
+              <DiscoverHeading view={discoverFilters.view} onTonight={() => setFeatureView("tonight")} onForYou={() => openProfileView("recommendations")} />
             <DiscoverFiltersCard filters={discoverFilters} onChange={setDiscoverFilters} onSelect={pickerHelpers.discover} />
             <View style={styles.afterFilters} />
           </>
@@ -1388,7 +1403,7 @@ export default function App() {
         ) : null}
         {tab === "library" ? (
           <>
-            <SectionTitle kicker="Your screen life" title="My library" />
+            <SectionTitle kicker="Your screen life" title="My library" action="Up Next ->" onAction={() => setFeatureView("up-next")} />
             {usableSession ? (
               <>
                 <LibraryFilters value={libraryFilter} onChange={setLibraryFilter} />
@@ -1427,7 +1442,9 @@ export default function App() {
             ) : usableSession && profileView === "reviews" ? (
               <FullReviewsPage reviews={profileData.reviews} onBack={() => openProfileView("profile")} onOpen={openItem} />
             ) : usableSession && profileView === "statistics" ? (
-              <StatisticsPage data={profileData} onBack={() => openProfileView("profile")} onOpen={openItem} onGenreShelf={offset => setTimeout(() => listRef.current?.scrollToOffset({ offset, animated: true }), 80)} />
+              <StatisticsPage data={profileData} onBack={() => openProfileView("profile")} onWrapped={() => openProfileView("wrapped")} onOpen={openItem} onGenreShelf={offset => setTimeout(() => listRef.current?.scrollToOffset({ offset, animated: true }), 80)} />
+            ) : usableSession && profileView === "wrapped" ? (
+              <WrappedScreen token={usableSession.access_token} onBack={() => openProfileView("statistics")} />
             ) : usableSession ? (
               <>
                 <ProfileHero profile={profile} session={usableSession} data={profileData} fallbackName={profileTitle} onSettings={() => { setSettingsTab("profile"); openProfileView("settings"); }} />
@@ -1445,7 +1462,7 @@ export default function App() {
                   if (target === "lists") { setLibraryFilter("lists"); goTab("library"); }
                 }} /> : null}
                 {(profilePanel === "overview" || profilePanel === "history" || profilePanel === "activity") ? <ProfileHistorySection items={profileData.history} onOpen={openHistoryItem} onMenu={setActionItem} onHistory={() => openProfileView("history")} /> : null}
-                {(profilePanel === "overview" || profilePanel === "statistics") ? <ProfileProgressSection data={profileData} onLibrary={() => { setLibraryFilter("all"); goTab("library"); }} onWatching={() => { setLibraryFilter("watching"); goTab("library"); }} onOpen={openItem} onMenu={setActionItem} /> : null}
+                {(profilePanel === "overview" || profilePanel === "statistics") ? <ProfileProgressSection data={profileData} onLibrary={() => { setLibraryFilter("all"); goTab("library"); }} onStatus={status => { setLibraryFilter(status === "active" ? "watching" : status); goTab("library"); }} onWatching={() => { setLibraryFilter("watching"); goTab("library"); }} onOpen={openItem} onMenu={setActionItem} /> : null}
                 {(profilePanel === "overview" || profilePanel === "reviews") ? <ReviewSection reviews={profileData.reviews} onAll={() => openProfileView("reviews")} onOpen={openItem} /> : null}
                 {profilePanel === "overview" ? <><ProfileMediaSection kicker="Personal canon" title="Favorites" action="See all favorites ->" items={profileData.favorites.slice(0, 6)} onAction={() => { setLibraryFilter("favorites"); goTab("library"); }} onOpen={openItem} onMenu={setActionItem} /><ProfileListsSection owner={profile?.display_name || profile?.username || "you"} lists={profileData.lists} onOpenLists={() => { setLibraryFilter("lists"); goTab("library"); }} onOpenList={openList} /></> : null}
                 <ProfileShortcuts onCalendar={() => goTab("calendar")} onHistory={() => openProfileView("history")} onReviews={() => openProfileView("reviews")} onSettings={() => openProfileView("settings")} />
@@ -1518,7 +1535,7 @@ export default function App() {
             keyExtractor={(item, index) => `${item.kind}-${item.id}-${item.reason ?? index}`}
             numColumns={2}
             ListHeaderComponent={listHeader}
-            ListEmptyComponent={!loading ? (selectedList && listGroup === "none" ? <EmptyPanel title="No titles in this list yet" body="Add titles from search, discovery, or a title page." /> : !selectedList && tab !== "home" && tab !== "calendar" && !(tab === "library" && libraryFilter === "lists" && !selectedList) && !(tab === "profile" && (profileView !== "recommendations" || !usableSession || mfa.required)) ? <EmptyPanel title="Nothing loaded yet" body={searchMode ? "Search for a title, person, or keyword." : emptyText(tab, Boolean(usableSession))} /> : null) : null}
+            ListEmptyComponent={!loading && !featureView ? (selectedList && listGroup === "none" ? <EmptyPanel title="No titles in this list yet" body="Add titles from search, discovery, or a title page." /> : !selectedList && tab !== "home" && tab !== "calendar" && !(tab === "library" && libraryFilter === "lists" && !selectedList) && !(tab === "profile" && (profileView !== "recommendations" || !usableSession || mfa.required)) ? <EmptyPanel title="Nothing loaded yet" body={searchMode ? "Search for a title, person, or keyword." : emptyText(tab, Boolean(usableSession))} /> : null) : null}
             contentContainerStyle={styles.listContent}
             columnWrapperStyle={styles.columns}
             refreshControl={<RefreshControl tintColor={colors.accent} refreshing={refreshing} onRefresh={refresh} />}
@@ -1606,7 +1623,7 @@ function SearchPanel({ query, onQuery, onSearch, onClear }: { query: string; onQ
   );
 }
 
-function DiscoverHeading({ view, onForYou }: { view?: string; onForYou: () => void }) {
+function DiscoverHeading({ view, onTonight, onForYou }: { view?: string; onTonight: () => void; onForYou: () => void }) {
   const heading = view === "trending"
     ? { kicker: "Everyone is watching", title: "Trending now" }
     : view === "films"
@@ -1620,10 +1637,7 @@ function DiscoverHeading({ view, onForYou }: { view?: string; onForYou: () => vo
         <Text style={styles.kickerText}>{heading.kicker}</Text>
         <Text style={styles.discoverTitle}>{heading.title}</Text>
       </View>
-      <Pressable onPress={onForYou} style={styles.forYouButton}>
-        <Ionicons name="sparkles-outline" size={18} color={colors.text} />
-        <Text style={styles.forYouText}>For you</Text>
-      </Pressable>
+      <View style={styles.discoverHeadingActions}><Pressable onPress={onTonight} style={styles.forYouButton}><Ionicons name="moon-outline" size={18} color={colors.text} /><Text style={styles.forYouText}>Tonight</Text></Pressable><Pressable onPress={onForYou} style={styles.forYouButton}><Ionicons name="sparkles-outline" size={18} color={colors.text} /><Text style={styles.forYouText}>For you</Text></Pressable></View>
     </View>
   );
 }
@@ -1960,8 +1974,8 @@ function HistoryCard({ item, onOpen, onMenu }: { item: HistoryItem; onOpen: (ite
   return <Pressable onPress={() => onOpen(item)} onLongPress={() => item.item && onMenu(item.item)} delayLongPress={280} style={styles.historyCard}><View style={styles.historyArt}>{image ? <RemoteImage uri={image} style={styles.posterImage} resizeMode="cover" /> : null}{item.rating != null ? <Text style={styles.historyRating}>{item.rating.toFixed(1)}/10</Text> : null}<Text style={styles.historyDate}>{badgeDate}</Text></View><Text style={styles.historyTitle} numberOfLines={1}>{item.title}</Text><Text style={styles.historySub} numberOfLines={1}>{item.subtitle}</Text></Pressable>;
 }
 
-function ProfileProgressSection({ data, onLibrary, onWatching, onOpen, onMenu }: { data: ProfileData; onLibrary: () => void; onWatching: () => void; onOpen: (item: MediaSummary) => void; onMenu: (item: MediaSummary) => void }) {
-  return <View style={styles.profileSection}><SectionTitle kicker="Your viewing momentum" title="Progress" action="Open library ->" onAction={onLibrary} /><View style={styles.progressGroups}>{data.progressGroups.map(group => <View key={group.key} style={styles.progressGroup}><Text style={styles.progressCount}>{group.count}</Text><Text style={styles.progressLabel}>{group.label}</Text><View style={styles.miniPosters}>{group.posters.map((poster, index) => <Image key={`${poster}-${index}`} source={{ uri: poster }} style={styles.miniPoster} />)}</View></View>)}</View><View style={styles.streakRow}><Ionicons name="flame-outline" size={30} color={colors.accent} /><View><Text style={styles.streakLabel}>Current streak</Text><Text style={styles.streakValue}>{data.currentStreak} {data.currentStreak === 1 ? "day" : "days"}</Text><Text style={styles.streakMeta}>Longest streak - {data.longestStreak} days</Text></View></View>{data.currentlyWatching.length ? <><View style={styles.profileSubhead}><Text style={styles.profileSubheadTitle}>Currently watching</Text><Pressable onPress={onWatching}><Text style={styles.profileSubheadAction}>{"See all ->"}</Text></Pressable></View><CardGrid items={data.currentlyWatching.slice(0, 4)} onOpen={onOpen} onMenu={onMenu} /></> : null}</View>;
+function ProfileProgressSection({ data, onLibrary, onStatus, onWatching, onOpen, onMenu }: { data: ProfileData; onLibrary: () => void; onStatus: (status: "completed" | "active" | "dropped") => void; onWatching: () => void; onOpen: (item: MediaSummary) => void; onMenu: (item: MediaSummary) => void }) {
+  return <View style={styles.profileSection}><SectionTitle kicker="Your viewing momentum" title="Progress" action="Open library ->" onAction={onLibrary} /><View style={styles.progressGroups}>{data.progressGroups.map(group => <Pressable accessibilityRole="button" accessibilityLabel={`Open ${group.label.toLowerCase()} titles`} onPress={() => onStatus(group.key)} key={group.key} style={({ pressed }) => [styles.progressGroup, pressed && { opacity: .68 }]}><Text style={styles.progressCount}>{group.count}</Text><Text style={styles.progressLabel}>{group.label}</Text><View style={styles.miniPosters}>{group.posters.map((poster, index) => <Image key={`${poster}-${index}`} source={{ uri: poster }} style={styles.miniPoster} />)}</View></Pressable>)}</View><View style={styles.streakRow}><Ionicons name="flame-outline" size={30} color={colors.accent} /><View><Text style={styles.streakLabel}>Current streak</Text><Text style={styles.streakValue}>{data.currentStreak} {data.currentStreak === 1 ? "day" : "days"}</Text><Text style={styles.streakMeta}>Longest streak - {data.longestStreak} days</Text></View></View>{data.currentlyWatching.length ? <><View style={styles.profileSubhead}><Text style={styles.profileSubheadTitle}>Currently watching</Text><Pressable onPress={onWatching}><Text style={styles.profileSubheadAction}>{"See all ->"}</Text></Pressable></View><CardGrid items={data.currentlyWatching.slice(0, 4)} onOpen={onOpen} onMenu={onMenu} /></> : null}</View>;
 }
 
 function ReviewSection({ reviews, onAll, onOpen }: { reviews: ReviewItem[]; onAll?: () => void; onOpen: (item: MediaSummary) => void }) {
@@ -1978,7 +1992,34 @@ function FullReviewsPage({ reviews, onBack, onOpen }: { reviews: ReviewItem[]; o
   );
 }
 
-function StatisticsPage({ data, onBack, onOpen, onGenreShelf }: { data: ProfileData; onBack: () => void; onOpen: (item: MediaSummary) => void; onGenreShelf: (offset: number) => void }) {
+function ChoiceChips({ values, value, onChange }: { values: Array<[string, string]>; value: string; onChange: (value: string) => void }) {
+  return <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.featureChoices}>{values.map(([key, label]) => <Pressable key={key} onPress={() => onChange(key)} style={[styles.featureChoice, value === key && styles.featureChoiceActive]}><Text style={[styles.featureChoiceText, value === key && styles.featureChoiceTextActive]}>{label}</Text></Pressable>)}</ScrollView>;
+}
+
+function TonightScreen({ token, onBack, onOpen }: { token?: string; onBack: () => void; onOpen: (item: MediaSummary) => void }) {
+  const [filters, setFilters] = useState({ minutes: "120", mood: "comforting", kind: "movie", company: "solo", source: token ? "personal" : "generic", services: "" });
+  const [picks, setPicks] = useState<Array<{ item: MediaSummary; reason: string }>>([]); const [busy, setBusy] = useState(false); const [exclude, setExclude] = useState<string[]>([]);
+  const choose = async (blocked?: string) => { setBusy(true); const next = blocked ? [...exclude, blocked] : exclude; if (blocked) setExclude(next); try { const data = await fetchTonight({ ...filters, exclude: next.join(",") }, token); setPicks(data.picks ?? []); } finally { setBusy(false); } };
+  const row = (label: string, key: keyof typeof filters, values: Array<[string, string]>) => <View style={styles.featureField}><Text style={styles.featureLabel}>{label}</Text><ChoiceChips values={values} value={filters[key]} onChange={value => setFilters(current => ({ ...current, [key]: value }))} /></View>;
+  return <View style={styles.profileSection}><SectionTitle kicker="Decision mode" title="What should we watch tonight?" action="Back ->" onAction={onBack} /><Text style={styles.featureIntro}>A few useful questions, then three strong choices. No endless grid.</Text><View style={styles.featureForm}>{row("Available time", "minutes", [["30", "30 min"], ["60", "1 hour"], ["90", "90 min"], ["120", "2+ hours"]])}{row("Mood", "mood", [["comforting", "Comforting"], ["intense", "Intense"], ["funny", "Funny"], ["weird", "Weird"], ["emotional", "Emotional"]])}{row("Format", "kind", [["movie", "Movie"], ["show", "Series"]])}{row("Who is watching?", "company", [["solo", "Solo"], ["date", "Date night"], ["family", "Family"], ["group", "Group"]])}{row("Choose from", "source", token ? [["personal", "For me"], ["generic", "Surprise me"], ["new", "Something new"], ["saved", "Already saved"]] : [["generic", "Surprise me"], ["new", "Something new"]])}{row("Streaming service", "services", [["", "Any"], ["netflix", "Netflix"], ["prime", "Prime"], ["disney", "Disney+"], ["max", "Max"], ["apple", "Apple TV+"]])}<Pressable disabled={busy} onPress={() => choose()} style={styles.featurePrimary}><Ionicons name="sparkles-outline" size={20} color="#fff" /><Text style={styles.featurePrimaryText}>{busy ? "Choosing…" : "Give me three choices"}</Text></Pressable></View>{picks.map(({ item, reason }) => <View style={styles.tonightMobileCard} key={`${item.kind}-${item.id}`}><Pressable onPress={() => onOpen(item)}><RemoteImage uri={tmdbImage(item.backdropPath || item.posterPath, "w780")} style={styles.tonightMobileArt} resizeMode="cover" /></Pressable><Text style={styles.kickerText}>{item.kind === "movie" ? "Film" : "Series"}</Text><Text style={styles.tonightMobileTitle}>{item.title}</Text><Text style={styles.featureIntro}>{reason}</Text><View style={styles.featureChoices}>{[["Wrong mood", "close-circle-outline"], ["Seen it", "checkmark-circle-outline"], ["Too long", "time-outline"]].map(([label, icon]) => <Pressable key={label} onPress={() => choose(`${item.kind}-${item.id}`)} style={styles.featureChoice}><Ionicons name={icon as any} size={15} color={colors.muted} /><Text style={styles.featureChoiceText}>{label}</Text></Pressable>)}</View></View>)}</View>;
+}
+
+function UpNextScreen({ token, onBack, onOpen }: { token: string; onBack: () => void; onOpen: (item: MediaSummary) => void }) {
+  const [minutes, setMinutes] = useState("120"); const [data, setData] = useState<any>(null); const [busy, setBusy] = useState(true);
+  useEffect(() => { let live = true; setBusy(true); fetchUpNext(token, Number(minutes)).then(value => live && setData(value)).finally(() => live && setBusy(false)); return () => { live = false; }; }, [minutes, token]);
+  const shelf = (title: string, items: any[]) => items?.length ? <View style={styles.featureShelf}><Text style={styles.statsSectionTitle}>{title}</Text>{items.map((entry: any) => <Pressable key={`${title}-${entry.item.kind}-${entry.item.id}`} onPress={() => onOpen(entry.item)} style={styles.upNextMobileRow}><RemoteImage uri={tmdbImage(entry.item.backdropPath || entry.item.posterPath, "w500")} style={styles.upNextMobileArt} resizeMode="cover" /><View style={{ flex: 1 }}><Text style={styles.kickerText}>{entry.label}</Text><Text style={styles.upNextMobileTitle}>{entry.item.title}</Text><Text style={styles.featureLinkBody}>{entry.episodeTitle || entry.reason}</Text><Text style={styles.upNextMobileMeta}>{entry.runtime ?? "?"} min · {entry.reason}</Text></View><Ionicons name="chevron-forward" size={20} color={colors.muted} /></Pressable>)}</View> : null;
+  return <View style={styles.profileSection}><SectionTitle kicker="Your unfinished viewing" title="Up Next" action="Back ->" onAction={onBack} /><Text style={styles.featureIntro}>What is ready, nearly finished, newly released, or waiting for you.</Text><View style={styles.eveningMobile}><Text style={styles.kickerText}>Clear an evening</Text><Text style={styles.statsSectionTitle}>Build a queue</Text><ChoiceChips values={[["60", "60 min"], ["90", "90 min"], ["120", "2 hours"], ["180", "3 hours"]]} value={minutes} onChange={setMinutes} />{data?.evening ? <><Text style={styles.eveningTotal}>{data.evening.minutes} of {minutes} min planned</Text>{data.evening.items.map((entry: any) => <Pressable key={`${entry.item.kind}-${entry.item.id}`} onPress={() => onOpen(entry.item)} style={styles.eveningQueueRow}><Text style={styles.upNextMobileTitle}>{entry.item.title}</Text><Text style={styles.featureLinkBody}>{entry.label} · {entry.runtime ?? 45} min</Text></Pressable>)}</> : null}</View>{busy ? <ActivityIndicator color={colors.accent} /> : null}{shelf("Watch next", data?.entries)}{shelf("New this week", data?.newThisWeek)}{shelf("Close to completion", data?.closeToCompletion)}{shelf("Pick it back up", data?.dormant)}</View>;
+}
+
+function WrappedScreen({ token, onBack }: { token: string; onBack: () => void }) {
+  const [data, setData] = useState<any>(null);
+  useEffect(() => { fetchWrapped(token).then(setData).catch(() => setData({ error: true })); }, [token]);
+  if (!data) return <View style={styles.profileSection}><SectionTitle kicker="Your year" title="Wrapped" action="Back ->" onAction={onBack} /><ActivityIndicator color={colors.accent} /></View>;
+  const cards = [[data.yearHours, "hours watched"], [data.movieEvents, "movie watches"], [data.seriesEvents, "episode watches"], [data.longestStreak, "day longest streak"], [`${data.completionRate}%`, "series completion"], [data.productiveDay || "—", "top viewing day"]];
+  return <View style={styles.profileSection}><SectionTitle kicker="January 1 through today" title={`Your ${data.year}, so far.`} action="Back ->" onAction={onBack} /><Text style={styles.wrappedMobileLine}>{data.shareLine}</Text><Pressable style={styles.featurePrimary} onPress={() => Share.share({ title: "My MovieTracker Wrapped", message: data.shareLine })}><Ionicons name="share-social-outline" size={20} color="#fff" /><Text style={styles.featurePrimaryText}>Share my year</Text></Pressable><View style={styles.statisticsGrid}>{cards.map(([value, label]) => <View style={styles.statisticsCard} key={String(label)}><Text style={styles.statisticsValue}>{value}</Text><Text style={styles.statisticsLabel}>{label}</Text></View>)}</View><View style={styles.statsSectionHead}><Text style={styles.kickerText}>Your viewing fingerprint</Text><Text style={styles.statsSectionTitle}>Taste, by the numbers</Text></View>{(data.genres ?? []).map(([name, count]: [string, number]) => <View key={name} style={styles.wrappedMobileBar}><Text style={styles.genreStatName}>{name}</Text><View style={styles.genreStatBar}><View style={[styles.genreStatFill, { width: `${count / (data.genres[0]?.[1] || 1) * 100}%`, backgroundColor: colors.accent }]} /></View><Text style={styles.genreStatTotal}>{count}</Text></View>)}<View style={styles.featureForm}>{[["Highest-rated director", data.topDirector], ["Most-watched actor", data.mostWatchedActor], ["Most generous rating", data.generous ? `${data.generous.title} · ${data.generous.score}/10` : null], ["Harshest rating", data.harshest ? `${data.harshest.title} · ${data.harshest.score}/10` : null]].map(([label, value]) => <View key={label} style={styles.wrappedMobileCallout}><Text style={styles.featureLinkBody}>{label}</Text><Text style={styles.featureLinkTitle}>{value || "More watches needed"}</Text></View>)}</View></View>;
+}
+
+function StatisticsPage({ data, onBack, onWrapped, onOpen, onGenreShelf }: { data: ProfileData; onBack: () => void; onWrapped: () => void; onOpen: (item: MediaSummary) => void; onGenreShelf: (offset: number) => void }) {
   const [selectedGenre, setSelectedGenre] = useState("");
   const [shelfOffset, setShelfOffset] = useState(0);
   const pendingShelfScroll = useRef(false);
@@ -2001,6 +2042,7 @@ function StatisticsPage({ data, onBack, onOpen, onGenreShelf }: { data: ProfileD
   return (
     <View style={styles.profileSection}>
       <SectionTitle kicker="The numbers behind your taste" title="Statistics" action="Back to profile ->" onAction={onBack} />
+      <Pressable onPress={onWrapped} style={styles.featureLink}><Ionicons name="sparkles-outline" size={20} color={colors.accent} /><View><Text style={styles.featureLinkTitle}>Your wrapped, so far</Text><Text style={styles.featureLinkBody}>A shareable look at this year’s viewing.</Text></View><Ionicons name="chevron-forward" size={20} color={colors.muted} /></Pressable>
       <View style={styles.statisticsGrid}>
         {cards.map(card => (
           <View key={card.label} style={styles.statisticsCard}>
@@ -5110,6 +5152,7 @@ const styles = StyleSheet.create({
   afterFilters: { height: 18 },
   homeSection: { marginTop: 2 },
   discoverHeading: { marginTop: 34, marginBottom: 14, paddingHorizontal: 18, flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between", gap: 14 },
+  discoverHeadingActions: { alignItems: "flex-end", gap: 7 },
   discoverTitleCopy: { flex: 1, minWidth: 0 },
   kickerText: { color: colors.accent, letterSpacing: 3.5, fontSize: 11, fontWeight: "900", textTransform: "uppercase" },
   discoverTitle: { color: colors.text, fontSize: 44, lineHeight: 48, fontFamily: "serif", marginTop: 8 },
@@ -5597,6 +5640,34 @@ const styles = StyleSheet.create({
   companyLogoImage: { width: "90%", height: "80%" },
   companyInitial: { color: "#161a1b", fontFamily: "serif", fontSize: 30, fontWeight: "700" },
   companyName: { color: colors.text, fontSize: 14, fontWeight: "900", marginTop: 10, textAlign: "center" },
+  featureIntro: { color: colors.muted, fontSize: 15, lineHeight: 22, marginHorizontal: 18, marginBottom: 18 },
+  featureForm: { marginHorizontal: 18, padding: 16, borderRadius: 22, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel, gap: 18 },
+  featureField: { gap: 8 },
+  featureLabel: { color: colors.text, fontSize: 14, fontWeight: "900" },
+  featureChoices: { flexDirection: "row", gap: 8, paddingRight: 10 },
+  featureChoice: { minHeight: 38, paddingHorizontal: 12, borderWidth: 1, borderColor: colors.line, borderRadius: 20, backgroundColor: colors.panel2, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 5 },
+  featureChoiceActive: { borderColor: colors.accent, backgroundColor: "rgba(255,91,62,.17)" },
+  featureChoiceText: { color: colors.muted, fontSize: 12, fontWeight: "800" },
+  featureChoiceTextActive: { color: colors.text },
+  featurePrimary: { minHeight: 52, marginTop: 3, borderRadius: 18, backgroundColor: colors.accent, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingHorizontal: 18 },
+  featurePrimaryText: { color: "#fff", fontSize: 15, fontWeight: "900" },
+  featureLink: { marginHorizontal: 18, marginBottom: 18, padding: 16, borderWidth: 1, borderColor: colors.line, borderRadius: 20, backgroundColor: colors.panel, flexDirection: "row", alignItems: "center", gap: 12 },
+  featureLinkTitle: { color: colors.text, fontSize: 16, fontWeight: "900" },
+  featureLinkBody: { color: colors.muted, fontSize: 12, lineHeight: 17, marginTop: 2 },
+  tonightMobileCard: { marginHorizontal: 18, marginTop: 18, padding: 12, borderWidth: 1, borderColor: colors.line, borderRadius: 22, backgroundColor: colors.panel, overflow: "hidden", gap: 8 },
+  tonightMobileArt: { width: "100%", aspectRatio: 1.78, borderRadius: 14, backgroundColor: colors.panel2 },
+  tonightMobileTitle: { color: colors.text, fontFamily: "serif", fontSize: 30, fontWeight: "700" },
+  featureShelf: { marginTop: 28, gap: 10 },
+  upNextMobileRow: { marginHorizontal: 18, minHeight: 106, padding: 9, borderWidth: 1, borderColor: colors.line, borderRadius: 18, backgroundColor: colors.panel, flexDirection: "row", alignItems: "center", gap: 12 },
+  upNextMobileArt: { width: 104, height: 78, borderRadius: 12, backgroundColor: colors.panel2 },
+  upNextMobileTitle: { color: colors.text, fontSize: 15, fontWeight: "900" },
+  upNextMobileMeta: { color: colors.muted, fontSize: 11, marginTop: 5 },
+  eveningMobile: { marginHorizontal: 18, marginVertical: 15, padding: 16, borderWidth: 1, borderColor: colors.line, borderRadius: 22, backgroundColor: colors.panel, gap: 12 },
+  eveningTotal: { color: colors.text, fontSize: 15, fontWeight: "900", marginTop: 4 },
+  eveningQueueRow: { borderTopWidth: 1, borderTopColor: colors.line, paddingTop: 10 },
+  wrappedMobileLine: { color: colors.text, fontFamily: "serif", fontSize: 24, lineHeight: 34, marginHorizontal: 18, marginBottom: 14 },
+  wrappedMobileBar: { marginHorizontal: 18, minHeight: 42, flexDirection: "row", alignItems: "center", gap: 8 },
+  wrappedMobileCallout: { paddingBottom: 13, borderBottomWidth: 1, borderBottomColor: colors.line },
   settingsWrap: { paddingBottom: 20 },
   settingsTabs: { gap: 10, paddingHorizontal: 18, paddingBottom: 12 },
   settingsTab: { minHeight: 42, borderRadius: 22, borderWidth: 1, borderColor: colors.line, paddingHorizontal: 14, alignItems: "center", justifyContent: "center", backgroundColor: colors.panel },

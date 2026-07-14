@@ -31,7 +31,7 @@ export function resolveRemoteImageUri(uri: string | null | undefined) {
   return `${SUPABASE_URL.replace(/\/$/, "")}/storage/v1/object/public/profile-media/${encodedPath}${query ? `?${query}` : ""}`;
 }
 
-export function RemoteImage({ uri, style, resizeMode = "cover" }: { uri: string; style: any; resizeMode?: "cover" | "contain" | "stretch" | "repeat" | "center" }) {
+export function RemoteImage({ uri, style, resizeMode = "cover" }: { uri: string | null | undefined; style: any; resizeMode?: "cover" | "contain" | "stretch" | "repeat" | "center" }) {
   const [attempt, setAttempt] = useState(0);
   const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const resolvedUri = resolveRemoteImageUri(uri);

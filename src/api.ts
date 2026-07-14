@@ -270,6 +270,18 @@ export async function fetchMobileHistory(token: string, page = 1, type: "all" | 
   return request<{ items: any[]; page: number; pageSize: number; hasMore: boolean }>(`/api/mobile/history?${params}`, token);
 }
 
+export async function fetchTonight(filters: Record<string, string>, token?: string) {
+  return request<any>(`/api/tonight?${queryString(filters)}`, token);
+}
+
+export async function fetchUpNext(token: string, minutes = 120) {
+  return request<any>(`/api/up-next?minutes=${minutes}`, token);
+}
+
+export async function fetchWrapped(token: string, year = new Date().getFullYear()) {
+  return request<any>(`/api/wrapped?year=${year}`, token);
+}
+
 export async function refreshRecommendations(token: string) {
   return request<{ refreshed: boolean }>("/api/recommendations/refresh", token, { method: "POST" });
 }
