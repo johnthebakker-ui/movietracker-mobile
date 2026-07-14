@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { viewingPassProgress } from "./viewing-passes";
+import { completedRewatchProgress, viewingPassProgress } from "./viewing-passes";
 
 describe("mobile viewing passes", () => {
   const episodes = Array.from({ length: 4 }, (_, index) => ({ id: index + 1, seasonNumber: 1, episodeNumber: index + 1 }));
@@ -17,5 +17,10 @@ describe("mobile viewing passes", () => {
   it("becomes completed again after the rewatch reaches the finale", () => {
     const firstRun = episodes.map((episode, index) => watch(episode.id, index + 1));
     expect(viewingPassProgress(episodes, [...firstRun, watch(2, 10), watch(3, 11), watch(4, 12)])).toMatchObject({ nextIndex: null, completedPasses: 2 });
+  });
+
+  it("keeps a rewatch active even when completion metadata was written later", () => {
+    const firstRun = episodes.map((episode, index) => watch(episode.id, index + 1));
+    expect(completedRewatchProgress(episodes, [...firstRun, watch(1, 10)], "2026-07-14T20:00:00Z", null)).toMatchObject({ active: true, nextIndex: 1, completedPasses: 1 });
   });
 });

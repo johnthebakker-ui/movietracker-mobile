@@ -29,3 +29,15 @@ export function viewingPassProgress(episodes: ViewingPassEpisode[], events: View
   if (!ordered.length) return { nextIndex: 0, completedPasses: 0 };
   return { nextIndex: active ? cursor + 1 : null, completedPasses };
 }
+
+export function completedRewatchProgress(episodes: ViewingPassEpisode[], events: ViewingPassEvent[], completedAt?: string | null, startedAt?: string | null) {
+  const completedTime = completedAt ? Date.parse(completedAt) : Number.NaN;
+  const startedTime = startedAt ? Date.parse(startedAt) : Number.NaN;
+  const hasCycleBoundary = Number.isFinite(startedTime) && (!Number.isFinite(completedTime) || startedTime > completedTime);
+  const scopedEvents = hasCycleBoundary ? events.filter(event => {
+    const eventTime = Date.parse(event.watchedAt ?? event.createdAt ?? "");
+    return Number.isFinite(eventTime) && eventTime > startedTime;
+  }) : events;
+  const progress = viewingPassProgress(episodes, scopedEvents, true);
+  return { ...progress, scopedEvents, hasCycleBoundary, active: hasCycleBoundary ? scopedEvents.length > 0 && progress.nextIndex != null : progress.completedPasses > 0 && progress.nextIndex != null };
+}

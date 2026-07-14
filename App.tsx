@@ -40,7 +40,7 @@ import { reportError } from "./src/telemetry";
 import { colors } from "./src/theme";
 import type { AppTab, DiscoverFilters, FeedResult, MediaKind, MediaSummary, RecommendationFilters } from "./src/types";
 import { episodeTargetForUpNext, type UpNextEntry } from "./src/up-next-navigation";
-import { viewingPassProgress } from "./src/viewing-passes";
+import { completedRewatchProgress, viewingPassProgress } from "./src/viewing-passes";
 
 const initialDiscoverFilters: DiscoverFilters = { kind: "all", genre: "", country: "", yearMode: "exact", year: "", fromYear: "", toYear: "", sort: "popularity", excludeGenres: [], hideWatched: false, hideListed: false };
 const initialRecommendationFilters: RecommendationFilters = { kind: "all", genre: "", country: "", yearMode: "exact", year: "", fromYear: "", toYear: "", hideWatched: true, hideListed: true, excludeGenres: [] };
@@ -60,7 +60,7 @@ type ListGroup = "none" | "collections";
 type ListSort = "none" | "title_asc" | "title_desc" | "release_desc" | "release_asc" | "added_desc" | "added_asc" | "list_order";
 type ActionRefreshReason = "profile" | "list" | "watch" | "rating";
 type CalendarMode = "upcoming" | "watched";
-type ProfilePanel = "overview" | "activity" | "lists" | "reviews" | "history" | "statistics";
+type ProfilePanel = "lists" | "reviews" | "history" | "statistics";
 type ProfileView = "profile" | "recommendations" | "settings" | "history" | "reviews" | "statistics" | "wrapped" | "notifications";
 type FeatureView = "tonight" | "up-next" | null;
 type HistoryFilter = "all" | "movies" | "episodes";
@@ -159,8 +159,8 @@ const blankProgress: ProgressCounts = { planned: 0, watching: 0, completed: 0, p
 const blankProfileData: ProfileData = { followers: 0, following: 0, tracked: 0, watchEvents: 0, screenTimeHours: 0, historyUniqueTitles: 0, averageRating: "-", reviewCount: 0, listCount: 0, history: [], reviews: [], favorites: [], lists: [], progressGroups: [], currentStreak: 0, longestStreak: 0, currentlyWatching: [], genreStats: [] };
 const trackedStatusOrder: TrackedStatus[] = ["completed", "watching", "planned", "paused", "dropped"];
 const profileCachePrefix = "movietracker-profile-v1";
-const profileDataCachePrefix = "movietracker-profile-data-v2";
-const libraryCachePrefix = "movietracker-library-v2";
+const profileDataCachePrefix = "movietracker-profile-data-v3";
+const libraryCachePrefix = "movietracker-library-v3";
 const titleDetailCachePrefix = "movietracker-title-detail-v2";
 const episodeNotificationIdsKey = "movietracker-episode-notification-ids-v1";
 const searchCache = new Map<string, { savedAt: number; feed: FeedResult }>();
@@ -194,7 +194,7 @@ function withTimeout<T>(work: Promise<T>, ms: number, message: string): Promise<
 async function reconcileMobileEpisodeProgress(userId: string, mediaId: number) {
   if (!supabase) return;
   const [currentResult, mediaResult, watchesResult, seasonsResult] = await Promise.all([
-    supabase.from("progress").select("status,completed_at").eq("user_id", userId).eq("media_id", mediaId).maybeSingle(),
+    supabase.from("progress").select("status,completed_at,started_at").eq("user_id", userId).eq("media_id", mediaId).maybeSingle(),
     supabase.from("media").select("status,number_of_episodes").eq("id", mediaId).maybeSingle(),
     supabase.from("watch_events").select("episode_id,watched_at,created_at").eq("user_id", userId).eq("media_id", mediaId).not("episode_id", "is", null),
     supabase.from("seasons").select("season_number,episodes(id,episode_number)").eq("media_id", mediaId).gt("season_number", 0)
@@ -205,20 +205,10 @@ async function reconcileMobileEpisodeProgress(userId: string, mediaId: number) {
   if (seasonsResult.error) throw seasonsResult.error;
   const episodes = (seasonsResult.data ?? []).flatMap((season: any) => (season.episodes ?? []).map((episode: any) => ({ id: Number(episode.id), seasonNumber: Number(season.season_number), episodeNumber: Number(episode.episode_number) }))).sort((left: any, right: any) => left.seasonNumber - right.seasonNumber || left.episodeNumber - right.episodeNumber);
   const ended = endedSeriesStatuses.has(String(mediaResult.data?.status ?? ""));
-  const completedAt = currentResult.data?.completed_at ? Date.parse(currentResult.data.completed_at) : Number.NaN;
-  const activeWatches = currentResult.data?.status === "completed" && Number.isFinite(completedAt)
-    ? (watchesResult.data ?? []).filter((watch: any) => {
-        const time = Date.parse(watch.watched_at ?? watch.created_at ?? "");
-        return Number.isFinite(time) && time > completedAt;
-      })
-    : (watchesResult.data ?? []);
-  const pass = viewingPassProgress(episodes, activeWatches.map((watch: any) => ({ episodeId: Number(watch.episode_id), watchedAt: watch.watched_at, createdAt: watch.created_at })), ended);
+  const pass = viewingPassProgress(episodes, (watchesResult.data ?? []).map((watch: any) => ({ episodeId: Number(watch.episode_id), watchedAt: watch.watched_at, createdAt: watch.created_at })), ended);
   if (currentResult.data?.status === "completed") {
-    if (activeWatches.length && ended && pass.nextIndex == null) {
-      const now = new Date().toISOString();
-      const { error } = await supabase.from("progress").update({ completed_at: now, updated_at: now }).eq("user_id", userId).eq("media_id", mediaId);
-      if (error) throw error;
-    }
+    // Completed remains permanent. Rewatch progress is derived from event order;
+    // moving completed_at here would hide older/imported rewatch events.
     return;
   }
   const status = ended && (watchesResult.data ?? []).length > 0 && pass.completedPasses > 0 && pass.nextIndex == null ? "completed" : "watching";
@@ -238,7 +228,7 @@ async function loadMobileActiveRewatchIds(userId: string, rows: any[]) {
   if (!supabase) return new Set<number>();
   const completed = rows.flatMap(row => {
     const media = firstRow(row.media);
-    return row.status === "completed" && media?.kind === "show" && media?.id ? [{ mediaId: Number(media.id), completedAt: row.completed_at ?? null }] : [];
+    return row.status === "completed" && media?.kind === "show" && media?.id ? [{ mediaId: Number(media.id), completedAt: row.completed_at ?? null, startedAt: row.started_at ?? null }] : [];
   });
   if (!completed.length) return new Set<number>();
   const ids = completed.map(row => row.mediaId);
@@ -258,15 +248,9 @@ async function loadMobileActiveRewatchIds(userId: string, rows: any[]) {
   for (const watch of watchesResult.data ?? []) watchesByMedia.set(Number(watch.media_id), [...(watchesByMedia.get(Number(watch.media_id)) ?? []), watch]);
   const active = new Set<number>();
   for (const row of completed) {
-    const watermark = row.completedAt ? Date.parse(row.completedAt) : Number.NaN;
     const allWatches = watchesByMedia.get(row.mediaId) ?? [];
-    const watches = Number.isFinite(watermark) ? allWatches.filter(watch => {
-      const time = Date.parse(watch.watched_at ?? watch.created_at ?? "");
-      return Number.isFinite(time) && time > watermark;
-    }) : allWatches;
-    if (!watches.length) continue;
-    const pass = viewingPassProgress(episodesByMedia.get(row.mediaId) ?? [], watches.map(watch => ({ episodeId: Number(watch.episode_id), watchedAt: watch.watched_at, createdAt: watch.created_at })), true);
-    if (pass.nextIndex != null && (Number.isFinite(watermark) || pass.completedPasses > 0)) active.add(row.mediaId);
+    const rewatch = completedRewatchProgress(episodesByMedia.get(row.mediaId) ?? [], allWatches.map(watch => ({ episodeId: Number(watch.episode_id), watchedAt: watch.watched_at, createdAt: watch.created_at })), row.completedAt, row.startedAt);
+    if (rewatch.active) active.add(row.mediaId);
   }
   return active;
 }
@@ -299,7 +283,6 @@ export default function App() {
   const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
   const [profileView, setProfileView] = useState<ProfileView>("profile");
   const [featureView, setFeatureView] = useState<FeatureView>(null);
-  const [profilePanel, setProfilePanel] = useState<ProfilePanel>("overview");
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("profile");
   const [selectedList, setSelectedList] = useState<UserList | null>(null);
   const [selectedListFeed, setSelectedListFeed] = useState<FeedResult>(emptyFeed);
@@ -739,7 +722,7 @@ export default function App() {
     const sourceResult = libraryFilter === "favorites"
       ? await supabase.from("favorites").select(`media(${mediaSelect})`).eq("user_id", usableSession.user.id).order("position").limit(120)
       : await (() => {
-        let query = supabase.from("progress").select(`status,completed_at,updated_at,media(${mediaSelect})`).eq("user_id", usableSession.user.id);
+        let query = supabase.from("progress").select(`status,completed_at,started_at,updated_at,media(${mediaSelect})`).eq("user_id", usableSession.user.id);
         if (libraryFilter === "watching") query = query.in("status", ["watching", "completed"]);
         else if (libraryFilter !== "all") query = query.eq("status", libraryFilter);
         return query.order("updated_at", { ascending: false }).limit(120);
@@ -1049,7 +1032,7 @@ export default function App() {
 
   useEffect(() => {
     scrollToTop();
-  }, [libraryFilter, profilePanel, profileView, searchMode, selectedList?.id, tab, scrollToTop]);
+  }, [libraryFilter, profileView, searchMode, selectedList?.id, tab, scrollToTop]);
 
   const refresh = useCallback(async () => {
     setRefreshing(true);
@@ -1463,7 +1446,6 @@ export default function App() {
               setListSort("title_asc");
               setLibraryFilter("lists");
               setProfileView("profile");
-              setProfilePanel("overview");
               goTab("library");
             }} />
           {listGroup === "collections" ? <GroupedListContent groups={groupedListItems(selectedListFeed.items, listGroup)} onOpen={openItem} onMenu={setActionItem} /> : null}
@@ -1550,23 +1532,22 @@ export default function App() {
             ) : usableSession ? (
               <>
                 <ProfileHero profile={profile} session={usableSession} data={profileData} fallbackName={profileTitle} onSettings={() => { setSettingsTab("profile"); openProfileView("settings"); }} />
-                <ProfileNav value={profilePanel} onChange={next => {
+                <ProfileNav onChange={next => {
                   if (next === "history") openProfileView("history");
                   else if (next === "reviews") openProfileView("reviews");
                   else if (next === "statistics") openProfileView("statistics");
                   else if (next === "lists") { setLibraryFilter("lists"); goTab("library"); }
-                  else setProfilePanel(next);
                 }} />
-                {(profilePanel === "overview" || profilePanel === "statistics") ? <ProfileStatBand data={profileData} onNavigate={target => {
+                <ProfileStatBand data={profileData} onNavigate={target => {
                   if (target === "completed") { setLibraryFilter("completed"); goTab("library"); }
                   if (target === "history") openProfileView("history");
                   if (target === "reviews") openProfileView("reviews");
                   if (target === "lists") { setLibraryFilter("lists"); goTab("library"); }
-                }} /> : null}
-                {(profilePanel === "overview" || profilePanel === "history" || profilePanel === "activity") ? <ProfileHistorySection items={profileData.history} onOpen={openHistoryItem} onMenu={setActionItem} onHistory={() => openProfileView("history")} /> : null}
-                {(profilePanel === "overview" || profilePanel === "statistics") ? <ProfileProgressSection data={profileData} onLibrary={() => { setLibraryFilter("all"); goTab("library"); }} onStatus={status => { setLibraryFilter(status === "active" ? "watching" : status); goTab("library"); }} onWatching={() => { setLibraryFilter("watching"); goTab("library"); }} onOpen={openItem} onMenu={setActionItem} /> : null}
-                {(profilePanel === "overview" || profilePanel === "reviews") ? <ReviewSection reviews={profileData.reviews} onAll={() => openProfileView("reviews")} onOpen={openItem} /> : null}
-                {profilePanel === "overview" ? <><ProfileMediaSection kicker="Personal canon" title="Favorites" action="See all favorites ->" items={profileData.favorites.slice(0, 6)} onAction={() => { setLibraryFilter("favorites"); goTab("library"); }} onOpen={openItem} onMenu={setActionItem} /><ProfileListsSection owner={profile?.display_name || profile?.username || "you"} lists={profileData.lists} onOpenLists={() => { setLibraryFilter("lists"); goTab("library"); }} onOpenList={openList} /></> : null}
+                }} />
+                <ProfileHistorySection items={profileData.history} onOpen={openHistoryItem} onMenu={setActionItem} onHistory={() => openProfileView("history")} />
+                <ProfileProgressSection data={profileData} onLibrary={() => { setLibraryFilter("all"); goTab("library"); }} onStatus={status => { setLibraryFilter(status === "active" ? "watching" : status); goTab("library"); }} onWatching={() => { setLibraryFilter("watching"); goTab("library"); }} onOpen={openItem} onMenu={setActionItem} />
+                <ReviewSection reviews={profileData.reviews} onAll={() => openProfileView("reviews")} onOpen={openItem} />
+                <ProfileMediaSection kicker="Personal canon" title="Favorites" action="See all favorites ->" items={profileData.favorites.slice(0, 6)} onAction={() => { setLibraryFilter("favorites"); goTab("library"); }} onOpen={openItem} onMenu={setActionItem} /><ProfileListsSection owner={profile?.display_name || profile?.username || "you"} lists={profileData.lists} onOpenLists={() => { setLibraryFilter("lists"); goTab("library"); }} onOpenList={openList} />
                 <ProfileShortcuts onCalendar={() => goTab("calendar")} onHistory={() => openProfileView("history")} onReviews={() => openProfileView("reviews")} onSettings={() => openProfileView("settings")} />
               </>
             ) : (
@@ -1915,10 +1896,8 @@ function ProfileStatBand({ data, onNavigate }: { data: ProfileData; onNavigate?:
   );
 }
 
-function ProfileNav({ value, onChange }: { value: ProfilePanel; onChange: (value: ProfilePanel) => void }) {
+function ProfileNav({ onChange }: { onChange: (value: ProfilePanel) => void }) {
   const tabs: Array<{ value: ProfilePanel; label: string }> = [
-    { value: "overview", label: "Overview" },
-    { value: "activity", label: "Activity" },
     { value: "lists", label: "Lists" },
     { value: "reviews", label: "Reviews" },
     { value: "history", label: "Full history" },
@@ -1928,8 +1907,8 @@ function ProfileNav({ value, onChange }: { value: ProfilePanel; onChange: (value
     <View style={styles.profileNavOuter}>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.profileNav}>
         {tabs.map(tab => (
-          <Pressable key={tab.value} onPress={() => onChange(tab.value)} style={[styles.profileNavPill, value === tab.value && styles.profileNavPillActive]}>
-            <Text style={[styles.profileNavText, value === tab.value && styles.profileNavTextActive]}>{tab.label}</Text>
+          <Pressable key={tab.value} onPress={() => onChange(tab.value)} style={styles.profileNavPill}>
+            <Text style={styles.profileNavText}>{tab.label}</Text>
           </Pressable>
         ))}
       </ScrollView>
@@ -2109,8 +2088,17 @@ function TonightScreen({ token, onBack, onOpen }: { token?: string; onBack: () =
 function UpNextScreen({ token, onBack, onOpen }: { token: string; onBack: () => void; onOpen: (entry: UpNextEntry) => void }) {
   const [minutes, setMinutes] = useState("120"); const [data, setData] = useState<any>(null); const [busy, setBusy] = useState(true);
   useEffect(() => { let live = true; setBusy(true); fetchUpNext(token, Number(minutes)).then(value => live && setData(value)).finally(() => live && setBusy(false)); return () => { live = false; }; }, [minutes, token]);
-  const shelf = (title: string, items: UpNextEntry[]) => items?.length ? <View style={styles.featureShelf}><Text style={styles.statsSectionTitle}>{title}</Text>{items.map(entry => <Pressable key={`${title}-${entry.item.kind}-${entry.item.id}-${entry.seasonNumber ?? 0}-${entry.episodeNumber ?? 0}`} onPress={() => onOpen(entry)} style={styles.upNextMobileRow}><RemoteImage uri={tmdbImage(entry.item.backdropPath || entry.item.posterPath, "w500")} style={styles.upNextMobileArt} resizeMode="cover" /><View style={{ flex: 1 }}><Text style={styles.kickerText}>{entry.label}</Text><Text style={styles.upNextMobileTitle}>{entry.item.title}</Text><Text style={styles.featureLinkBody}>{entry.episodeTitle || entry.reason}</Text><Text style={styles.upNextMobileMeta}>{entry.runtime ?? "?"} min · {entry.reason}</Text></View><Ionicons name="chevron-forward" size={20} color={colors.muted} /></Pressable>)}</View> : null;
-  return <View style={styles.profileSection}><SectionTitle kicker="Your unfinished viewing" title="Up Next" action="Back ->" onAction={onBack} /><Text style={styles.featureIntro}>What is ready, nearly finished, newly released, or waiting for you.</Text><View style={styles.eveningMobile}><Text style={styles.kickerText}>Clear an evening</Text><Text style={styles.statsSectionTitle}>Build a queue</Text><ChoiceChips values={[["60", "60 min"], ["90", "90 min"], ["120", "2 hours"], ["180", "3 hours"]]} value={minutes} onChange={setMinutes} />{data?.evening ? <><Text style={styles.eveningTotal}>{data.evening.minutes} of {minutes} min planned</Text>{(data.evening.items as UpNextEntry[]).map(entry => <Pressable key={`${entry.item.kind}-${entry.item.id}-${entry.seasonNumber ?? 0}-${entry.episodeNumber ?? 0}`} onPress={() => onOpen(entry)} style={styles.eveningQueueRow}><Text style={styles.upNextMobileTitle}>{entry.item.title}</Text><Text style={styles.featureLinkBody}>{entry.label} · {entry.runtime ?? 45} min</Text></Pressable>)}</> : null}</View>{busy ? <ActivityIndicator color={colors.accent} /> : null}{shelf("Watch next", data?.entries)}{shelf("New this week", data?.newThisWeek)}{shelf("Close to completion", data?.closeToCompletion)}{shelf("Pick it back up", data?.dormant)}</View>;
+  const shelf = (title: string, items: UpNextEntry[]) => items?.length ? (
+    <View style={styles.featureShelf}>
+      <View style={styles.upNextShelfHead}><Text style={styles.upNextShelfTitle}>{title}</Text><Text style={styles.upNextShelfCount}>{items.length}</Text></View>
+      {items.map(entry => <Pressable key={`${title}-${entry.item.kind}-${entry.item.id}-${entry.seasonNumber ?? 0}-${entry.episodeNumber ?? 0}`} onPress={() => onOpen(entry)} style={styles.upNextMobileRow}>
+        <RemoteImage uri={tmdbImage(entry.item.backdropPath || entry.item.posterPath, "w500")} style={styles.upNextMobileArt} resizeMode="cover" />
+        <View style={styles.upNextMobileCopy}><Text style={styles.upNextKicker}>{entry.label}</Text><Text numberOfLines={1} style={styles.upNextMobileTitle}>{entry.item.title}</Text><Text numberOfLines={1} style={styles.upNextMobileSubtitle}>{entry.episodeTitle || entry.reason}</Text><Text numberOfLines={1} style={styles.upNextMobileMeta}>{entry.runtime ?? "?"} min · {entry.reason}</Text></View>
+        <Ionicons name="chevron-forward" size={18} color={colors.muted} />
+      </Pressable>)}
+    </View>
+  ) : null;
+  return <View style={styles.profileSection}><SectionTitle kicker="Your unfinished viewing" title="Up Next" action="Back ->" onAction={onBack} /><Text style={styles.featureIntro}>What is ready, nearly finished, newly released, or waiting for you.</Text><View style={styles.eveningMobile}><Text style={styles.kickerText}>Clear an evening</Text><Text style={styles.eveningTitle}>Build a queue</Text><ChoiceChips values={[["60", "60 min"], ["90", "90 min"], ["120", "2 hours"], ["180", "3 hours"]]} value={minutes} onChange={setMinutes} />{data?.evening ? <><Text style={styles.eveningTotal}>{data.evening.minutes} of {minutes} min planned</Text>{(data.evening.items as UpNextEntry[]).map(entry => <Pressable key={`${entry.item.kind}-${entry.item.id}-${entry.seasonNumber ?? 0}-${entry.episodeNumber ?? 0}`} onPress={() => onOpen(entry)} style={styles.eveningQueueRow}><Text style={styles.upNextMobileTitle}>{entry.item.title}</Text><Text style={styles.featureLinkBody}>{entry.label} · {entry.runtime ?? 45} min</Text></Pressable>)}</> : null}</View>{busy ? <ActivityIndicator color={colors.accent} /> : null}{shelf("Watch next", data?.entries)}{shelf("New this week", data?.newThisWeek)}{shelf("Close to completion", data?.closeToCompletion)}{shelf("Pick it back up", data?.dormant)}</View>;
 }
 
 function WrappedScreen({ token, onBack }: { token: string; onBack: () => void }) {
@@ -2123,11 +2111,17 @@ function WrappedScreen({ token, onBack }: { token: string; onBack: () => void })
     setSharing(true);
     try {
       const snapshot = await fetchWrappedShare(token);
-      await Share.share({ title: "My MovieTracker Wrapped", message: `${data.shareLine}\n${snapshot.url}`, url: snapshot.url });
+      await Share.share({ title: "My MovieTracker Wrapped", message: `${snapshot.url}\n\n${data.shareLine}`, url: Platform.OS === "ios" ? snapshot.url : undefined });
     } catch (reason) { Alert.alert("Could not share Wrapped", reason instanceof Error ? reason.message : "Please try again."); }
     finally { setSharing(false); }
   };
-  return <View style={styles.profileSection}><SectionTitle kicker="January 1 through today" title={`Your ${data.year}, so far.`} action="Back ->" onAction={onBack} /><Text style={styles.wrappedMobileLine}>{data.shareLine}</Text><Pressable disabled={sharing} style={styles.featurePrimary} onPress={() => void share()}>{sharing ? <ActivityIndicator color="#fff" /> : <Ionicons name="share-social-outline" size={20} color="#fff" />}<Text style={styles.featurePrimaryText}>{sharing ? "Building snapshot…" : "Share my year"}</Text></Pressable><View style={styles.statisticsGrid}>{cards.map(([value, label]) => <View style={styles.statisticsCard} key={String(label)}><Text style={styles.statisticsValue}>{value}</Text><Text style={styles.statisticsLabel}>{label}</Text></View>)}</View><View style={styles.statsSectionHead}><Text style={styles.kickerText}>Your viewing fingerprint</Text><Text style={styles.statsSectionTitle}>Taste, by the numbers</Text></View>{(data.genres ?? []).map(([name, count]: [string, number]) => <View key={name} style={styles.wrappedMobileBar}><Text style={styles.genreStatName}>{name}</Text><View style={styles.genreStatBar}><View style={[styles.genreStatFill, { width: `${count / (data.genres[0]?.[1] || 1) * 100}%`, backgroundColor: colors.accent }]} /></View><Text style={styles.genreStatTotal}>{count}</Text></View>)}<View style={styles.featureForm}>{[["Highest-rated director", data.topDirector], ["Most-watched actor", data.mostWatchedActor], ["Most generous rating", data.generous ? `${data.generous.title} · ${data.generous.score}/10` : null], ["Harshest rating", data.harshest ? `${data.harshest.title} · ${data.harshest.score}/10` : null]].map(([label, value]) => <View key={label} style={styles.wrappedMobileCallout}><Text style={styles.featureLinkBody}>{label}</Text><Text style={styles.featureLinkTitle}>{value || "More watches needed"}</Text></View>)}</View></View>;
+  return <View style={styles.profileSection}>
+    <View style={styles.wrappedHeader}><Pressable onPress={onBack} style={styles.wrappedBack}><Ionicons name="chevron-back" size={17} color={colors.text} /><Text style={styles.wrappedBackText}>Statistics</Text></Pressable><Text style={styles.kickerText}>January 1 through today</Text><Text style={styles.wrappedTitle}>{data.year} Rewind</Text><Text style={styles.wrappedMobileLine}>{data.shareLine}</Text><Pressable disabled={sharing} style={styles.wrappedShareButton} onPress={() => void share()}>{sharing ? <ActivityIndicator size="small" color={colors.text} /> : <Ionicons name="share-social-outline" size={17} color={colors.accent} />}<Text style={styles.wrappedShareText}>{sharing ? "Building snapshot…" : "Share snapshot"}</Text></Pressable></View>
+    <View style={styles.wrappedStatsGrid}>{cards.map(([value, label]) => <View style={styles.wrappedStatCard} key={String(label)}><Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.64} style={styles.wrappedStatValue}>{value}</Text><Text style={styles.wrappedStatLabel}>{label}</Text></View>)}</View>
+    <View style={styles.wrappedSectionHead}><Text style={styles.kickerText}>Your viewing fingerprint</Text><Text style={styles.wrappedSectionTitle}>Taste, by the numbers</Text></View>
+    <View style={styles.wrappedBars}>{(data.genres ?? []).map(([name, count]: [string, number]) => <View key={name} style={styles.wrappedMobileBar}><Text style={styles.genreStatName}>{name}</Text><View style={styles.genreStatBar}><View style={[styles.genreStatFill, { width: `${count / (data.genres[0]?.[1] || 1) * 100}%`, backgroundColor: colors.accent }]} /></View><Text style={styles.genreStatTotal}>{count}</Text></View>)}</View>
+    <View style={styles.wrappedCalloutList}>{[["Highest-rated director", data.topDirector], ["Most-watched actor", data.mostWatchedActor], ["Most generous rating", data.generous ? `${data.generous.title} · ${data.generous.score}/10` : null], ["Harshest rating", data.harshest ? `${data.harshest.title} · ${data.harshest.score}/10` : null]].map(([label, value]) => <View key={label} style={styles.wrappedMobileCallout}><Text style={styles.wrappedCalloutLabel}>{label}</Text><Text style={styles.wrappedCalloutValue}>{value || "More watches needed"}</Text></View>)}</View>
+  </View>;
 }
 
 function StatisticsPage({ data, onBack, onWrapped, onOpen, onGenreShelf }: { data: ProfileData; onBack: () => void; onWrapped: () => void; onOpen: (item: MediaSummary) => void; onGenreShelf: (offset: number) => void }) {
@@ -2153,7 +2147,7 @@ function StatisticsPage({ data, onBack, onWrapped, onOpen, onGenreShelf }: { dat
   return (
     <View style={styles.profileSection}>
       <SectionTitle kicker="The numbers behind your taste" title="Statistics" action="Back to profile ->" onAction={onBack} />
-      <Pressable onPress={onWrapped} style={styles.featureLink}><Ionicons name="sparkles-outline" size={20} color={colors.accent} /><View><Text style={styles.featureLinkTitle}>Your wrapped, so far</Text><Text style={styles.featureLinkBody}>A shareable look at this year’s viewing.</Text></View><Ionicons name="chevron-forward" size={20} color={colors.muted} /></Pressable>
+      <Pressable onPress={onWrapped} style={styles.wrappedEntryCard}><View style={styles.wrappedEntryIcon}><Ionicons name="sparkles-outline" size={21} color={colors.accent} /></View><View style={styles.wrappedEntryCopy}><Text style={styles.wrappedEntryEyebrow}>2026 Rewind</Text><Text style={styles.wrappedEntryTitle}>Your year, beautifully summarized</Text><Text style={styles.wrappedEntryBody}>Open your shareable viewing snapshot.</Text></View><Ionicons name="chevron-forward" size={19} color={colors.muted} /></Pressable>
       <View style={styles.statisticsGrid}>
         {cards.map(card => (
           <View key={card.label} style={styles.statisticsCard}>
@@ -2880,7 +2874,7 @@ function MovieActionSheet({ item, visible, session, currentList, franchiseGroups
     try {
       const now = new Date().toISOString();
       const operation = item?.activeRewatch
-        ? supabase.from("progress").update({ completed_at: now, updated_at: now }).eq("user_id", session.user.id).eq("media_id", mediaId).eq("status", "completed")
+        ? supabase.from("progress").update({ started_at: now, updated_at: now }).eq("user_id", session.user.id).eq("media_id", mediaId).eq("status", "completed")
         : supabase.from("progress").delete().eq("user_id", session.user.id).eq("media_id", mediaId).in("status", ["watching", "paused"]);
       const { error } = await operation;
       if (error) throw error;
@@ -2889,6 +2883,19 @@ function MovieActionSheet({ item, visible, session, currentList, franchiseGroups
     } finally {
       setBusy(false);
     }
+  }
+
+  function confirmDismissRewatch() {
+    Alert.alert(
+      "Remove from Watching?",
+      item?.activeRewatch
+        ? `${item.title} stays Completed and every watch event remains.`
+        : `${item?.title ?? "This title"} keeps all of its watch history.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Remove", style: "destructive", onPress: () => void dismissRewatch() }
+      ]
+    );
   }
 
   async function toggleFavorite() {
@@ -3001,7 +3008,7 @@ function MovieActionSheet({ item, visible, session, currentList, franchiseGroups
               <Pressable disabled={busy} style={styles.contextPrimaryButton} onPress={toggleFavorite}><Ionicons name={favorite ? "heart" : "heart-outline"} size={22} color={colors.text} /><Text style={styles.contextPrimaryText}>{favorite ? "Unfavorite" : "Favorite"}</Text></Pressable>
             </View>
             <View style={styles.actionDivider} />
-            {item?.activeRewatch || item?.reason === "Watching" ? <><ActionRow icon="eye-off-outline" label="Remove from Watching" onPress={() => void dismissRewatch()} /><Text style={styles.actionSub}>{item?.activeRewatch ? "Keeps Completed and all watch history." : "Keeps all watch history."}</Text><View style={styles.actionDivider} /></> : null}
+            {item?.activeRewatch || item?.reason === "Watching" ? <><View style={styles.watchingRemovePanel}><Pressable disabled={busy} onPress={confirmDismissRewatch} style={({ pressed }) => [styles.watchingRemoveAction, pressed && { opacity: .7 }]}><Ionicons name="eye-off-outline" size={19} color={colors.accent} /><Text style={styles.watchingRemoveText}>Remove from Watching</Text><Ionicons name="chevron-forward" size={17} color={colors.accent} /></Pressable><Text style={styles.watchingRemoveSub}>{item?.activeRewatch ? "Keeps Completed status and every watch event." : "Keeps every watch event."}</Text></View><View style={styles.actionDivider} /></> : null}
             {activeCurrentList ? (
               <View style={styles.currentListSection}>
                 <Text style={styles.actionSectionLabel}>Current list</Text>
@@ -5566,6 +5573,10 @@ const styles = StyleSheet.create({
   actionThumb: { width: 48, height: 66, borderRadius: 8, backgroundColor: colors.panel2 },
   actionTitle: { color: colors.text, fontSize: 22, fontWeight: "900" },
   actionSub: { color: colors.muted, marginTop: 4, marginBottom: 10, fontSize: 14 },
+  watchingRemovePanel: { marginVertical: 8, padding: 10, borderWidth: 1, borderColor: "rgba(255,91,62,.30)", borderRadius: 15, backgroundColor: "rgba(255,91,62,.08)" },
+  watchingRemoveAction: { minHeight: 42, flexDirection: "row", alignItems: "center", gap: 10 },
+  watchingRemoveText: { flex: 1, color: colors.text, fontSize: 15, fontWeight: "900" },
+  watchingRemoveSub: { color: colors.muted, marginLeft: 29, marginTop: -2, fontSize: 12, lineHeight: 17 },
   closeButton: { width: 34, height: 34, borderRadius: 17, backgroundColor: colors.panel2, alignItems: "center", justifyContent: "center" },
   actionRow: { minHeight: 52, flexDirection: "row", alignItems: "center", borderRadius: 14, paddingHorizontal: 8 },
   actionIcon: { width: 38 },
@@ -5784,20 +5795,49 @@ const styles = StyleSheet.create({
   featureLink: { marginHorizontal: 18, marginBottom: 18, padding: 16, borderWidth: 1, borderColor: colors.line, borderRadius: 20, backgroundColor: colors.panel, flexDirection: "row", alignItems: "center", gap: 12 },
   featureLinkTitle: { color: colors.text, fontSize: 16, fontWeight: "900" },
   featureLinkBody: { color: colors.muted, fontSize: 12, lineHeight: 17, marginTop: 2 },
+  wrappedEntryCard: { marginHorizontal: 18, marginBottom: 18, padding: 14, borderWidth: 1, borderColor: "rgba(255,91,62,.28)", borderRadius: 18, backgroundColor: "rgba(255,91,62,.07)", flexDirection: "row", alignItems: "center", gap: 12 },
+  wrappedEntryIcon: { width: 42, height: 42, borderRadius: 21, backgroundColor: "rgba(255,91,62,.13)", alignItems: "center", justifyContent: "center" },
+  wrappedEntryCopy: { flex: 1, minWidth: 0 },
+  wrappedEntryEyebrow: { color: colors.accent, fontSize: 9, fontWeight: "900", letterSpacing: 1.5, textTransform: "uppercase", marginBottom: 3 },
+  wrappedEntryTitle: { color: colors.text, fontSize: 15, fontWeight: "900" },
+  wrappedEntryBody: { color: colors.muted, fontSize: 11, marginTop: 3 },
   tonightMobileCard: { marginHorizontal: 18, marginTop: 18, padding: 12, borderWidth: 1, borderColor: colors.line, borderRadius: 22, backgroundColor: colors.panel, overflow: "hidden", gap: 8 },
   tonightMobileArt: { width: "100%", aspectRatio: 1.78, borderRadius: 14, backgroundColor: colors.panel2 },
   tonightMobileTitle: { color: colors.text, fontFamily: "serif", fontSize: 30, fontWeight: "700" },
-  featureShelf: { marginTop: 28, gap: 10 },
-  upNextMobileRow: { marginHorizontal: 18, minHeight: 106, padding: 9, borderWidth: 1, borderColor: colors.line, borderRadius: 18, backgroundColor: colors.panel, flexDirection: "row", alignItems: "center", gap: 12 },
-  upNextMobileArt: { width: 104, height: 78, borderRadius: 12, backgroundColor: colors.panel2 },
-  upNextMobileTitle: { color: colors.text, fontSize: 15, fontWeight: "900" },
-  upNextMobileMeta: { color: colors.muted, fontSize: 11, marginTop: 5 },
+  featureShelf: { marginTop: 24, marginHorizontal: 18, gap: 8 },
+  upNextShelfHead: { minHeight: 34, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  upNextShelfTitle: { color: colors.text, fontFamily: "serif", fontSize: 28, lineHeight: 32, fontWeight: "700" },
+  upNextShelfCount: { minWidth: 24, height: 24, borderRadius: 12, overflow: "hidden", backgroundColor: colors.panel2, color: colors.muted, textAlign: "center", lineHeight: 24, fontSize: 11, fontWeight: "900" },
+  upNextMobileRow: { minHeight: 78, padding: 8, borderWidth: 1, borderColor: colors.line, borderRadius: 14, backgroundColor: colors.panel, flexDirection: "row", alignItems: "center", gap: 10 },
+  upNextMobileArt: { width: 86, height: 60, borderRadius: 9, backgroundColor: colors.panel2 },
+  upNextMobileCopy: { flex: 1, minWidth: 0 },
+  upNextKicker: { color: colors.accent, fontSize: 9, fontWeight: "900", letterSpacing: 1.3, textTransform: "uppercase" },
+  upNextMobileTitle: { color: colors.text, fontSize: 14, fontWeight: "900", marginTop: 1 },
+  upNextMobileSubtitle: { color: colors.muted, fontSize: 11, marginTop: 2 },
+  upNextMobileMeta: { color: colors.muted, fontSize: 9, marginTop: 3 },
   eveningMobile: { marginHorizontal: 18, marginVertical: 15, padding: 16, borderWidth: 1, borderColor: colors.line, borderRadius: 22, backgroundColor: colors.panel, gap: 12 },
+  eveningTitle: { color: colors.text, fontFamily: "serif", fontSize: 30, lineHeight: 34, fontWeight: "700" },
   eveningTotal: { color: colors.text, fontSize: 15, fontWeight: "900", marginTop: 4 },
   eveningQueueRow: { borderTopWidth: 1, borderTopColor: colors.line, paddingTop: 10 },
-  wrappedMobileLine: { color: colors.text, fontFamily: "serif", fontSize: 24, lineHeight: 34, marginHorizontal: 18, marginBottom: 14 },
-  wrappedMobileBar: { marginHorizontal: 18, minHeight: 42, flexDirection: "row", alignItems: "center", gap: 8 },
-  wrappedMobileCallout: { paddingBottom: 13, borderBottomWidth: 1, borderBottomColor: colors.line },
+  wrappedHeader: { marginHorizontal: 18, padding: 18, borderRadius: 22, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.line },
+  wrappedBack: { alignSelf: "flex-start", minHeight: 32, paddingRight: 10, marginBottom: 16, flexDirection: "row", alignItems: "center", gap: 3 },
+  wrappedBackText: { color: colors.text, fontSize: 12, fontWeight: "900" },
+  wrappedTitle: { color: colors.text, fontFamily: "serif", fontSize: 43, lineHeight: 47, fontWeight: "700", marginTop: 5 },
+  wrappedMobileLine: { color: colors.muted, fontSize: 15, lineHeight: 22, marginTop: 10 },
+  wrappedShareButton: { alignSelf: "flex-start", minHeight: 42, marginTop: 16, paddingHorizontal: 15, borderWidth: 1, borderColor: "rgba(255,91,62,.36)", borderRadius: 21, backgroundColor: "rgba(255,91,62,.10)", flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 },
+  wrappedShareText: { color: colors.text, fontSize: 13, fontWeight: "900" },
+  wrappedStatsGrid: { marginHorizontal: 18, marginTop: 12, flexDirection: "row", flexWrap: "wrap", gap: 10 },
+  wrappedStatCard: { width: "48%", minHeight: 92, padding: 14, borderRadius: 16, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.line, justifyContent: "space-between" },
+  wrappedStatValue: { color: colors.text, fontFamily: "serif", fontSize: 31, lineHeight: 35, fontWeight: "700" },
+  wrappedStatLabel: { color: colors.muted, fontSize: 11, lineHeight: 15, fontWeight: "800" },
+  wrappedSectionHead: { marginHorizontal: 18, marginTop: 32, marginBottom: 12 },
+  wrappedSectionTitle: { color: colors.text, fontFamily: "serif", fontSize: 31, lineHeight: 35, fontWeight: "700", marginTop: 4 },
+  wrappedBars: { gap: 4 },
+  wrappedMobileBar: { marginHorizontal: 18, minHeight: 38, flexDirection: "row", alignItems: "center", gap: 8 },
+  wrappedCalloutList: { marginHorizontal: 18, marginTop: 22, gap: 10 },
+  wrappedMobileCallout: { padding: 14, borderRadius: 15, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.line },
+  wrappedCalloutLabel: { color: colors.muted, fontSize: 10, fontWeight: "800", textTransform: "uppercase", letterSpacing: .8 },
+  wrappedCalloutValue: { color: colors.text, fontSize: 15, lineHeight: 20, fontWeight: "900", marginTop: 5 },
   settingsWrap: { paddingBottom: 20 },
   settingsTabs: { gap: 10, paddingHorizontal: 18, paddingBottom: 12 },
   settingsTab: { minHeight: 42, borderRadius: 22, borderWidth: 1, borderColor: colors.line, paddingHorizontal: 14, alignItems: "center", justifyContent: "center", backgroundColor: colors.panel },
