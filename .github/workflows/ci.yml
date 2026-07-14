@@ -13,7 +13,11 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
+      # Expo's cross-platform optional native dependencies are resolved
+      # differently across npm versions/architectures. `npm install` keeps the
+      # committed dependency graph while allowing npm to add the correct
+      # platform-specific optional packages on the Linux runner.
+      - run: npm install --no-audit --no-fund
       - run: npm run typecheck
       - run: npm test
       - run: npx expo config --type public
