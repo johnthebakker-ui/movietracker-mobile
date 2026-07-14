@@ -1971,7 +1971,7 @@ const MemoHistoryEventRow = React.memo(HistoryEventRow);
 function HistoryCard({ item, onOpen, onMenu }: { item: HistoryItem; onOpen: (item: HistoryItem) => void; onMenu: (item: MediaSummary) => void }) {
   const image = tmdbImage(item.artwork, "w500");
   const badgeDate = item.dateKey && item.dateKey !== "unknown" ? new Date(`${item.dateKey}T12:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : formatShortDate(item.date);
-  return <Pressable onPress={() => onOpen(item)} onLongPress={() => item.item && onMenu(item.item)} delayLongPress={280} style={styles.historyCard}><View style={styles.historyArt}>{image ? <RemoteImage uri={image} style={styles.posterImage} resizeMode="cover" /> : null}{item.rating != null ? <Text style={styles.historyRating}>{item.rating.toFixed(1)}/10</Text> : null}<Text style={styles.historyDate}>{badgeDate}</Text></View><Text style={styles.historyTitle} numberOfLines={1}>{item.title}</Text><Text style={styles.historySub} numberOfLines={1}>{item.subtitle}</Text></Pressable>;
+  return <Pressable onPress={() => onOpen(item)} onLongPress={() => item.item && onMenu(item.item)} delayLongPress={280} style={styles.historyCard}><View style={styles.historyArt}>{image ? <RemoteImage uri={image} style={styles.posterImage} resizeMode="cover" /> : null}{item.rating != null ? <Text style={styles.historyRating}>{item.rating.toFixed(1)}/10</Text> : null}{item.rewatchNumber ? <View style={styles.historyCardRewatch}><Ionicons name="refresh-outline" size={12} color={colors.accent} /><Text style={styles.historyCardRewatchText}>Rewatch {item.rewatchNumber}</Text></View> : null}<Text style={styles.historyDate}>{badgeDate}</Text></View><Text style={styles.historyTitle} numberOfLines={1}>{item.title}</Text><Text style={styles.historySub} numberOfLines={1}>{item.subtitle}</Text></Pressable>;
 }
 
 function ProfileProgressSection({ data, onLibrary, onStatus, onWatching, onOpen, onMenu }: { data: ProfileData; onLibrary: () => void; onStatus: (status: "completed" | "active" | "dropped") => void; onWatching: () => void; onOpen: (item: MediaSummary) => void; onMenu: (item: MediaSummary) => void }) {
@@ -5224,6 +5224,8 @@ const styles = StyleSheet.create({
   historyCard: { width: "47%" },
   historyArt: { aspectRatio: 1.72, borderRadius: 12, overflow: "hidden", backgroundColor: colors.panel2 },
   historyRating: { position: "absolute", right: 8, top: 8, borderRadius: 16, overflow: "hidden", backgroundColor: "rgba(0,0,0,0.68)", color: colors.text, paddingHorizontal: 9, paddingVertical: 5, fontWeight: "900" },
+  historyCardRewatch: { position: "absolute", right: 8, bottom: 8, minHeight: 25, borderRadius: 14, backgroundColor: "rgba(0,0,0,0.76)", paddingHorizontal: 7, flexDirection: "row", alignItems: "center", gap: 4 },
+  historyCardRewatchText: { color: colors.accent, fontSize: 10, fontWeight: "900" },
   historyDate: { position: "absolute", left: 8, bottom: 8, borderRadius: 8, overflow: "hidden", backgroundColor: "rgba(0,0,0,0.7)", color: colors.text, paddingHorizontal: 8, paddingVertical: 4, fontWeight: "900" },
   historyTitle: { color: colors.text, fontSize: 16, fontWeight: "900", marginTop: 8 },
   historySub: { color: colors.muted, fontSize: 13, marginTop: 3 },
