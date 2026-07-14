@@ -282,6 +282,10 @@ export async function fetchWrapped(token: string, year = new Date().getFullYear(
   return request<any>(`/api/wrapped?year=${year}`, token);
 }
 
+export async function fetchWrappedShare(token: string) {
+  return request<{ url: string }>("/api/wrapped/share", token, { method: "POST" });
+}
+
 export async function refreshRecommendations(token: string) {
   return request<{ refreshed: boolean }>("/api/recommendations/refresh", token, { method: "POST" });
 }

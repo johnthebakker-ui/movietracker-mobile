@@ -31,6 +31,7 @@ export interface MediaSummary {
   raw?: Record<string, any> | null;
   reason?: string;
   listMediaId?: number;
+  activeRewatch?: boolean;
   franchiseGroup?: string | null;
 }
 

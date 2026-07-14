@@ -32,7 +32,7 @@ import {
 } from "react-native";
 
 import { AppHeader, BottomNav, DiscoverFiltersCard, Hero, PickerSheet, RecommendationFiltersCard, RemoteImage, resolveRemoteImageUri, SectionTitle, TitleCard, type PickerAnchor } from "./src/components";
-import { disconnectTrakt, fetchDiscover, fetchEpisodeNotificationSchedule, fetchMobileCompany, fetchMobileEpisode, fetchMobileHistory, fetchMobilePerson, fetchMobileProfile, fetchMobileSeason, fetchMobileTitle, fetchRecommendations, fetchSearch, fetchTonight, fetchTraktStatus, fetchUpNext, fetchWebsiteEntityMetadata, fetchWebsiteHome, fetchWebsiteTitleMetadata, fetchWrapped, refreshRecommendations, setNotInterested, startTraktConnect, syncTrakt, type MobileTraktStatus } from "./src/api";
+import { disconnectTrakt, fetchDiscover, fetchEpisodeNotificationSchedule, fetchMobileCompany, fetchMobileEpisode, fetchMobileHistory, fetchMobilePerson, fetchMobileProfile, fetchMobileSeason, fetchMobileTitle, fetchRecommendations, fetchSearch, fetchTonight, fetchTraktStatus, fetchUpNext, fetchWebsiteEntityMetadata, fetchWebsiteHome, fetchWebsiteTitleMetadata, fetchWrapped, fetchWrappedShare, refreshRecommendations, setNotInterested, startTraktConnect, syncTrakt, type MobileTraktStatus } from "./src/api";
 import { API_URL, communityRatingLabel, countries, excludeGenreOptions, genres, HAS_SUPABASE, titleYear, tmdbImage, userRatingLabel } from "./src/config";
 import { groupFranchises, listFranchiseName } from "./src/franchise-groups";
 import { supabase } from "./src/supabase";
@@ -40,6 +40,7 @@ import { reportError } from "./src/telemetry";
 import { colors } from "./src/theme";
 import type { AppTab, DiscoverFilters, FeedResult, MediaKind, MediaSummary, RecommendationFilters } from "./src/types";
 import { episodeTargetForUpNext, type UpNextEntry } from "./src/up-next-navigation";
+import { viewingPassProgress } from "./src/viewing-passes";
 
 const initialDiscoverFilters: DiscoverFilters = { kind: "all", genre: "", country: "", yearMode: "exact", year: "", fromYear: "", toYear: "", sort: "popularity", excludeGenres: [], hideWatched: false, hideListed: false };
 const initialRecommendationFilters: RecommendationFilters = { kind: "all", genre: "", country: "", yearMode: "exact", year: "", fromYear: "", toYear: "", hideWatched: true, hideListed: true, excludeGenres: [] };
@@ -192,23 +193,35 @@ function withTimeout<T>(work: Promise<T>, ms: number, message: string): Promise<
 
 async function reconcileMobileEpisodeProgress(userId: string, mediaId: number) {
   if (!supabase) return;
-  const [currentResult, mediaResult, watchesResult] = await Promise.all([
-    supabase.from("progress").select("status").eq("user_id", userId).eq("media_id", mediaId).maybeSingle(),
+  const [currentResult, mediaResult, watchesResult, seasonsResult] = await Promise.all([
+    supabase.from("progress").select("status,completed_at").eq("user_id", userId).eq("media_id", mediaId).maybeSingle(),
     supabase.from("media").select("status,number_of_episodes").eq("id", mediaId).maybeSingle(),
-    supabase.from("watch_events").select("episode_id,episodes(seasons(season_number))").eq("user_id", userId).eq("media_id", mediaId).not("episode_id", "is", null)
+    supabase.from("watch_events").select("episode_id,watched_at,created_at").eq("user_id", userId).eq("media_id", mediaId).not("episode_id", "is", null),
+    supabase.from("seasons").select("season_number,episodes(id,episode_number)").eq("media_id", mediaId).gt("season_number", 0)
   ]);
   if (currentResult.error) throw currentResult.error;
   if (mediaResult.error) throw mediaResult.error;
   if (watchesResult.error) throw watchesResult.error;
-
-  const regularEpisodes = new Set((watchesResult.data ?? []).filter((row: any) => {
-    const episode = firstRow(row.episodes);
-    const season = firstRow(episode?.seasons);
-    return season?.season_number !== 0;
-  }).map((row: any) => Number(row.episode_id)));
-  const totalEpisodes = Number(mediaResult.data?.number_of_episodes ?? 0);
-  const catalogComplete = endedSeriesStatuses.has(String(mediaResult.data?.status ?? "")) && totalEpisodes > 0 && regularEpisodes.size >= totalEpisodes;
-  const status = currentResult.data?.status === "completed" || catalogComplete ? "completed" : "watching";
+  if (seasonsResult.error) throw seasonsResult.error;
+  const episodes = (seasonsResult.data ?? []).flatMap((season: any) => (season.episodes ?? []).map((episode: any) => ({ id: Number(episode.id), seasonNumber: Number(season.season_number), episodeNumber: Number(episode.episode_number) }))).sort((left: any, right: any) => left.seasonNumber - right.seasonNumber || left.episodeNumber - right.episodeNumber);
+  const ended = endedSeriesStatuses.has(String(mediaResult.data?.status ?? ""));
+  const completedAt = currentResult.data?.completed_at ? Date.parse(currentResult.data.completed_at) : Number.NaN;
+  const activeWatches = currentResult.data?.status === "completed" && Number.isFinite(completedAt)
+    ? (watchesResult.data ?? []).filter((watch: any) => {
+        const time = Date.parse(watch.watched_at ?? watch.created_at ?? "");
+        return Number.isFinite(time) && time > completedAt;
+      })
+    : (watchesResult.data ?? []);
+  const pass = viewingPassProgress(episodes, activeWatches.map((watch: any) => ({ episodeId: Number(watch.episode_id), watchedAt: watch.watched_at, createdAt: watch.created_at })), ended);
+  if (currentResult.data?.status === "completed") {
+    if (activeWatches.length && ended && pass.nextIndex == null) {
+      const now = new Date().toISOString();
+      const { error } = await supabase.from("progress").update({ completed_at: now, updated_at: now }).eq("user_id", userId).eq("media_id", mediaId);
+      if (error) throw error;
+    }
+    return;
+  }
+  const status = ended && (watchesResult.data ?? []).length > 0 && pass.completedPasses > 0 && pass.nextIndex == null ? "completed" : "watching";
   if (currentResult.data?.status === status) return;
   const now = new Date().toISOString();
   const { error } = await supabase.from("progress").upsert({
@@ -219,6 +232,43 @@ async function reconcileMobileEpisodeProgress(userId: string, mediaId: number) {
     updated_at: now
   });
   if (error) throw error;
+}
+
+async function loadMobileActiveRewatchIds(userId: string, rows: any[]) {
+  if (!supabase) return new Set<number>();
+  const completed = rows.flatMap(row => {
+    const media = firstRow(row.media);
+    return row.status === "completed" && media?.kind === "show" && media?.id ? [{ mediaId: Number(media.id), completedAt: row.completed_at ?? null }] : [];
+  });
+  if (!completed.length) return new Set<number>();
+  const ids = completed.map(row => row.mediaId);
+  const [seasonsResult, watchesResult] = await Promise.all([
+    supabase.from("seasons").select("media_id,season_number,episodes(id,episode_number)").in("media_id", ids).gt("season_number", 0),
+    supabase.from("watch_events").select("media_id,episode_id,watched_at,created_at").eq("user_id", userId).in("media_id", ids).not("episode_id", "is", null)
+  ]);
+  if (seasonsResult.error) throw seasonsResult.error;
+  if (watchesResult.error) throw watchesResult.error;
+  const episodesByMedia = new Map<number, any[]>();
+  for (const season of seasonsResult.data ?? []) {
+    const mediaId = Number(season.media_id);
+    episodesByMedia.set(mediaId, [...(episodesByMedia.get(mediaId) ?? []), ...(season.episodes ?? []).map((episode: any) => ({ id: Number(episode.id), seasonNumber: Number(season.season_number), episodeNumber: Number(episode.episode_number) }))]);
+  }
+  for (const episodes of episodesByMedia.values()) episodes.sort((a, b) => a.seasonNumber - b.seasonNumber || a.episodeNumber - b.episodeNumber);
+  const watchesByMedia = new Map<number, any[]>();
+  for (const watch of watchesResult.data ?? []) watchesByMedia.set(Number(watch.media_id), [...(watchesByMedia.get(Number(watch.media_id)) ?? []), watch]);
+  const active = new Set<number>();
+  for (const row of completed) {
+    const watermark = row.completedAt ? Date.parse(row.completedAt) : Number.NaN;
+    const allWatches = watchesByMedia.get(row.mediaId) ?? [];
+    const watches = Number.isFinite(watermark) ? allWatches.filter(watch => {
+      const time = Date.parse(watch.watched_at ?? watch.created_at ?? "");
+      return Number.isFinite(time) && time > watermark;
+    }) : allWatches;
+    if (!watches.length) continue;
+    const pass = viewingPassProgress(episodesByMedia.get(row.mediaId) ?? [], watches.map(watch => ({ episodeId: Number(watch.episode_id), watchedAt: watch.watched_at, createdAt: watch.created_at })), true);
+    if (pass.nextIndex != null && (Number.isFinite(watermark) || pass.completedPasses > 0)) active.add(row.mediaId);
+  }
+  return active;
 }
 
 WebBrowser.maybeCompleteAuthSession();
@@ -689,22 +739,28 @@ export default function App() {
     const sourceResult = libraryFilter === "favorites"
       ? await supabase.from("favorites").select(`media(${mediaSelect})`).eq("user_id", usableSession.user.id).order("position").limit(120)
       : await (() => {
-        let query = supabase.from("progress").select(`status,updated_at,media(${mediaSelect})`).eq("user_id", usableSession.user.id);
-        if (libraryFilter !== "all") query = query.eq("status", libraryFilter);
+        let query = supabase.from("progress").select(`status,completed_at,updated_at,media(${mediaSelect})`).eq("user_id", usableSession.user.id);
+        if (libraryFilter === "watching") query = query.in("status", ["watching", "completed"]);
+        else if (libraryFilter !== "all") query = query.eq("status", libraryFilter);
         return query.order("updated_at", { ascending: false }).limit(120);
       })();
     if (sourceResult.error) throw sourceResult.error;
-    const mediaRows = (sourceResult.data ?? []).flatMap((row: any) => {
+    const activeRewatchIds = libraryFilter === "watching" ? await loadMobileActiveRewatchIds(usableSession.user.id, sourceResult.data ?? []) : new Set<number>();
+    const sourceRows = libraryFilter === "watching"
+      ? (sourceResult.data ?? []).filter((row: any) => row.status === "watching" || activeRewatchIds.has(Number(firstRow(row.media)?.id)))
+      : (sourceResult.data ?? []);
+    const mediaRows = sourceRows.flatMap((row: any) => {
       const media = firstRow(row.media);
       return media?.id ? [media] : [];
     });
     const mediaIds = mediaRows.map((media: any) => Number(media.id));
     const ratingResult = mediaIds.length ? await supabase.from("ratings").select("score,media_id").eq("user_id", usableSession.user.id).in("media_id", mediaIds) : { data: [] as any[] };
     const ratingByMedia = new Map((ratingResult.data ?? []).map((row: any) => [row.media_id, Number(row.score)]));
-    const items = dedupeMedia((sourceResult.data ?? []).flatMap((row: any) => {
+    const items = dedupeMedia(sourceRows.flatMap((row: any) => {
       const media = firstRow(row.media);
       if (!media) return [];
-      return [{ ...fromDbMedia(media, ratingByMedia), reason: libraryFilter === "favorites" ? "Favorite" : progressLabel(row.status) }];
+      const activeRewatch = activeRewatchIds.has(Number(media.id));
+      return [{ ...fromDbMedia(media, ratingByMedia), listMediaId: Number(media.id), activeRewatch, reason: libraryFilter === "favorites" ? "Favorite" : activeRewatch ? "Rewatching" : progressLabel(row.status) }];
     }));
     setLibraryLists([]);
     const feed = { items };
@@ -2059,10 +2115,19 @@ function UpNextScreen({ token, onBack, onOpen }: { token: string; onBack: () => 
 
 function WrappedScreen({ token, onBack }: { token: string; onBack: () => void }) {
   const [data, setData] = useState<any>(null);
+  const [sharing, setSharing] = useState(false);
   useEffect(() => { fetchWrapped(token).then(setData).catch(() => setData({ error: true })); }, [token]);
   if (!data) return <View style={styles.profileSection}><SectionTitle kicker="Your year" title="Wrapped" action="Back ->" onAction={onBack} /><ActivityIndicator color={colors.accent} /></View>;
   const cards = [[data.yearHours, "hours watched"], [data.movieEvents, "movie watches"], [data.seriesEvents, "episode watches"], [data.longestStreak, "day longest streak"], [`${data.completionRate}%`, "series completion"], [data.productiveDay || "—", "top viewing day"]];
-  return <View style={styles.profileSection}><SectionTitle kicker="January 1 through today" title={`Your ${data.year}, so far.`} action="Back ->" onAction={onBack} /><Text style={styles.wrappedMobileLine}>{data.shareLine}</Text><Pressable style={styles.featurePrimary} onPress={() => Share.share({ title: "My MovieTracker Wrapped", message: data.shareLine })}><Ionicons name="share-social-outline" size={20} color="#fff" /><Text style={styles.featurePrimaryText}>Share my year</Text></Pressable><View style={styles.statisticsGrid}>{cards.map(([value, label]) => <View style={styles.statisticsCard} key={String(label)}><Text style={styles.statisticsValue}>{value}</Text><Text style={styles.statisticsLabel}>{label}</Text></View>)}</View><View style={styles.statsSectionHead}><Text style={styles.kickerText}>Your viewing fingerprint</Text><Text style={styles.statsSectionTitle}>Taste, by the numbers</Text></View>{(data.genres ?? []).map(([name, count]: [string, number]) => <View key={name} style={styles.wrappedMobileBar}><Text style={styles.genreStatName}>{name}</Text><View style={styles.genreStatBar}><View style={[styles.genreStatFill, { width: `${count / (data.genres[0]?.[1] || 1) * 100}%`, backgroundColor: colors.accent }]} /></View><Text style={styles.genreStatTotal}>{count}</Text></View>)}<View style={styles.featureForm}>{[["Highest-rated director", data.topDirector], ["Most-watched actor", data.mostWatchedActor], ["Most generous rating", data.generous ? `${data.generous.title} · ${data.generous.score}/10` : null], ["Harshest rating", data.harshest ? `${data.harshest.title} · ${data.harshest.score}/10` : null]].map(([label, value]) => <View key={label} style={styles.wrappedMobileCallout}><Text style={styles.featureLinkBody}>{label}</Text><Text style={styles.featureLinkTitle}>{value || "More watches needed"}</Text></View>)}</View></View>;
+  const share = async () => {
+    setSharing(true);
+    try {
+      const snapshot = await fetchWrappedShare(token);
+      await Share.share({ title: "My MovieTracker Wrapped", message: `${data.shareLine}\n${snapshot.url}`, url: snapshot.url });
+    } catch (reason) { Alert.alert("Could not share Wrapped", reason instanceof Error ? reason.message : "Please try again."); }
+    finally { setSharing(false); }
+  };
+  return <View style={styles.profileSection}><SectionTitle kicker="January 1 through today" title={`Your ${data.year}, so far.`} action="Back ->" onAction={onBack} /><Text style={styles.wrappedMobileLine}>{data.shareLine}</Text><Pressable disabled={sharing} style={styles.featurePrimary} onPress={() => void share()}>{sharing ? <ActivityIndicator color="#fff" /> : <Ionicons name="share-social-outline" size={20} color="#fff" />}<Text style={styles.featurePrimaryText}>{sharing ? "Building snapshot…" : "Share my year"}</Text></Pressable><View style={styles.statisticsGrid}>{cards.map(([value, label]) => <View style={styles.statisticsCard} key={String(label)}><Text style={styles.statisticsValue}>{value}</Text><Text style={styles.statisticsLabel}>{label}</Text></View>)}</View><View style={styles.statsSectionHead}><Text style={styles.kickerText}>Your viewing fingerprint</Text><Text style={styles.statsSectionTitle}>Taste, by the numbers</Text></View>{(data.genres ?? []).map(([name, count]: [string, number]) => <View key={name} style={styles.wrappedMobileBar}><Text style={styles.genreStatName}>{name}</Text><View style={styles.genreStatBar}><View style={[styles.genreStatFill, { width: `${count / (data.genres[0]?.[1] || 1) * 100}%`, backgroundColor: colors.accent }]} /></View><Text style={styles.genreStatTotal}>{count}</Text></View>)}<View style={styles.featureForm}>{[["Highest-rated director", data.topDirector], ["Most-watched actor", data.mostWatchedActor], ["Most generous rating", data.generous ? `${data.generous.title} · ${data.generous.score}/10` : null], ["Harshest rating", data.harshest ? `${data.harshest.title} · ${data.harshest.score}/10` : null]].map(([label, value]) => <View key={label} style={styles.wrappedMobileCallout}><Text style={styles.featureLinkBody}>{label}</Text><Text style={styles.featureLinkTitle}>{value || "More watches needed"}</Text></View>)}</View></View>;
 }
 
 function StatisticsPage({ data, onBack, onWrapped, onOpen, onGenreShelf }: { data: ProfileData; onBack: () => void; onWrapped: () => void; onOpen: (item: MediaSummary) => void; onGenreShelf: (offset: number) => void }) {
@@ -2808,6 +2873,24 @@ function MovieActionSheet({ item, visible, session, currentList, franchiseGroups
     }
   }
 
+  async function dismissRewatch() {
+    const mediaId = item?.listMediaId ?? await ensureActionMediaId();
+    if (!session?.user.id || !supabase || !mediaId) return Alert.alert("Unavailable", "Could not prepare this title yet. Try again in a second.");
+    setBusy(true);
+    try {
+      const now = new Date().toISOString();
+      const operation = item?.activeRewatch
+        ? supabase.from("progress").update({ completed_at: now, updated_at: now }).eq("user_id", session.user.id).eq("media_id", mediaId).eq("status", "completed")
+        : supabase.from("progress").delete().eq("user_id", session.user.id).eq("media_id", mediaId).in("status", ["watching", "paused"]);
+      const { error } = await operation;
+      if (error) throw error;
+      onClose();
+      await onChanged("profile");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function toggleFavorite() {
     const mediaId = await ensureActionMediaId();
     if (!session?.user.id || !supabase || !mediaId) return Alert.alert("Unavailable", "Could not prepare this title yet. Try again in a second.");
@@ -2918,6 +3001,7 @@ function MovieActionSheet({ item, visible, session, currentList, franchiseGroups
               <Pressable disabled={busy} style={styles.contextPrimaryButton} onPress={toggleFavorite}><Ionicons name={favorite ? "heart" : "heart-outline"} size={22} color={colors.text} /><Text style={styles.contextPrimaryText}>{favorite ? "Unfavorite" : "Favorite"}</Text></Pressable>
             </View>
             <View style={styles.actionDivider} />
+            {item?.activeRewatch || item?.reason === "Watching" ? <><ActionRow icon="eye-off-outline" label="Remove from Watching" onPress={() => void dismissRewatch()} /><Text style={styles.actionSub}>{item?.activeRewatch ? "Keeps Completed and all watch history." : "Keeps all watch history."}</Text><View style={styles.actionDivider} /></> : null}
             {activeCurrentList ? (
               <View style={styles.currentListSection}>
                 <Text style={styles.actionSectionLabel}>Current list</Text>
