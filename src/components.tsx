@@ -246,6 +246,7 @@ export function FilterButton({ icon, label, value, onPress }: { icon: keyof type
 }
 
 export function DiscoverFiltersCard({ filters, onChange, onSelect }: { filters: DiscoverFilters; onChange: (next: DiscoverFilters) => void; onSelect: (field: "kind" | "genre" | "country" | "sort" | "excludeGenres", anchor?: PickerAnchor) => void }) {
+  const [expanded, setExpanded] = useState(false);
   const excludedLabel = filters.excludeGenres.length
     ? filters.excludeGenres.map(value => excludeGenreOptions.find(option => option.value === value)?.label || value).join(", ")
     : "Nothing excluded";
@@ -255,26 +256,30 @@ export function DiscoverFiltersCard({ filters, onChange, onSelect }: { filters: 
       <View style={styles.filterGrid}>
         <FilterButton icon="film-outline" label="Format" value={filters.kind === "all" ? "Movies & series" : filters.kind === "movie" ? "Movies" : "Series"} onPress={anchor => onSelect("kind", anchor)} />
         <FilterButton icon="options-outline" label="Genre" value={genres.find(g => g.value === filters.genre)?.label || "Every genre"} onPress={anchor => onSelect("genre", anchor)} />
-        <FilterButton icon="earth-outline" label="Country" value={countries.find(c => c.value === filters.country)?.label || "Every country"} onPress={anchor => onSelect("country", anchor)} />
         <FilterButton icon="chevron-down" label="Sort by" value={filters.sort === "rating" ? "Highest rated" : filters.sort === "newest" ? "Newest releases" : "Most popular"} onPress={anchor => onSelect("sort", anchor)} />
-        <FilterButton icon="ban-outline" label="Exclude genres" value={excludedLabel} onPress={anchor => onSelect("excludeGenres", anchor)} />
       </View>
-      <YearFilter
-        mode={filters.yearMode ?? "exact"}
-        year={filters.year}
-        fromYear={filters.fromYear ?? ""}
-        toYear={filters.toYear ?? ""}
-        onChange={values => onChange({ ...filters, ...values })}
-      />
-      <View style={styles.checkRow}>
-        <CheckPill label="Hide watched" checked={filters.hideWatched} onPress={() => onChange({ ...filters, hideWatched: !filters.hideWatched })} />
-        <CheckPill label="Hide titles in my lists" checked={filters.hideListed} onPress={() => onChange({ ...filters, hideListed: !filters.hideListed })} />
-      </View>
+      <Pressable onPress={() => setExpanded(value => !value)} style={styles.moreFiltersButton}>
+        <Ionicons name="options-outline" size={17} color={colors.muted} />
+        <Text style={styles.moreFiltersText}>{expanded ? "Hide extra filters" : "Country, year & exclusions"}</Text>
+        <Ionicons name={expanded ? "chevron-up" : "chevron-down"} size={17} color={colors.muted} />
+      </Pressable>
+      {expanded ? <View style={styles.extraFilters}>
+        <View style={styles.filterGrid}>
+          <FilterButton icon="earth-outline" label="Country" value={countries.find(c => c.value === filters.country)?.label || "Every country"} onPress={anchor => onSelect("country", anchor)} />
+          <FilterButton icon="ban-outline" label="Exclude" value={excludedLabel} onPress={anchor => onSelect("excludeGenres", anchor)} />
+        </View>
+        <YearFilter mode={filters.yearMode ?? "exact"} year={filters.year} fromYear={filters.fromYear ?? ""} toYear={filters.toYear ?? ""} onChange={values => onChange({ ...filters, ...values })} />
+        <View style={styles.checkRow}>
+          <CheckPill label="Hide watched" checked={filters.hideWatched} onPress={() => onChange({ ...filters, hideWatched: !filters.hideWatched })} />
+          <CheckPill label="Hide listed" checked={filters.hideListed} onPress={() => onChange({ ...filters, hideListed: !filters.hideListed })} />
+        </View>
+      </View> : null}
     </View>
   );
 }
 
 export function RecommendationFiltersCard({ filters, onChange, onSelect, onRefresh }: { filters: RecommendationFilters; onChange: (next: RecommendationFilters) => void; onSelect: (field: "kind" | "genre" | "country" | "excludeGenres", anchor?: PickerAnchor) => void; onRefresh: () => void }) {
+  const [expanded, setExpanded] = useState(false);
   const excludedLabel = filters.excludeGenres.length
     ? filters.excludeGenres.map(value => excludeGenreOptions.find(option => option.value === value)?.label || value).join(", ")
     : "Nothing excluded";
@@ -284,20 +289,23 @@ export function RecommendationFiltersCard({ filters, onChange, onSelect, onRefre
       <View style={styles.filterGrid}>
         <FilterButton icon="film-outline" label="Format" value={filters.kind === "all" ? "Movies & series" : filters.kind === "movie" ? "Movies" : "Series"} onPress={anchor => onSelect("kind", anchor)} />
         <FilterButton icon="options-outline" label="Genre" value={genres.find(g => g.value === filters.genre)?.label || "Every genre"} onPress={anchor => onSelect("genre", anchor)} />
-        <FilterButton icon="earth-outline" label="Country" value={countries.find(c => c.value === filters.country)?.label || "Every country"} onPress={anchor => onSelect("country", anchor)} />
-        <FilterButton icon="ban-outline" label="Exclude genres" value={excludedLabel} onPress={anchor => onSelect("excludeGenres", anchor)} />
       </View>
-      <YearFilter
-        mode={filters.yearMode ?? "exact"}
-        year={filters.year}
-        fromYear={filters.fromYear ?? ""}
-        toYear={filters.toYear ?? ""}
-        onChange={values => onChange({ ...filters, ...values })}
-      />
-      <View style={styles.checkRow}>
-        <CheckPill label="Hide watched" checked={filters.hideWatched} onPress={() => onChange({ ...filters, hideWatched: !filters.hideWatched })} />
-        <CheckPill label="Hide titles in my lists" checked={filters.hideListed} onPress={() => onChange({ ...filters, hideListed: !filters.hideListed })} />
-      </View>
+      <Pressable onPress={() => setExpanded(value => !value)} style={styles.moreFiltersButton}>
+        <Ionicons name="options-outline" size={17} color={colors.muted} />
+        <Text style={styles.moreFiltersText}>{expanded ? "Hide extra filters" : "Country, year & exclusions"}</Text>
+        <Ionicons name={expanded ? "chevron-up" : "chevron-down"} size={17} color={colors.muted} />
+      </Pressable>
+      {expanded ? <View style={styles.extraFilters}>
+        <View style={styles.filterGrid}>
+          <FilterButton icon="earth-outline" label="Country" value={countries.find(c => c.value === filters.country)?.label || "Every country"} onPress={anchor => onSelect("country", anchor)} />
+          <FilterButton icon="ban-outline" label="Exclude" value={excludedLabel} onPress={anchor => onSelect("excludeGenres", anchor)} />
+        </View>
+        <YearFilter mode={filters.yearMode ?? "exact"} year={filters.year} fromYear={filters.fromYear ?? ""} toYear={filters.toYear ?? ""} onChange={values => onChange({ ...filters, ...values })} />
+        <View style={styles.checkRow}>
+          <CheckPill label="Hide watched" checked={filters.hideWatched} onPress={() => onChange({ ...filters, hideWatched: !filters.hideWatched })} />
+          <CheckPill label="Hide listed" checked={filters.hideListed} onPress={() => onChange({ ...filters, hideListed: !filters.hideListed })} />
+        </View>
+      </View> : null}
       <Pressable onPress={onRefresh} style={styles.primaryButton}>
         <Ionicons name="refresh" size={20} color={colors.text} />
         <Text style={styles.primaryButtonText}>Update picks</Text>
@@ -482,13 +490,16 @@ export const styles = StyleSheet.create({
   cardMetaRow: { flexDirection: "row", justifyContent: "space-between", gap: 8, marginTop: 4 },
   cardMeta: { color: colors.muted, fontSize: 15 },
   reason: { color: colors.muted, marginTop: 8, fontSize: 13, lineHeight: 18 },
-  filtersCard: { marginHorizontal: 18, marginTop: 10, padding: 12, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel, borderRadius: 22 },
-  filterGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
-  filterButton: { flex: 1, minWidth: "45%", minHeight: 66, borderWidth: 1, borderColor: colors.line, borderRadius: 16, paddingHorizontal: 10, flexDirection: "row", alignItems: "center", backgroundColor: colors.panel2 },
-  filterIcon: { width: 34, height: 34, borderRadius: 11, backgroundColor: colors.accentSoft, alignItems: "center", justifyContent: "center", marginRight: 10 },
+  filtersCard: { marginHorizontal: 18, marginTop: 8, padding: 10, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel, borderRadius: 18 },
+  filterGrid: { flexDirection: "row", gap: 7 },
+  filterButton: { flex: 1, minWidth: 0, minHeight: 52, borderWidth: 1, borderColor: colors.line, borderRadius: 13, paddingHorizontal: 8, flexDirection: "row", alignItems: "center", backgroundColor: colors.panel2 },
+  filterIcon: { width: 28, height: 28, borderRadius: 9, backgroundColor: colors.accentSoft, alignItems: "center", justifyContent: "center", marginRight: 8 },
   filterTextWrap: { flex: 1, minWidth: 0 },
-  filterLabel: { color: colors.muted, fontSize: 12, fontWeight: "900" },
-  filterValue: { color: colors.text, fontSize: 16, fontWeight: "900", marginTop: 2 },
+  filterLabel: { color: colors.muted, fontSize: 10, fontWeight: "900" },
+  filterValue: { color: colors.text, fontSize: 13, fontWeight: "900", marginTop: 1 },
+  moreFiltersButton: { minHeight: 42, marginTop: 8, paddingHorizontal: 10, borderRadius: 12, flexDirection: "row", alignItems: "center", gap: 8 },
+  moreFiltersText: { flex: 1, color: colors.muted, fontSize: 12, fontWeight: "900" },
+  extraFilters: { borderTopWidth: 1, borderTopColor: colors.line, paddingTop: 10 },
   yearBox: { marginTop: 12, borderTopWidth: 1, borderTopColor: colors.line, paddingTop: 12 },
   yearHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 10 },
   yearHeadingCopy: { flexDirection: "row", alignItems: "center", gap: 9, minWidth: 0 },
@@ -504,8 +515,8 @@ export const styles = StyleSheet.create({
   checkRow: { flexDirection: "row", gap: 8, marginTop: 10 },
   checkPill: { flex: 1, minHeight: 48, borderRadius: 13, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel2, paddingHorizontal: 11, paddingVertical: 9, flexDirection: "row", alignItems: "center", gap: 8 },
   checkText: { color: colors.text, fontSize: 13, fontWeight: "900", flex: 1 },
-  primaryButton: { marginTop: 16, height: 60, borderRadius: 22, alignItems: "center", justifyContent: "center", backgroundColor: colors.accent, flexDirection: "row", gap: 8 },
-  primaryButtonText: { color: colors.text, fontSize: 18, fontWeight: "900" },
+  primaryButton: { marginTop: 10, height: 48, borderRadius: 15, alignItems: "center", justifyContent: "center", backgroundColor: colors.accent, flexDirection: "row", gap: 8 },
+  primaryButtonText: { color: colors.text, fontSize: 15, fontWeight: "900" },
   modalScrim: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)" },
   sheet: { position: "absolute", left: 14, right: 14, bottom: 100, maxHeight: "58%", borderRadius: 26, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.line, padding: 10, ...shadow },
   grabber: { width: 44, height: 5, borderRadius: 3, backgroundColor: "#4a5052", alignSelf: "center", marginBottom: 10 },

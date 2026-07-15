@@ -72,7 +72,7 @@ type EntityTarget =
   | { type: "person"; id: number; name: string; subtitle?: string | null; imagePath?: string | null }
   | { type: "company"; id: number; name: string; subtitle?: string | null; imagePath?: string | null };
 type UserList = { id: string; name: string; description: string | null; visibility: string | null; cover_url?: string | null; count: number; posters: string[] };
-type ReviewItem = { id: string; title: string; body: string; created_at: string; updated_at?: string | null; userId?: string | null; ratingId?: string | null; containsSpoilers?: boolean | null; kind: MediaKind; mediaTitle: string; artwork: string | null; score?: number | null; item?: MediaSummary | null };
+type ReviewItem = { id: string; title: string; body: string; created_at: string; updated_at?: string | null; userId?: string | null; ratingId?: string | null; containsSpoilers?: boolean | null; isPrivate?: boolean | null; kind: MediaKind; mediaTitle: string; artwork: string | null; score?: number | null; item?: MediaSummary | null };
 type TrackedStatus = "completed" | "watching" | "planned" | "paused" | "dropped";
 type GenreStat = { name: string; total: number; statuses: Record<TrackedStatus, number>; items: Array<{ status: TrackedStatus; item: MediaSummary }> };
 type HistoryItem = {
@@ -569,7 +569,7 @@ export default function App() {
     const token = usableSession?.access_token;
     const timer = setTimeout(() => {
       void (async () => {
-        const queue = picks.slice(0, 6);
+        const queue = picks.slice(0, 10);
         const worker = async () => {
           while (!cancelled) {
             const item = queue.shift();
@@ -586,9 +586,9 @@ export default function App() {
             if (core) await AsyncStorage.setItem(cacheKey, JSON.stringify({ detail: core, savedAt: Date.now() })).catch(() => undefined);
           }
         };
-        await Promise.all(Array.from({ length: Math.min(2, queue.length) }, worker));
+        await Promise.all(Array.from({ length: Math.min(3, queue.length) }, worker));
       })();
-    }, 500);
+    }, 250);
 
     return () => {
       cancelled = true;
@@ -860,7 +860,7 @@ export default function App() {
       supabase.from("progress").select("status,updated_at,media(id,tmdb_id,kind,title,overview,poster_path,backdrop_path,release_date,end_date,status,vote_average,vote_count,popularity,runtime,genres,original_language,origin_countries,collection_tmdb_id,collection_name,collection_poster_path)").eq("user_id", userId).order("updated_at", { ascending: false }).limit(100),
       supabase.from("progress").select("*", { count: "exact", head: true }).eq("user_id", userId).eq("status", "completed"),
       supabase.from("ratings").select("score,media_id").eq("user_id", userId),
-      supabase.from("reviews").select("id,title,body,created_at,updated_at,media(id,tmdb_id,kind,title,overview,poster_path,backdrop_path,release_date,end_date,status,vote_average,vote_count,popularity,runtime,genres,original_language,origin_countries,collection_tmdb_id,collection_name,collection_poster_path),ratings(score)").eq("user_id", userId).order("updated_at", { ascending: false }).limit(20),
+      supabase.from("reviews").select("id,title,body,contains_spoilers,is_private,created_at,updated_at,media(id,tmdb_id,kind,title,overview,poster_path,backdrop_path,release_date,end_date,status,vote_average,vote_count,popularity,runtime,genres,original_language,origin_countries,collection_tmdb_id,collection_name,collection_poster_path),ratings(score)").eq("user_id", userId).order("updated_at", { ascending: false }).limit(20),
       supabase.from("reviews").select("*", { count: "exact", head: true }).eq("user_id", userId),
       supabase.from("favorites").select("media(id,tmdb_id,kind,title,overview,poster_path,backdrop_path,release_date,end_date,status,vote_average,vote_count,popularity,runtime,genres,original_language,origin_countries,collection_tmdb_id,collection_name,collection_poster_path)").eq("user_id", userId).order("position").limit(12),
       loadUserLists(userId),
@@ -964,6 +964,8 @@ export default function App() {
         body: review.body ?? "",
         created_at: review.created_at,
         updated_at: review.updated_at,
+        containsSpoilers: Boolean(review.contains_spoilers),
+        isPrivate: Boolean(review.is_private),
         kind: media.kind,
         mediaTitle: media.title,
         artwork: media.backdrop_path ?? media.poster_path ?? null,
@@ -1023,12 +1025,19 @@ export default function App() {
 
   useEffect(() => {
     let alive = true;
-    setLoading(true);
+    const alreadyVisible = tab === "home"
+      ? Boolean(homeHero.length || homeSections.length)
+      : tab === "library"
+        ? Boolean(libraryFeed.items.length || libraryLists.length)
+        : tab === "profile"
+          ? Boolean(profileData.watchEvents || profileData.currentlyWatching.length)
+          : false;
+    setLoading(!alreadyVisible);
     loadActive()
       .catch(reason => { if (alive) setError(reason instanceof Error ? reason.message : "Could not load MovieTracker."); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [loadActive]);
+  }, [homeHero.length, homeSections.length, libraryFeed.items.length, libraryLists.length, loadActive, profileData.currentlyWatching.length, profileData.watchEvents, tab]);
 
   useEffect(() => {
     scrollToTop();
@@ -1120,7 +1129,7 @@ export default function App() {
 
   const activeFeed = featureView ? emptyFeed : searchMode ? searchFeed : selectedList ? selectedListFeed : tab === "discover" ? discoverFeed : tab === "calendar" ? calendarFeed : tab === "library" ? libraryFeed : tab === "profile" && profileView === "recommendations" ? recommendationFeed : emptyFeed;
   useEffect(() => {
-    const items = activeFeed.items.slice(0, 4);
+    const items = activeFeed.items.slice(0, 8);
     if (!items.length) return;
     let cancelled = false;
     const timer = setTimeout(() => {
@@ -1141,9 +1150,9 @@ export default function App() {
             if (!cancelled && detail) await AsyncStorage.setItem(cacheKey, JSON.stringify({ detail, savedAt: Date.now() })).catch(() => undefined);
           }
         };
-        await Promise.all(Array.from({ length: Math.min(2, queue.length) }, worker));
+        await Promise.all(Array.from({ length: Math.min(3, queue.length) }, worker));
       })();
-    }, 350);
+    }, 200);
     return () => { cancelled = true; clearTimeout(timer); };
   }, [activeFeed.items, usableSession?.access_token, usableSession?.user.id]);
   const profileTitle = profile?.display_name || profile?.username || usableSession?.user.user_metadata?.display_name || usableSession?.user.email || "Your MovieTracker";
@@ -1625,7 +1634,7 @@ export default function App() {
             renderItem={({ item }) => <TitleCard item={item} onOpen={openItem} onMenu={setActionItem} />}
             onEndReached={loadMoreActive}
             onEndReachedThreshold={0.75}
-            ListFooterComponent={loadingMore ? <View style={styles.feedFooter}><ActivityIndicator color={colors.accent} /><Text style={styles.feedFooterText}>Loading more titles...</Text></View> : null}
+            ListFooterComponent={!featureView && loadingMore ? <View style={styles.feedFooter}><ActivityIndicator color={colors.accent} /><Text style={styles.feedFooterText}>Loading more titles...</Text></View> : null}
           />
         )}
       </KeyboardAvoidingView>
@@ -2079,10 +2088,25 @@ function ChoiceChips({ values, value, onChange }: { values: Array<[string, strin
 
 function TonightScreen({ token, onBack, onOpen }: { token?: string; onBack: () => void; onOpen: (item: MediaSummary) => void }) {
   const [filters, setFilters] = useState({ minutes: "120", mood: "comforting", kind: "movie", company: "solo", source: token ? "personal" : "generic", services: "" });
-  const [picks, setPicks] = useState<Array<{ item: MediaSummary; reason: string }>>([]); const [busy, setBusy] = useState(false); const [exclude, setExclude] = useState<string[]>([]);
-  const choose = async (blocked?: string) => { setBusy(true); const next = blocked ? [...exclude, blocked] : exclude; if (blocked) setExclude(next); try { const data = await fetchTonight({ ...filters, exclude: next.join(",") }, token); setPicks(data.picks ?? []); } finally { setBusy(false); } };
+  const [picks, setPicks] = useState<Array<{ item: MediaSummary; reason: string }>>([]); const [busy, setBusy] = useState(false); const [exclude, setExclude] = useState<string[]>([]); const [message, setMessage] = useState("");
+  const choose = async (blocked?: string) => {
+    if (busy) return;
+    setBusy(true); setMessage("");
+    const next = blocked ? [...exclude, blocked] : exclude;
+    if (blocked) setExclude(next);
+    try {
+      const data = await fetchTonight({ ...filters, exclude: next.join(",") }, token);
+      const nextPicks = data.picks ?? [];
+      setPicks(nextPicks);
+      if (data.resetExclusions) setExclude([]);
+      if (!nextPicks.length) setMessage("No strong matches for every filter yet. Try a different service, mood, or available time.");
+    } catch (reason) {
+      setMessage(reason instanceof Error ? reason.message : "Could not choose titles right now. Please try again.");
+    } finally { setBusy(false); }
+  };
   const row = (label: string, key: keyof typeof filters, values: Array<[string, string]>) => <View style={styles.featureField}><Text style={styles.featureLabel}>{label}</Text><ChoiceChips values={values} value={filters[key]} onChange={value => setFilters(current => ({ ...current, [key]: value }))} /></View>;
-  return <View style={styles.profileSection}><SectionTitle kicker="Decision mode" title="What should we watch tonight?" action="Back ->" onAction={onBack} /><Text style={styles.featureIntro}>A few useful questions, then three strong choices. No endless grid.</Text><View style={styles.featureForm}>{row("Available time", "minutes", [["30", "30 min"], ["60", "1 hour"], ["90", "90 min"], ["120", "2+ hours"]])}{row("Mood", "mood", [["comforting", "Comforting"], ["intense", "Intense"], ["funny", "Funny"], ["weird", "Weird"], ["emotional", "Emotional"]])}{row("Format", "kind", [["movie", "Movie"], ["show", "Series"]])}{row("Who is watching?", "company", [["solo", "Solo"], ["date", "Date night"], ["family", "Family"], ["group", "Group"]])}{row("Choose from", "source", token ? [["personal", "For me"], ["generic", "Surprise me"], ["new", "Something new"], ["saved", "Already saved"]] : [["generic", "Surprise me"], ["new", "Something new"]])}{row("Streaming service", "services", [["", "Any"], ["netflix", "Netflix"], ["prime", "Prime"], ["disney", "Disney+"], ["max", "Max"], ["apple", "Apple TV+"]])}<Pressable disabled={busy} onPress={() => choose()} style={styles.featurePrimary}><Ionicons name="sparkles-outline" size={20} color="#fff" /><Text style={styles.featurePrimaryText}>{busy ? "Choosing…" : "Give me three choices"}</Text></Pressable></View>{picks.map(({ item, reason }) => <View style={styles.tonightMobileCard} key={`${item.kind}-${item.id}`}><Pressable onPress={() => onOpen(item)}><RemoteImage uri={tmdbImage(item.backdropPath || item.posterPath, "w780")} style={styles.tonightMobileArt} resizeMode="cover" /></Pressable><Text style={styles.kickerText}>{item.kind === "movie" ? "Film" : "Series"}</Text><Text style={styles.tonightMobileTitle}>{item.title}</Text><Text style={styles.featureIntro}>{reason}</Text><View style={styles.featureChoices}>{[["Wrong mood", "close-circle-outline"], ["Seen it", "checkmark-circle-outline"], ["Too long", "time-outline"]].map(([label, icon]) => <Pressable key={label} onPress={() => choose(`${item.kind}-${item.id}`)} style={styles.featureChoice}><Ionicons name={icon as any} size={15} color={colors.muted} /><Text style={styles.featureChoiceText}>{label}</Text></Pressable>)}</View></View>)}</View>;
+  const moods: Array<[string, string]> = filters.company === "date" ? [["romantic", "Romantic"], ["funny", "Funny"], ["comforting", "Comforting"], ["intense", "Intense"], ["emotional", "Emotional"], ["weird", "Weird"]] : [["comforting", "Comforting"], ["intense", "Intense"], ["funny", "Funny"], ["weird", "Weird"], ["emotional", "Emotional"]];
+  return <View style={styles.profileSection}><SectionTitle kicker="Decision mode" title="What should we watch tonight?" action="Back ->" onAction={onBack} /><Text style={styles.featureIntro}>A few useful questions, then three strong choices. No endless grid.</Text><View style={styles.featureForm}>{row("Available time", "minutes", [["30", "30 min"], ["60", "1 hour"], ["90", "90 min"], ["120", "2+ hours"]])}{row("Who is watching?", "company", [["solo", "Solo"], ["date", "Date night"], ["family", "Family"], ["group", "Group"]])}{row("Mood", "mood", moods)}{row("Format", "kind", [["movie", "Movie"], ["show", "Series"]])}{row("Choose from", "source", token ? [["personal", "For me"], ["generic", "Surprise me"], ["new", "Something new"], ["saved", "Already saved"]] : [["generic", "Surprise me"], ["new", "Something new"]])}{row("Streaming service", "services", [["", "Any"], ["netflix", "Netflix"], ["prime", "Prime"], ["disney", "Disney+"], ["max", "Max"], ["apple", "Apple TV+"]])}<Pressable disabled={busy} onPress={() => void choose()} style={[styles.featurePrimary, busy && styles.disabledButton]}>{busy ? <ActivityIndicator color="#fff" /> : <Ionicons name="sparkles-outline" size={20} color="#fff" />}<Text style={styles.featurePrimaryText}>{busy ? "Choosing..." : "Give me three choices"}</Text></Pressable>{message ? <Text style={styles.tonightMessage}>{message}</Text> : null}</View>{picks.map(({ item, reason }) => <View style={styles.tonightMobileCard} key={`${item.kind}-${item.id}`}><Pressable onPress={() => onOpen(item)}><RemoteImage uri={tmdbImage(item.backdropPath || item.posterPath, "w780")} style={styles.tonightMobileArt} resizeMode="cover" /></Pressable><Text style={styles.kickerText}>{item.kind === "movie" ? "Film" : "Series"}</Text><Text style={styles.tonightMobileTitle}>{item.title}</Text><Text style={styles.tonightReason}>{reason}</Text><View style={styles.featureChoices}>{[["Wrong mood", "close-circle-outline"], ["Seen it", "checkmark-circle-outline"], ["Too long", "time-outline"]].map(([label, icon]) => <Pressable key={label} onPress={() => void choose(`${item.kind}-${item.id}`)} style={styles.featureChoice}><Ionicons name={icon as any} size={15} color={colors.muted} /><Text style={styles.featureChoiceText}>{label}</Text></Pressable>)}</View></View>)}</View>;
 }
 
 function UpNextScreen({ token, onBack, onOpen }: { token: string; onBack: () => void; onOpen: (entry: UpNextEntry) => void }) {
@@ -2106,7 +2130,18 @@ function WrappedScreen({ token, onBack }: { token: string; onBack: () => void })
   const [sharing, setSharing] = useState(false);
   useEffect(() => { fetchWrapped(token).then(setData).catch(() => setData({ error: true })); }, [token]);
   if (!data) return <View style={styles.profileSection}><SectionTitle kicker="Your year" title="Wrapped" action="Back ->" onAction={onBack} /><ActivityIndicator color={colors.accent} /></View>;
-  const cards = [[data.yearHours, "hours watched"], [data.movieEvents, "movie watches"], [data.seriesEvents, "episode watches"], [data.longestStreak, "day longest streak"], [`${data.completionRate}%`, "series completion"], [data.productiveDay || "—", "top viewing day"]];
+  const cards = [[data.yearHours, "hours watched"], [data.movieEvents, "movie watches"], [data.seriesEvents, "episode watches"], [data.longestStreak, "day longest streak"], [data.monthHours, "hours this month"], [`${data.completionRate}%`, "series completion"], [data.productiveDay || "—", "top viewing day"], [data.languages?.[0]?.[0]?.toUpperCase() || "—", "top language"]];
+  const heatByDate = new Map<string, number>((data.heatmap ?? []).map((day: any) => [String(day.date), Number(day.count) || 0]));
+  const heatStart = new Date(`${data.year}-01-01T00:00:00Z`);
+  const heatEnd = data.year === new Date().getUTCFullYear() ? new Date() : new Date(`${data.year}-12-31T00:00:00Z`);
+  const heatDays: Array<{ date: string; count: number }> = [];
+  for (const date = new Date(heatStart); date <= heatEnd; date.setUTCDate(date.getUTCDate() + 1)) {
+    const key = date.toISOString().slice(0, 10);
+    heatDays.push({ date: key, count: heatByDate.get(key) ?? 0 });
+  }
+  const leading = (heatStart.getUTCDay() + 6) % 7;
+  const paddedHeat: Array<{ date: string; count: number } | null> = [...Array.from({ length: leading }, () => null), ...heatDays];
+  const heatWeeks = Array.from({ length: Math.ceil(paddedHeat.length / 7) }, (_, index) => paddedHeat.slice(index * 7, index * 7 + 7));
   const share = async () => {
     setSharing(true);
     try {
@@ -2121,6 +2156,10 @@ function WrappedScreen({ token, onBack }: { token: string; onBack: () => void })
     <View style={styles.wrappedSectionHead}><Text style={styles.kickerText}>Your viewing fingerprint</Text><Text style={styles.wrappedSectionTitle}>Taste, by the numbers</Text></View>
     <View style={styles.wrappedBars}>{(data.genres ?? []).map(([name, count]: [string, number]) => <View key={name} style={styles.wrappedMobileBar}><Text style={styles.genreStatName}>{name}</Text><View style={styles.genreStatBar}><View style={[styles.genreStatFill, { width: `${count / (data.genres[0]?.[1] || 1) * 100}%`, backgroundColor: colors.accent }]} /></View><Text style={styles.genreStatTotal}>{count}</Text></View>)}</View>
     <View style={styles.wrappedCalloutList}>{[["Highest-rated director", data.topDirector], ["Most-watched actor", data.mostWatchedActor], ["Most generous rating", data.generous ? `${data.generous.title} · ${data.generous.score}/10` : null], ["Harshest rating", data.harshest ? `${data.harshest.title} · ${data.harshest.score}/10` : null]].map(([label, value]) => <View key={label} style={styles.wrappedMobileCallout}><Text style={styles.wrappedCalloutLabel}>{label}</Text><Text style={styles.wrappedCalloutValue}>{value || "More watches needed"}</Text></View>)}</View>
+    <View style={styles.wrappedSectionHead}><Text style={styles.kickerText}>Every watched day</Text><Text style={styles.wrappedSectionTitle}>Your viewing heatmap</Text><Text style={styles.wrappedHeatHint}>Darker squares are busier viewing days.</Text></View>
+    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.wrappedHeatScroll}>
+      <View style={styles.wrappedHeatWeeks}>{heatWeeks.map((week, weekIndex) => <View key={weekIndex} style={styles.wrappedHeatWeek}>{week.map((day, dayIndex) => day ? <View accessibilityLabel={`${day.date}: ${day.count} watches`} key={day.date} style={[styles.wrappedHeatCell, day.count > 0 && styles.wrappedHeatCell1, day.count > 1 && styles.wrappedHeatCell2, day.count > 3 && styles.wrappedHeatCell3, day.count > 6 && styles.wrappedHeatCell4]} /> : <View key={`empty-${dayIndex}`} style={styles.wrappedHeatCellEmpty} />)}</View>)}</View>
+    </ScrollView>
   </View>;
 }
 
@@ -2302,7 +2341,7 @@ function SeasonDetailScreen({ target, session, onBack, onOpenEpisode }: { target
     }
   }
 
-  async function saveSeasonReview(values: { score: number | null; title: string; body: string; containsSpoilers: boolean }) {
+  async function saveSeasonReview(values: { score: number | null; title: string; body: string; containsSpoilers: boolean; isPrivate: boolean }) {
     if (!session?.user.id || !payload?.seasonId || !supabase) return Alert.alert("Sign in needed", "Sign in before reviewing seasons.");
     setBusy(true);
     try {
@@ -2318,13 +2357,15 @@ function SeasonDetailScreen({ target, session, onBack, onOpenEpisode }: { target
       }
       const body = values.body.trim();
       const title = values.title.trim();
-      const reviewPayload = { user_id: session.user.id, season_id: payload.seasonId, rating_id: ratingId, title: title || null, body: body || null, contains_spoilers: values.containsSpoilers };
+      const reviewPayload = { user_id: session.user.id, season_id: payload.seasonId, rating_id: ratingId, title: title || null, body: body || null, contains_spoilers: values.containsSpoilers, is_private: values.isPrivate };
       const { data: existingReview } = await supabase.from("reviews").select("id").eq("user_id", session.user.id).eq("season_id", payload.seasonId).maybeSingle();
-      const { error } = existingReview
-        ? await supabase.from("reviews").update({ ...reviewPayload, updated_at: new Date().toISOString() }).eq("id", existingReview.id)
-        : await supabase.from("reviews").insert(reviewPayload);
+      const now = new Date().toISOString();
+      const { data: saved, error } = existingReview
+        ? await supabase.from("reviews").update({ ...reviewPayload, updated_at: now }).eq("id", existingReview.id).select("id,created_at,updated_at").single()
+        : await supabase.from("reviews").insert(reviewPayload).select("id,created_at,updated_at").single();
       if (error) throw error;
-      await refreshSeasonFeedback();
+      const savedReview: ReviewItem = { id: saved.id, title: title || "Review", body, created_at: saved.created_at ?? now, updated_at: saved.updated_at ?? now, userId: session.user.id, ratingId, containsSpoilers: values.containsSpoilers, isPrivate: values.isPrivate, kind: target.show.kind, mediaTitle: `${target.show.title} season`, artwork: target.show.backdropPath ?? target.show.posterPath ?? null, score: values.score, item: target.show };
+      setPayload((current: any) => current ? { ...current, userRating: values.score ?? current.userRating, myReview: savedReview, reviews: [savedReview, ...(current.reviews ?? []).filter((review: ReviewItem) => review.id !== savedReview.id && review.userId !== session.user.id)] } : current);
     } finally {
       setBusy(false);
     }
@@ -2631,6 +2672,7 @@ function ReviewRow({ review, onOpen }: { review: ReviewItem; onOpen: (item: Medi
       <View style={styles.reviewCopy}>
         <View style={styles.reviewKindRow}>
           <Text style={styles.reviewKind}>{review.kind === "show" ? "Series review" : "Film review"}</Text>
+          {review.isPrivate ? <View style={styles.reviewPrivateBadge}><Ionicons name="lock-closed-outline" size={11} color={colors.muted} /><Text style={styles.reviewPrivateText}>Private</Text></View> : null}
           {score != null ? <View style={styles.reviewScore}><Ionicons name="star" size={14} color="#ffc24b" /><Text style={styles.reviewScoreText}>{score.toFixed(1)}</Text></View> : null}
         </View>
         <Text style={styles.reviewMedia} numberOfLines={1}>{review.mediaTitle}</Text>
@@ -3148,7 +3190,7 @@ function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity, on
       setEpisodeExternalRatings(metadata.ratings ?? []);
     }).catch(() => setEpisodeRecommendations([]));
     if (episodeId) {
-      const reviewSelect = "id,title,body,created_at,updated_at,user_id,rating_id,contains_spoilers,ratings(score)";
+      const reviewSelect = "id,title,body,created_at,updated_at,user_id,rating_id,contains_spoilers,is_private,ratings(score)";
       const [allRatings, reviewRows, myRatingRow, myReviewRow] = await Promise.all([
         supabase.from("ratings").select("score").eq("episode_id", episodeId),
         supabase.from("reviews").select(reviewSelect).eq("episode_id", episodeId).order("created_at", { ascending: false }).limit(20),
@@ -3183,7 +3225,7 @@ function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity, on
     try {
       await work();
       if (reload) await loadEpisode();
-      await onChanged?.(reason);
+      void onChanged?.(reason);
     } finally {
       setBusy(false);
     }
@@ -3256,11 +3298,12 @@ function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity, on
     setRatingSheetVisible(false);
   }
 
-  async function saveEpisodeReview(values: { score: number | null; title: string; body: string; containsSpoilers: boolean }) {
+  async function saveEpisodeReview(values: { score: number | null; title: string; body: string; containsSpoilers: boolean; isPrivate: boolean }) {
     if (!session?.user.id || !supabase || !episodeId) return Alert.alert("Unavailable", "This episode is not ready for review yet.");
     if (!values.body.trim()) return Alert.alert("Review needed", "Write a few words before publishing your review.");
     const nextScore = values.score == null ? null : clampRating(values.score);
-    await withEpisodeBusy(async () => {
+    setBusy(true);
+    try {
       let ratingId: string | null = null;
       if (nextScore != null) {
         const { data: existing } = await supabase!.from("ratings").select("id").eq("user_id", session.user.id).eq("episode_id", episodeId).maybeSingle();
@@ -3271,11 +3314,20 @@ function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity, on
         if (error) throw error;
         ratingId = savedRating?.id ?? null;
       }
-      const payload = { title: values.title.trim() || null, body: values.body.trim(), contains_spoilers: values.containsSpoilers, rating_id: ratingId };
+      const payload = { title: values.title.trim() || null, body: values.body.trim(), contains_spoilers: values.containsSpoilers, is_private: values.isPrivate, rating_id: ratingId };
       const { data: existingReview } = await supabase!.from("reviews").select("id").eq("user_id", session.user.id).eq("episode_id", episodeId).maybeSingle();
-      const result = existingReview?.id ? await supabase!.from("reviews").update({ ...payload, updated_at: new Date().toISOString() }).eq("id", existingReview.id) : await supabase!.from("reviews").insert({ user_id: session.user.id, episode_id: episodeId, ...payload });
+      const now = new Date().toISOString();
+      const result = existingReview?.id
+        ? await supabase!.from("reviews").update({ ...payload, updated_at: now }).eq("id", existingReview.id).select("id,created_at,updated_at").single()
+        : await supabase!.from("reviews").insert({ user_id: session.user.id, episode_id: episodeId, ...payload }).select("id,created_at,updated_at").single();
       if (result.error) throw result.error;
-    });
+      const show = firstRow(firstRow(episode?.seasons)?.media) ? fromDbMedia(firstRow(firstRow(episode?.seasons)?.media)) : target.show;
+      const savedReview: ReviewItem = { id: result.data.id, title: values.title.trim() || "Review", body: values.body.trim(), created_at: result.data.created_at ?? now, updated_at: result.data.updated_at ?? now, userId: session.user.id, ratingId, containsSpoilers: values.containsSpoilers, isPrivate: values.isPrivate, kind: show.kind, mediaTitle: `${show.title} episode`, artwork: show.backdropPath ?? show.posterPath ?? null, score: nextScore, item: show };
+      setUserRating(nextScore);
+      setMyReview(savedReview);
+      setReviews(current => [savedReview, ...current.filter(review => review.id !== savedReview.id && review.userId !== session.user.id)]);
+      void onChanged?.("rating");
+    } finally { setBusy(false); }
     Alert.alert(myReview ? "Review updated" : "Review published", "Your episode review is saved.");
   }
 
@@ -3564,7 +3616,15 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
         }
       } catch { /* Ignore stale detail cache. */ }
     }
-    const mobileDetail = await fetchMobileTitle(item.kind, item.id, session?.access_token, "full").catch(() => null);
+    const fullDetailPromise = fetchMobileTitle(item.kind, item.id, session?.access_token, "full").catch(() => null);
+    if (!hasCachedDetail) {
+      const coreDetail = await fetchMobileTitle(item.kind, item.id, session?.access_token, "core").catch(() => null);
+      if (coreDetail) {
+        applyMobileDetail(coreDetail);
+        setDetailLoading(false);
+      }
+    }
+    const mobileDetail = await fullDetailPromise;
     if (mobileDetail) {
       applyMobileDetail(mobileDetail);
       await AsyncStorage.setItem(detailCacheKey, JSON.stringify({ detail: mobileDetail, savedAt: Date.now() })).catch(() => undefined);
@@ -3592,7 +3652,7 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
     const raw = media.raw ?? {};
     const resolvedOverview = media.overview || raw.overview || websiteOverview || item.overview || null;
     const collectionId = media.collection_tmdb_id ?? raw.belongs_to_collection?.id ?? item.collectionTmdbId ?? null;
-    const reviewSelect = "id,title,body,created_at,updated_at,user_id,rating_id,contains_spoilers,media(id,tmdb_id,kind,title,overview,poster_path,backdrop_path,release_date,end_date,status,vote_average,vote_count,popularity,runtime,genres,original_language,origin_countries,collection_tmdb_id,collection_name,collection_poster_path),ratings(score)";
+    const reviewSelect = "id,title,body,created_at,updated_at,user_id,rating_id,contains_spoilers,is_private,media(id,tmdb_id,kind,title,overview,poster_path,backdrop_path,release_date,end_date,status,vote_average,vote_count,popularity,runtime,genres,original_language,origin_countries,collection_tmdb_id,collection_name,collection_poster_path),ratings(score)";
     const [ratings, reviews, myReviewResult, progress, userRating, favorite, lists, contains, seasonRows, collectionRows] = await Promise.all([
       client.from("ratings").select("score").eq("media_id", mediaId),
       client.from("reviews").select(reviewSelect).eq("media_id", mediaId).order("created_at", { ascending: false }).limit(8),
@@ -3681,7 +3741,7 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
     try {
       await work();
       await AsyncStorage.removeItem(detailCacheKey).catch(() => undefined);
-      await onChanged(reason);
+      void onChanged(reason);
     } finally {
       setBusy(false);
     }
@@ -3717,11 +3777,12 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
     setRatingSheetVisible(false);
   }
 
-  async function saveReviewDraft(values: { score: number | null; title: string; body: string; containsSpoilers: boolean }) {
+  async function saveReviewDraft(values: { score: number | null; title: string; body: string; containsSpoilers: boolean; isPrivate: boolean }) {
     if (!session?.user.id || !supabase || !detail?.dbId) return Alert.alert("Unavailable", "Open this title on the website once before editing it in the app.");
     if (!values.body.trim()) return Alert.alert("Review needed", "Write a few words before publishing your review.");
     const nextScore = values.score == null ? null : clampRating(values.score);
-    await withBusy(async () => {
+    setBusy(true);
+    try {
       let ratingId: string | null = null;
       if (nextScore != null) {
         const { data: existing } = await supabase!.from("ratings").select("id").eq("user_id", session.user.id).eq("media_id", detail.dbId).maybeSingle();
@@ -3732,15 +3793,18 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
         if (error) throw error;
         ratingId = savedRating?.id ?? null;
       }
-      const payload = { title: values.title.trim() || null, body: values.body.trim(), contains_spoilers: values.containsSpoilers, rating_id: ratingId };
+      const payload = { title: values.title.trim() || null, body: values.body.trim(), contains_spoilers: values.containsSpoilers, is_private: values.isPrivate, rating_id: ratingId };
       const { data: existingReview } = await supabase!.from("reviews").select("id").eq("user_id", session.user.id).eq("media_id", detail.dbId).maybeSingle();
+      const now = new Date().toISOString();
       const result = existingReview?.id
-        ? await supabase!.from("reviews").update({ ...payload, updated_at: new Date().toISOString() }).eq("id", existingReview.id)
-        : await supabase!.from("reviews").insert({ user_id: session.user.id, media_id: detail.dbId, ...payload });
+        ? await supabase!.from("reviews").update({ ...payload, updated_at: now }).eq("id", existingReview.id).select("id,created_at,updated_at").single()
+        : await supabase!.from("reviews").insert({ user_id: session.user.id, media_id: detail.dbId, ...payload }).select("id,created_at,updated_at").single();
       if (result.error) throw result.error;
-      setDetail(current => current ? { ...current, userRating: nextScore ?? current.userRating } : current);
-      await loadDetail();
-    });
+      const savedReview: ReviewItem = { id: result.data.id, title: values.title.trim() || "Review", body: values.body.trim(), created_at: result.data.created_at ?? now, updated_at: result.data.updated_at ?? now, userId: session.user.id, ratingId, containsSpoilers: values.containsSpoilers, isPrivate: values.isPrivate, kind: item.kind, mediaTitle: item.title, artwork: item.backdropPath ?? item.posterPath ?? null, score: nextScore, item };
+      setDetail(current => current ? { ...current, userRating: nextScore ?? current.userRating, myReview: savedReview, reviews: [savedReview, ...current.reviews.filter(review => review.id !== savedReview.id && review.userId !== session.user.id)] } : current);
+      await AsyncStorage.removeItem(detailCacheKey).catch(() => undefined);
+      void onChanged("rating");
+    } finally { setBusy(false); }
     Alert.alert(detail.myReview ? "Review updated" : "Review published", "Your take is saved.");
   }
 
@@ -3943,6 +4007,7 @@ function mapDetailReview(review: any): ReviewItem[] {
     userId: review.user_id ?? null,
     ratingId: review.rating_id ?? null,
     containsSpoilers: Boolean(review.contains_spoilers),
+    isPrivate: Boolean(review.is_private),
     kind: mediaRow.kind,
     mediaTitle: mediaRow.title,
     artwork: mediaRow.backdrop_path ?? mediaRow.poster_path ?? null,
@@ -3964,6 +4029,7 @@ function mapTargetReview(review: any, item: MediaSummary, label: "season" | "epi
     userId: review.user_id ?? null,
     ratingId: review.rating_id ?? null,
     containsSpoilers: Boolean(review.contains_spoilers),
+    isPrivate: Boolean(review.is_private),
     kind: item.kind,
     mediaTitle: `${item.title} ${label}`,
     artwork: item.backdropPath ?? item.posterPath ?? null,
@@ -4137,22 +4203,24 @@ function WatchLogSheet({ visible, title, releaseDate, runtime, busy, watched, on
   );
 }
 
-function ReviewComposerPanel({ existingReview, currentRating, busy, onSubmit }: { existingReview: ReviewItem | null; currentRating: number | null; busy: boolean; onSubmit: (values: { score: number | null; title: string; body: string; containsSpoilers: boolean }) => Promise<void> }) {
+function ReviewComposerPanel({ existingReview, currentRating, busy, onSubmit }: { existingReview: ReviewItem | null; currentRating: number | null; busy: boolean; onSubmit: (values: { score: number | null; title: string; body: string; containsSpoilers: boolean; isPrivate: boolean }) => Promise<void> }) {
   const [score, setScore] = useState<number | null>(existingReview?.score ?? currentRating ?? null);
   const [title, setTitle] = useState(existingReview?.title === "Review" ? "" : existingReview?.title ?? "");
   const [body, setBody] = useState(existingReview?.body ?? "");
   const [containsSpoilers, setContainsSpoilers] = useState(Boolean(existingReview?.containsSpoilers));
+  const [isPrivate, setIsPrivate] = useState(Boolean(existingReview?.isPrivate));
 
   useEffect(() => {
     setScore(existingReview?.score ?? currentRating ?? null);
     setTitle(existingReview?.title === "Review" ? "" : existingReview?.title ?? "");
     setBody(existingReview?.body ?? "");
     setContainsSpoilers(Boolean(existingReview?.containsSpoilers));
-  }, [currentRating, existingReview?.body, existingReview?.containsSpoilers, existingReview?.id, existingReview?.score, existingReview?.title]);
+    setIsPrivate(Boolean(existingReview?.isPrivate));
+  }, [currentRating, existingReview?.body, existingReview?.containsSpoilers, existingReview?.id, existingReview?.isPrivate, existingReview?.score, existingReview?.title]);
 
   async function submit() {
     try {
-      await onSubmit({ score, title, body, containsSpoilers });
+      await onSubmit({ score, title, body, containsSpoilers, isPrivate });
     } catch (error) {
       Alert.alert("Could not save review", error instanceof Error ? error.message : "Try again in a moment.");
     }
@@ -4181,6 +4249,14 @@ function ReviewComposerPanel({ existingReview, currentRating, busy, onSubmit }: 
             </View>
             <Switch value={containsSpoilers} onValueChange={setContainsSpoilers} thumbColor={containsSpoilers ? colors.accent : colors.muted} trackColor={{ false: colors.panel2, true: colors.accentSoft }} />
           </View>
+          <View style={styles.spoilerCopy}>
+            <Ionicons name="lock-closed-outline" size={18} color={colors.text} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.spoilerTitle}>Private review</Text>
+              <Text style={styles.spoilerBody}>Only you can read it. Your score still counts.</Text>
+            </View>
+            <Switch value={isPrivate} onValueChange={setIsPrivate} thumbColor={isPrivate ? colors.accent : colors.muted} trackColor={{ false: colors.panel2, true: colors.accentSoft }} />
+          </View>
           <Pressable disabled={busy} onPress={submit} style={styles.publishReviewButton}><Ionicons name="paper-plane-outline" size={17} color={colors.text} /><Text style={styles.publishReviewText}>{busy ? "Saving..." : existingReview ? "Update review" : "Publish review"}</Text></Pressable>
         </View>
       </View>
@@ -4189,22 +4265,36 @@ function ReviewComposerPanel({ existingReview, currentRating, busy, onSubmit }: 
 }
 
 function ScoreControl({ value, onChange }: { value: number; onChange: (value: number) => void }) {
-  const decrease = () => onChange(clampRating(value - 0.1));
-  const increase = () => onChange(clampRating(value + 0.1));
+  const [text, setText] = useState(value.toFixed(1));
+  const editing = useRef(false);
+  useEffect(() => { if (!editing.current) setText(value.toFixed(1)); }, [value]);
+  const commit = (candidate = text) => {
+    const parsed = Number(candidate.replace(",", "."));
+    const next = Number.isFinite(parsed) ? clampRating(parsed) : value;
+    onChange(next);
+    setText(next.toFixed(1));
+  };
+  const step = (amount: number) => {
+    const next = clampRating(value + amount);
+    onChange(next);
+    setText(next.toFixed(1));
+  };
   return (
     <View style={styles.scoreControl}>
-      <Pressable onPress={decrease} style={styles.scoreStepButton}><Ionicons name="remove" size={18} color={colors.text} /></Pressable>
+      <Pressable onPress={() => step(-0.1)} style={styles.scoreStepButton}><Ionicons name="remove" size={18} color={colors.text} /></Pressable>
       <TextInput
-        value={value.toFixed(1)}
+        value={text}
         onChangeText={text => {
-          const parsed = Number(text.replace(",", "."));
-          if (Number.isFinite(parsed)) onChange(clampRating(parsed));
+          const normalized = text.replace(",", ".").replace(/[^\d.]/g, "");
+          if (/^\d{0,2}(?:\.\d?)?$/.test(normalized)) setText(normalized);
         }}
+        onFocus={() => { editing.current = true; }}
+        onEndEditing={() => { editing.current = false; commit(); }}
         keyboardType="decimal-pad"
         selectTextOnFocus
         style={styles.scoreInput}
       />
-      <Pressable onPress={increase} style={styles.scoreStepButton}><Ionicons name="add" size={18} color={colors.text} /></Pressable>
+      <Pressable onPress={() => step(0.1)} style={styles.scoreStepButton}><Ionicons name="add" size={18} color={colors.text} /></Pressable>
     </View>
   );
 }
@@ -5286,13 +5376,13 @@ const styles = StyleSheet.create({
   errorText: { color: colors.danger, fontSize: 14, fontWeight: "800", lineHeight: 20, marginHorizontal: 18, marginTop: 14 },
   afterFilters: { height: 18 },
   homeSection: { marginTop: 2 },
-  discoverHeading: { marginTop: 34, marginBottom: 14, paddingHorizontal: 18, flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between", gap: 14 },
-  discoverHeadingActions: { alignItems: "flex-end", gap: 7 },
+  discoverHeading: { marginTop: 28, marginBottom: 10, paddingHorizontal: 18, gap: 12 },
+  discoverHeadingActions: { flexDirection: "row", gap: 8 },
   discoverTitleCopy: { flex: 1, minWidth: 0 },
   kickerText: { color: colors.accent, letterSpacing: 3.5, fontSize: 11, fontWeight: "900", textTransform: "uppercase" },
   discoverTitle: { color: colors.text, fontSize: 44, lineHeight: 48, fontFamily: "serif", marginTop: 8 },
-  forYouButton: { minHeight: 46, borderRadius: 18, borderWidth: 1, borderColor: colors.line, paddingHorizontal: 14, flexDirection: "row", alignItems: "center", gap: 7, backgroundColor: colors.panel },
-  forYouText: { color: colors.text, fontSize: 15, fontWeight: "900" },
+  forYouButton: { minHeight: 40, borderRadius: 14, borderWidth: 1, borderColor: colors.line, paddingHorizontal: 13, flexDirection: "row", alignItems: "center", gap: 7, backgroundColor: colors.panel },
+  forYouText: { color: colors.text, fontSize: 13, fontWeight: "900" },
   inlineGrid: { flexDirection: "row", flexWrap: "wrap", paddingHorizontal: 8 },
   filterPills: { flexDirection: "row", flexWrap: "wrap", gap: 10, paddingHorizontal: 18, paddingVertical: 14 },
   filterPill: { minHeight: 42, borderRadius: 22, borderWidth: 1, borderColor: colors.line, paddingHorizontal: 14, flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: colors.panel },
@@ -5443,6 +5533,8 @@ const styles = StyleSheet.create({
   reviewImage: { width: 92, height: 68, borderRadius: 10, backgroundColor: colors.panel2 },
   reviewCopy: { flex: 1, minWidth: 0 },
   reviewKindRow: { flexDirection: "row", alignItems: "center", gap: 12, flexWrap: "wrap" },
+  reviewPrivateBadge: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 7, height: 22, borderRadius: 11, backgroundColor: colors.panel2 },
+  reviewPrivateText: { color: colors.muted, fontSize: 10, fontWeight: "900" },
   reviewKind: { color: colors.accent, fontSize: 12, fontWeight: "900", letterSpacing: 1.3, textTransform: "uppercase" },
   reviewScore: { flexDirection: "row", alignItems: "center", gap: 4 },
   reviewScoreText: { color: "#ffc24b", fontSize: 12, fontWeight: "900" },
@@ -5804,6 +5896,8 @@ const styles = StyleSheet.create({
   tonightMobileCard: { marginHorizontal: 18, marginTop: 18, padding: 12, borderWidth: 1, borderColor: colors.line, borderRadius: 22, backgroundColor: colors.panel, overflow: "hidden", gap: 8 },
   tonightMobileArt: { width: "100%", aspectRatio: 1.78, borderRadius: 14, backgroundColor: colors.panel2 },
   tonightMobileTitle: { color: colors.text, fontFamily: "serif", fontSize: 30, fontWeight: "700" },
+  tonightReason: { color: colors.muted, fontSize: 14, lineHeight: 20 },
+  tonightMessage: { color: colors.muted, fontSize: 13, lineHeight: 19, textAlign: "center", paddingHorizontal: 8 },
   featureShelf: { marginTop: 24, marginHorizontal: 18, gap: 8 },
   upNextShelfHead: { minHeight: 34, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   upNextShelfTitle: { color: colors.text, fontFamily: "serif", fontSize: 28, lineHeight: 32, fontWeight: "700" },
@@ -5838,6 +5932,16 @@ const styles = StyleSheet.create({
   wrappedMobileCallout: { padding: 14, borderRadius: 15, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.line },
   wrappedCalloutLabel: { color: colors.muted, fontSize: 10, fontWeight: "800", textTransform: "uppercase", letterSpacing: .8 },
   wrappedCalloutValue: { color: colors.text, fontSize: 15, lineHeight: 20, fontWeight: "900", marginTop: 5 },
+  wrappedHeatHint: { color: colors.muted, fontSize: 11, lineHeight: 16, marginTop: 5 },
+  wrappedHeatScroll: { paddingHorizontal: 18, paddingBottom: 8 },
+  wrappedHeatWeeks: { flexDirection: "row", gap: 3, padding: 12, borderRadius: 16, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel },
+  wrappedHeatWeek: { gap: 3 },
+  wrappedHeatCell: { width: 10, height: 10, borderRadius: 2, backgroundColor: "rgba(255,255,255,.06)" },
+  wrappedHeatCellEmpty: { width: 10, height: 10 },
+  wrappedHeatCell1: { backgroundColor: "rgba(255,91,62,.28)" },
+  wrappedHeatCell2: { backgroundColor: "rgba(255,91,62,.48)" },
+  wrappedHeatCell3: { backgroundColor: "rgba(255,91,62,.72)" },
+  wrappedHeatCell4: { backgroundColor: colors.accent },
   settingsWrap: { paddingBottom: 20 },
   settingsTabs: { gap: 10, paddingHorizontal: 18, paddingBottom: 12 },
   settingsTab: { minHeight: 42, borderRadius: 22, borderWidth: 1, borderColor: colors.line, paddingHorizontal: 14, alignItems: "center", justifyContent: "center", backgroundColor: colors.panel },
