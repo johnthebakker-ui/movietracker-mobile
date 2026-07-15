@@ -206,6 +206,13 @@ async function reconcileMobileEpisodeProgress(userId: string, mediaId: number) {
   const episodes = (seasonsResult.data ?? []).flatMap((season: any) => (season.episodes ?? []).map((episode: any) => ({ id: Number(episode.id), seasonNumber: Number(season.season_number), episodeNumber: Number(episode.episode_number) }))).sort((left: any, right: any) => left.seasonNumber - right.seasonNumber || left.episodeNumber - right.episodeNumber);
   const ended = endedSeriesStatuses.has(String(mediaResult.data?.status ?? ""));
   const pass = viewingPassProgress(episodes, (watchesResult.data ?? []).map((watch: any) => ({ episodeId: Number(watch.episode_id), watchedAt: watch.watched_at, createdAt: watch.created_at })), ended);
+  if (!(watchesResult.data ?? []).length) {
+    if (currentResult.data?.status === "completed" || currentResult.data?.status === "watching") {
+      const { error } = await supabase.from("progress").delete().eq("user_id", userId).eq("media_id", mediaId).in("status", ["completed", "watching"]);
+      if (error) throw error;
+    }
+    return;
+  }
   if (currentResult.data?.status === "completed") {
     // Completed remains permanent. Rewatch progress is derived from event order;
     // moving completed_at here would hide older/imported rewatch events.
@@ -1355,8 +1362,19 @@ export default function App() {
         onPress: async () => {
           setRefreshing(true);
           try {
+            const { data: event, error: eventError } = await client.from("watch_events").select("media_id,episode_id").eq("id", eventId).eq("user_id", userId).maybeSingle();
+            if (eventError) throw eventError;
             const { error: deleteError } = await client.from("watch_events").delete().eq("id", eventId).eq("user_id", userId);
             if (deleteError) throw deleteError;
+            if (event?.episode_id) await reconcileMobileEpisodeProgress(userId, Number(event.media_id));
+            else if (event?.media_id) {
+              const { count, error: countError } = await client.from("watch_events").select("id", { count: "exact", head: true }).eq("user_id", userId).eq("media_id", event.media_id).is("episode_id", null);
+              if (countError) throw countError;
+              if (!count) {
+                const { error: progressError } = await client.from("progress").delete().eq("user_id", userId).eq("media_id", event.media_id).in("status", ["completed", "watching"]);
+                if (progressError) throw progressError;
+              }
+            }
             onSuccess?.();
             await loadProfileData();
           } catch (reason) {
