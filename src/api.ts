@@ -261,6 +261,10 @@ export async function fetchEpisodeNotificationSchedule(token: string) {
   return request<{ events: Array<{ releaseKey: string; airDate: string; title: string; body: string; href: string; image: string | null }> }>("/api/mobile/notifications/schedule", token);
 }
 
+export async function sendTestNotification(token: string) {
+  return request<{ created: boolean; pushed: number; href: string }>("/api/mobile/notifications/test", token, { method: "POST" });
+}
+
 export async function fetchMobileProfile(token: string): Promise<any> {
   return request<any>("/api/mobile/profile", token);
 }
@@ -268,6 +272,10 @@ export async function fetchMobileProfile(token: string): Promise<any> {
 export async function fetchMobileHistory(token: string, page = 1, type: "all" | "movies" | "episodes" = "all", query = "") {
   const params = queryString({ page, type, q: query.trim() });
   return request<{ items: any[]; page: number; pageSize: number; hasMore: boolean }>(`/api/mobile/history?${params}`, token);
+}
+
+export async function deleteMobileHistoryEvent(token: string, eventId: string) {
+  return request<{ removed: boolean }>(`/api/mobile/history/${encodeURIComponent(eventId)}`, token, { method: "DELETE" });
 }
 
 export async function fetchTonight(filters: Record<string, string>, token?: string) {

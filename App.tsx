@@ -32,7 +32,7 @@ import {
 } from "react-native";
 
 import { AppHeader, BottomNav, DiscoverFiltersCard, Hero, PickerSheet, RecommendationFiltersCard, RemoteImage, resolveRemoteImageUri, SectionTitle, TitleCard, type PickerAnchor } from "./src/components";
-import { disconnectTrakt, fetchDiscover, fetchEpisodeNotificationSchedule, fetchMobileCompany, fetchMobileEpisode, fetchMobileHistory, fetchMobilePerson, fetchMobileProfile, fetchMobileSeason, fetchMobileTitle, fetchRecommendations, fetchSearch, fetchTonight, fetchTraktStatus, fetchUpNext, fetchWebsiteEntityMetadata, fetchWebsiteHome, fetchWebsiteTitleMetadata, fetchWrapped, fetchWrappedShare, refreshRecommendations, setNotInterested, startTraktConnect, syncTrakt, type MobileTraktStatus } from "./src/api";
+import { deleteMobileHistoryEvent, disconnectTrakt, fetchDiscover, fetchEpisodeNotificationSchedule, fetchMobileCompany, fetchMobileEpisode, fetchMobileHistory, fetchMobilePerson, fetchMobileProfile, fetchMobileSeason, fetchMobileTitle, fetchRecommendations, fetchSearch, fetchTonight, fetchTraktStatus, fetchUpNext, fetchWebsiteEntityMetadata, fetchWebsiteHome, fetchWebsiteTitleMetadata, fetchWrapped, fetchWrappedShare, sendTestNotification, refreshRecommendations, setNotInterested, startTraktConnect, syncTrakt, type MobileTraktStatus } from "./src/api";
 import { API_URL, communityRatingLabel, countries, excludeGenreOptions, genres, HAS_SUPABASE, titleYear, tmdbImage, userRatingLabel } from "./src/config";
 import { groupFranchises, listFranchiseName } from "./src/franchise-groups";
 import { supabase } from "./src/supabase";
@@ -163,6 +163,7 @@ const profileDataCachePrefix = "movietracker-profile-data-v3";
 const libraryCachePrefix = "movietracker-library-v3";
 const titleDetailCachePrefix = "movietracker-title-detail-v2";
 const episodeNotificationIdsKey = "movietracker-episode-notification-ids-v1";
+let notificationScheduleInFlight: Promise<void> | null = null;
 const searchCache = new Map<string, { savedAt: number; feed: FeedResult }>();
 
 function titleDetailCacheKey(item: MediaSummary, userId?: string | null) {
@@ -486,6 +487,10 @@ export default function App() {
   useEffect(() => {
     const subscription = Notifications.addNotificationResponseReceivedListener(response => {
       const href = response.notification.request.content.data?.href;
+      const releaseKey = response.notification.request.content.data?.releaseKey;
+      if (usableSession?.user.id && supabase && typeof releaseKey === "string") {
+        void supabase.from("notifications").delete().eq("user_id", usableSession.user.id).contains("payload", { releaseKey });
+      }
       if (typeof href !== "string" || !href.startsWith("/")) return;
       const match = href.match(/^\/title\/show\/(\d+)\/season\/(\d+)\/episode\/(\d+)/);
       if (!match) {
@@ -510,7 +515,7 @@ export default function App() {
       }).catch(() => void WebBrowser.openBrowserAsync(`${API_URL}${href}`));
     });
     return () => subscription.remove();
-  }, [usableSession?.access_token]);
+  }, [usableSession?.access_token, usableSession?.user.id]);
 
   const loadHome = useCallback(async (force = false) => {
     const cacheKey = `home:v3:${usableSession?.user.id ?? "guest"}`;
@@ -576,7 +581,7 @@ export default function App() {
     const token = usableSession?.access_token;
     const timer = setTimeout(() => {
       void (async () => {
-        const queue = picks.slice(0, 10);
+        const queue = picks.slice(0, 6);
         const worker = async () => {
           while (!cancelled) {
             const item = queue.shift();
@@ -593,9 +598,9 @@ export default function App() {
             if (core) await AsyncStorage.setItem(cacheKey, JSON.stringify({ detail: core, savedAt: Date.now() })).catch(() => undefined);
           }
         };
-        await Promise.all(Array.from({ length: Math.min(3, queue.length) }, worker));
+        await Promise.all(Array.from({ length: Math.min(1, queue.length) }, worker));
       })();
-    }, 250);
+    }, 1600);
 
     return () => {
       cancelled = true;
@@ -1130,13 +1135,13 @@ export default function App() {
     recommendationLoadedAt.current = 0;
     if (usableSession?.access_token) void refreshRecommendations(usableSession.access_token).catch(() => undefined);
     if (tab === "profile") void loadProfileData(true).catch(() => undefined);
-    if (tab === "library") void loadLibrary(true).catch(() => undefined);
+    if (tab === "library") void loadLibrary(false).catch(() => undefined);
     if (tab === "calendar") void loadCalendar().catch(() => undefined);
   }, [libraryFilter, loadCalendar, loadLibrary, loadProfileData, selectedList?.id, tab, usableSession?.access_token, usableSession?.user.id]);
 
   const activeFeed = featureView ? emptyFeed : searchMode ? searchFeed : selectedList ? selectedListFeed : tab === "discover" ? discoverFeed : tab === "calendar" ? calendarFeed : tab === "library" ? libraryFeed : tab === "profile" && profileView === "recommendations" ? recommendationFeed : emptyFeed;
   useEffect(() => {
-    const items = activeFeed.items.slice(0, 8);
+    const items = activeFeed.items.slice(0, 5);
     if (!items.length) return;
     let cancelled = false;
     const timer = setTimeout(() => {
@@ -1157,9 +1162,9 @@ export default function App() {
             if (!cancelled && detail) await AsyncStorage.setItem(cacheKey, JSON.stringify({ detail, savedAt: Date.now() })).catch(() => undefined);
           }
         };
-        await Promise.all(Array.from({ length: Math.min(3, queue.length) }, worker));
+        await Promise.all(Array.from({ length: Math.min(1, queue.length) }, worker));
       })();
-    }, 200);
+    }, 1200);
     return () => { cancelled = true; clearTimeout(timer); };
   }, [activeFeed.items, usableSession?.access_token, usableSession?.user.id]);
   const profileTitle = profile?.display_name || profile?.username || usableSession?.user.user_metadata?.display_name || usableSession?.user.email || "Your MovieTracker";
@@ -1352,8 +1357,6 @@ export default function App() {
 
   async function removeHistoryEvent(eventId: string, title: string, onSuccess?: () => void) {
     if (!usableSession?.user.id || !supabase) return;
-    const client = supabase;
-    const userId = usableSession.user.id;
     Alert.alert("Remove watch?", `Remove this ${title} watch from your history?`, [
       { text: "Cancel", style: "cancel" },
       {
@@ -1362,21 +1365,11 @@ export default function App() {
         onPress: async () => {
           setRefreshing(true);
           try {
-            const { data: event, error: eventError } = await client.from("watch_events").select("media_id,episode_id").eq("id", eventId).eq("user_id", userId).maybeSingle();
-            if (eventError) throw eventError;
-            const { error: deleteError } = await client.from("watch_events").delete().eq("id", eventId).eq("user_id", userId);
-            if (deleteError) throw deleteError;
-            if (event?.episode_id) await reconcileMobileEpisodeProgress(userId, Number(event.media_id));
-            else if (event?.media_id) {
-              const { count, error: countError } = await client.from("watch_events").select("id", { count: "exact", head: true }).eq("user_id", userId).eq("media_id", event.media_id).is("episode_id", null);
-              if (countError) throw countError;
-              if (!count) {
-                const { error: progressError } = await client.from("progress").delete().eq("user_id", userId).eq("media_id", event.media_id).in("status", ["completed", "watching"]);
-                if (progressError) throw progressError;
-              }
-            }
+            await deleteMobileHistoryEvent(usableSession.access_token, eventId);
+            libraryLoadedKey.current = null;
+            libraryLoadedAt.current = 0;
             onSuccess?.();
-            await loadProfileData();
+            await Promise.all([loadProfileData(true), tab === "library" ? loadLibrary(true) : Promise.resolve()]);
           } catch (reason) {
             Alert.alert("Could not remove watch", reason instanceof Error ? reason.message : "Try again.");
           } finally {
@@ -1882,18 +1875,32 @@ function NotificationScreen({ session, onBack }: { session: Session; onBack: () 
       setLoadError(error.message);
     } else {
       setItems(data ?? []);
-      await supabase.from("notifications").update({ read_at: new Date().toISOString() }).eq("user_id", session.user.id).is("read_at", null);
     }
     setLoadingItems(false);
   }, [session.user.id]);
 
   useEffect(() => { void loadItems(); }, [loadItems]);
 
+  async function openNotification(item: any) {
+    if (!supabase) return;
+    await supabase.from("notifications").delete().eq("id", item.id).eq("user_id", session.user.id);
+    setItems(current => current.filter(value => value.id !== item.id));
+    if (item.payload?.href) await WebBrowser.openBrowserAsync(`${API_URL}${item.payload.href}`);
+  }
+
+  async function clearAll() {
+    if (!supabase || !items.length) return;
+    const { error } = await supabase.from("notifications").delete().eq("user_id", session.user.id);
+    if (error) return Alert.alert("Could not clear notifications", error.message);
+    setItems([]);
+  }
+
   return <View style={styles.profileSection}>
     <SectionTitle kicker="Signals, not noise" title="Notifications" action="Back to profile" onAction={onBack} />
+    {items.length ? <Pressable onPress={() => Alert.alert("Clear all notifications?", "This removes every notification from your inbox.", [{ text: "Cancel", style: "cancel" }, { text: "Clear all", style: "destructive", onPress: () => void clearAll() }])} style={styles.settingsGhost}><Text style={styles.settingsGhostText}>Clear all</Text></Pressable> : null}
     {loadingItems ? <ActivityIndicator color={colors.accent} /> : loadError ? <EmptyPanel title="Notifications did not load" body={loadError} action="Try again" onAction={() => void loadItems()} /> : items.length ? <View style={styles.notificationList}>{items.map(item => {
       const image = item.payload?.image;
-      return <Pressable key={item.id} disabled={!item.payload?.href} onPress={() => item.payload?.href && WebBrowser.openBrowserAsync(`${API_URL}${item.payload.href}`)} style={[styles.notificationCard, !item.read_at && styles.notificationCardUnread]}>
+      return <Pressable key={item.id} disabled={!item.payload?.href} onPress={() => void openNotification(item)} style={[styles.notificationCard, !item.read_at && styles.notificationCardUnread]}>
         {image ? <RemoteImage uri={image} style={styles.notificationImage} /> : <View style={styles.notificationIcon}><Ionicons name={item.kind === "episode_release" ? "film-outline" : "notifications-outline"} size={22} color={colors.accent} /></View>}
         <View style={styles.notificationCopy}><Text style={styles.notificationTitle}>{item.payload?.title ?? "MovieTracker"}</Text><Text style={styles.notificationBody}>{item.payload?.message ?? String(item.kind).replaceAll("_", " ")}</Text><Text style={styles.notificationDate}>{new Date(item.created_at).toLocaleString()}</Text></View>
         {item.payload?.href ? <Ionicons name="chevron-forward" size={18} color={colors.muted} /> : null}
@@ -2927,6 +2934,13 @@ function MovieActionSheet({ item, visible, session, currentList, franchiseGroups
     }
   }
 
+  function confirmClearCompleted() {
+    Alert.alert("Remove from Completed?", `${item?.title ?? "This title"} will leave Completed. Your watch history and ratings stay intact.`, [
+      { text: "Cancel", style: "cancel" },
+      { text: "Remove", style: "destructive", onPress: () => void clearStatus() }
+    ]);
+  }
+
   async function dismissRewatch() {
     const mediaId = item?.listMediaId ?? await ensureActionMediaId();
     if (!session?.user.id || !supabase || !mediaId) return Alert.alert("Unavailable", "Could not prepare this title yet. Try again in a second.");
@@ -3064,8 +3078,9 @@ function MovieActionSheet({ item, visible, session, currentList, franchiseGroups
             <View style={styles.contextPrimaryActions}>
               {item ? <Pressable style={styles.contextPrimaryButton} onPress={() => { onClose(); onOpen(item); }}><Ionicons name="open-outline" size={22} color={colors.text} /><Text style={styles.contextPrimaryText}>Details</Text></Pressable> : null}
               <Pressable disabled={busy} style={styles.contextPrimaryButton} onPress={() => status === "planned" ? clearStatus() : updateStatus("planned")}><Ionicons name="list-outline" size={22} color={colors.text} /><Text style={styles.contextPrimaryText}>{status === "planned" ? "Remove plan" : "Watchlist"}</Text></Pressable>
-              <Pressable disabled={busy} style={styles.contextPrimaryButton} onPress={() => setWatchSheetVisible(true)}><Ionicons name={status === "completed" ? "repeat-outline" : "checkmark"} size={22} color={colors.text} /><Text style={styles.contextPrimaryText}>{status === "completed" ? "Add watch" : "Watched"}</Text></Pressable>
+              <Pressable disabled={busy} style={styles.contextPrimaryButton} onPress={() => setWatchSheetVisible(true)}><Ionicons name="calendar-outline" size={22} color={colors.text} /><Text style={styles.contextPrimaryText}>Add watch</Text></Pressable>
               <Pressable disabled={busy} style={styles.contextPrimaryButton} onPress={toggleFavorite}><Ionicons name={favorite ? "heart" : "heart-outline"} size={22} color={colors.text} /><Text style={styles.contextPrimaryText}>{favorite ? "Unfavorite" : "Favorite"}</Text></Pressable>
+              {status === "completed" ? <Pressable disabled={busy} style={styles.contextPrimaryButton} onPress={confirmClearCompleted}><Ionicons name="eye-off-outline" size={22} color={colors.accent} /><Text style={styles.contextPrimaryText}>Remove Completed</Text></Pressable> : null}
             </View>
             <View style={styles.actionDivider} />
             {item?.activeRewatch || item?.reason === "Watching" ? <><View style={styles.watchingRemovePanel}><Pressable disabled={busy} onPress={confirmDismissRewatch} style={({ pressed }) => [styles.watchingRemoveAction, pressed && { opacity: .7 }]}><Ionicons name="eye-off-outline" size={19} color={colors.accent} /><Text style={styles.watchingRemoveText}>Remove from Watching</Text><Ionicons name="chevron-forward" size={17} color={colors.accent} /></Pressable><Text style={styles.watchingRemoveSub}>{item?.activeRewatch ? "Keeps Completed status and every watch event." : "Keeps every watch event."}</Text></View><View style={styles.actionDivider} /></> : null}
@@ -3925,10 +3940,8 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
         <View style={styles.titleActionDock}>
           <Text style={styles.actionLabelBig}>My status</Text>
           {detail?.lastWatchedAt ? <Text style={styles.lastWatchedText}>Last watched {formatLastWatched(detail.lastWatchedAt)}</Text> : null}
-          <View style={styles.statusActions}>{[
-            { value: "planned", label: detail?.progressStatus === "completed" ? "Plan rewatch" : "Plan", icon: "bookmark-outline" },
-            { value: "watching", label: "Watching", icon: "eye-outline" },
-            { value: "completed", label: detail?.watched ? "Watched" : "Mark watched", icon: "checkmark-circle-outline" },
+          <View style={styles.statusActions}>{detail?.progressStatus === "watching" ? <View style={[styles.detailStatusButton, styles.detailStatusButtonActive]}><Ionicons name="eye-outline" size={17} color={colors.accent} /><Text style={styles.detailStatusTextActive}>Watching</Text></View> : null}{detail?.watched ? <View style={[styles.detailStatusButton, styles.detailStatusButtonActive]}><Ionicons name="checkmark-circle-outline" size={17} color={colors.accent} /><Text style={styles.detailStatusTextActive}>Watched</Text></View> : null}{[
+            { value: "planned", label: detail?.watched ? "Plan rewatch" : "Plan", icon: "bookmark-outline" },
             { value: "paused", label: "Paused", icon: "pause-circle-outline" },
             { value: "dropped", label: "Dropped", icon: "close-circle-outline" }
           ].map(action => <Pressable disabled={busy || (action.value === "completed" && Boolean(detail?.watched))} accessibilityState={{ selected: detail?.progressStatus === action.value }} key={action.value} onPress={() => action.value === "completed" ? setWatchSheetVisible(true) : setStatus(action.value)} style={[styles.detailStatusButton, detail?.progressStatus === action.value && styles.detailStatusButtonActive]}><Ionicons name={action.icon as keyof typeof Ionicons.glyphMap} size={17} color={detail?.progressStatus === action.value ? colors.accent : colors.muted} /><Text style={[styles.detailStatusText, detail?.progressStatus === action.value && styles.detailStatusTextActive]}>{action.label}</Text></Pressable>)}</View>
@@ -4293,7 +4306,8 @@ function ScoreControl({ value, onChange }: { value: number; onChange: (value: nu
     setText(next.toFixed(1));
   };
   const step = (amount: number) => {
-    const next = clampRating(value + amount);
+    const draft = Number(text.replace(",", "."));
+    const next = clampRating((Number.isFinite(draft) ? draft : value) + amount);
     onChange(next);
     setText(next.toFixed(1));
   };
@@ -4302,14 +4316,16 @@ function ScoreControl({ value, onChange }: { value: number; onChange: (value: nu
       <Pressable onPress={() => step(-0.1)} style={styles.scoreStepButton}><Ionicons name="remove" size={18} color={colors.text} /></Pressable>
       <TextInput
         value={text}
-        onChangeText={text => {
-          const normalized = text.replace(",", ".").replace(/[^\d.]/g, "");
-          if (/^\d{0,2}(?:\.\d?)?$/.test(normalized)) setText(normalized);
+        onChangeText={input => {
+          const normalized = input.replace(",", ".").replace(/[^\d.]/g, "");
+          if (!/^\d{0,2}(?:\.\d?)?$/.test(normalized)) return;
+          setText(normalized);
+          if (/^(?:10(?:\.0)?|[1-9](?:\.\d)?)$/.test(normalized)) onChange(clampRating(Number(normalized)));
         }}
         onFocus={() => { editing.current = true; }}
         onEndEditing={() => { editing.current = false; commit(); }}
         keyboardType="decimal-pad"
-        selectTextOnFocus
+        returnKeyType="done"
         style={styles.scoreInput}
       />
       <Pressable onPress={() => step(0.1)} style={styles.scoreStepButton}><Ionicons name="add" size={18} color={colors.text} /></Pressable>
@@ -4470,6 +4486,16 @@ function SettingsScreen({ session, profile, tab, onTab, onBack, onSignOut, onSav
     } else if (key === "release_email") {
       scheduleEpisodeNotifications(session.user.id, session.access_token).catch(reason => reportError("notification-preference", reason));
     }
+  }
+
+  async function runNotificationTest() {
+    setSaving(true);
+    try {
+      const result = await sendTestNotification(session.access_token);
+      Alert.alert("Real test sent", result.pushed ? "It used the same inbox, push, artwork and episode redirect as a genuine release notification." : "The inbox entry was created, but this device has no active push token yet. Reopen the app and try once more.");
+    } catch (reason) {
+      Alert.alert("Test notification failed", reason instanceof Error ? reason.message : "Try again.");
+    } finally { setSaving(false); }
   }
 
   const loadTrakt = useCallback(async () => {
@@ -4731,7 +4757,7 @@ function SettingsScreen({ session, profile, tab, onTab, onBack, onSignOut, onSav
       {tab === "notifications" ? <View style={styles.settingsPanel}><Text style={styles.settingsTitle}>Notifications</Text>{[
         ["follow_email", "Follow requests and approvals"], ["interaction_email", "Review and list interactions"],
         ["release_email", "Release reminders"], ["digest_email", "Recommendation digest"]
-      ].map(([key, label]) => <ToggleRow key={key} label={label} enabled={notificationPreferences[key] ?? false} onChange={enabled => void saveNotificationPreference(key, enabled)} />)}</View> : null}
+      ].map(([key, label]) => <ToggleRow key={key} label={label} enabled={notificationPreferences[key] ?? false} onChange={enabled => void saveNotificationPreference(key, enabled)} />)}<Pressable disabled={saving} onPress={runNotificationTest} style={styles.settingsGhost}>{saving ? <ActivityIndicator color={colors.text} /> : <Text style={styles.settingsGhostText}>Send a real test notification</Text>}</Pressable><Text style={styles.settingsBody}>Uses a real episode, creates an inbox item, sends through the normal push service, and tests the actual redirect and duplicate protection.</Text></View> : null}
       {tab === "integrations" ? <View style={styles.settingsPanel}><Text style={styles.settingsTitle}>Integrations</Text><Text style={styles.settingsBody}>Connect Trakt once and MovieTracker will keep your viewing diary synced across the app and website.</Text>
         {!traktStatus ? <ActivityIndicator color={colors.accent} style={{ marginTop: 18 }} /> : !traktStatus.databaseReady ? <Text style={styles.settingsError}>Trakt database migration is not ready yet.</Text> : !traktStatus.environmentReady ? <Text style={styles.settingsError}>Trakt server credentials are not configured yet.</Text> : traktStatus.connection ? (
           <View style={styles.integrationBox}>
@@ -4973,6 +4999,12 @@ async function loadUserLists(userId: string): Promise<UserList[]> {
 }
 
 async function scheduleEpisodeNotifications(userId: string, accessToken?: string) {
+  if (notificationScheduleInFlight) return notificationScheduleInFlight;
+  notificationScheduleInFlight = scheduleEpisodeNotificationsInternal(userId, accessToken).finally(() => { notificationScheduleInFlight = null; });
+  return notificationScheduleInFlight;
+}
+
+async function scheduleEpisodeNotificationsInternal(userId: string, accessToken?: string) {
   const client = supabase;
   if (!client || !Device.isDevice) return;
   const preferenceResult = await client.from("notification_preferences").select("release_email").eq("user_id", userId).maybeSingle();
@@ -4998,13 +5030,27 @@ async function scheduleEpisodeNotifications(userId: string, accessToken?: string
   }
 
   const projectId = Constants.easConfig?.projectId ?? Constants.expoConfig?.extra?.eas?.projectId;
+  let remotePushRegistered = false;
   if (projectId) {
     try {
       const token = (await Notifications.getExpoPushTokenAsync({ projectId })).data;
-      if (token) await client.from("mobile_push_tokens").upsert({ user_id: userId, expo_push_token: token, platform: Platform.OS, updated_at: new Date().toISOString() }, { onConflict: "expo_push_token" });
+      if (token) {
+        const registration = await client.from("mobile_push_tokens").upsert({ user_id: userId, expo_push_token: token, platform: Platform.OS, updated_at: new Date().toISOString() }, { onConflict: "expo_push_token" });
+        if (registration.error) throw registration.error;
+        remotePushRegistered = true;
+      }
     } catch (error) {
       console.warn("Remote notification registration unavailable; local release alerts remain enabled.", error);
     }
+  }
+
+  // A device must use one delivery path. Server push is authoritative; keeping
+  // local schedules as well produced duplicate and looping release alerts.
+  if (remotePushRegistered) {
+    const previousIds = JSON.parse(await AsyncStorage.getItem(episodeNotificationIdsKey).catch(() => null) || "[]") as string[];
+    await Promise.allSettled(previousIds.map(id => Notifications.cancelScheduledNotificationAsync(id)));
+    await AsyncStorage.setItem(episodeNotificationIdsKey, "[]");
+    return;
   }
 
   const [progressResult, favoriteResult, listResult, remoteSchedule] = await Promise.all([
