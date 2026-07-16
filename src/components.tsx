@@ -58,18 +58,20 @@ export function RemoteImage({ uri, style, resizeMode = "cover" }: { uri: string 
   );
 }
 
-export function AppHeader({ session, hasUnreadNotifications = false, onProfile, onSearch, onNotifications, onHome }: { session: Session | null; hasUnreadNotifications?: boolean; onProfile: () => void; onSearch: () => void; onNotifications?: () => void; onHome?: () => void }) {
+export function AppHeader({ session, hasUnreadNotifications = false, listenForNotifications = true, onUnreadChange, onProfile, onSearch, onNotifications, onHome }: { session: Session | null; hasUnreadNotifications?: boolean; listenForNotifications?: boolean; onUnreadChange?: (unread: boolean) => void; onProfile: () => void; onSearch: () => void; onNotifications?: () => void; onHome?: () => void }) {
   const avatarUrl = (session?.user.user_metadata?.avatar_url || session?.user.user_metadata?.picture) as string | undefined;
   const [unread, setUnread] = useState(hasUnreadNotifications);
+  useEffect(() => { setUnread(hasUnreadNotifications); }, [hasUnreadNotifications]);
   useEffect(() => {
     const client = supabase; const userId = session?.user.id;
-    if (!client || !userId) { setUnread(false); return; }
-    const refresh = async () => { const { count } = await client.from("notifications").select("id", { count: "exact", head: true }).eq("user_id", userId).is("read_at", null); setUnread((count ?? 0) > 0); };
+    if (!listenForNotifications) return;
+    if (!client || !userId) { setUnread(false); onUnreadChange?.(false); return; }
+    const refresh = async () => { const { count } = await client.from("notifications").select("id", { count: "exact", head: true }).eq("user_id", userId).is("read_at", null); const nextUnread = (count ?? 0) > 0; setUnread(nextUnread); onUnreadChange?.(nextUnread); };
     void refresh();
     const timer = setInterval(() => void refresh(), 30_000);
     const channel = client.channel(`header-notifications-${userId}`).on("postgres_changes", { event: "*", schema: "public", table: "notifications", filter: `user_id=eq.${userId}` }, () => void refresh()).subscribe();
     return () => { clearInterval(timer); void client.removeChannel(channel); };
-  }, [session?.user.id]);
+  }, [listenForNotifications, onUnreadChange, session?.user.id]);
 
   return (
     <View style={styles.header}>
@@ -81,7 +83,7 @@ export function AppHeader({ session, hasUnreadNotifications = false, onProfile, 
       </Pressable>
       <View style={styles.headerSpacer} />
       <HeaderButton icon="search-outline" label="Search" onPress={onSearch} />
-      <HeaderButton icon="notifications-outline" label="Notifications" badge={unread} onPress={() => { setUnread(false); onNotifications?.(); }} />
+      <HeaderButton icon="notifications-outline" label="Notifications" badge={unread} onPress={() => { setUnread(false); onUnreadChange?.(false); onNotifications?.(); }} />
       <Pressable onPress={onProfile} style={styles.avatar} hitSlop={8} accessibilityRole="button" accessibilityLabel={session ? "Open profile" : "Sign in"}>
         {avatarUrl ? (
           <RemoteImage uri={avatarUrl} style={styles.avatarImage} />

@@ -307,6 +307,7 @@ export default function App() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState("");
   const [heroIndex, setHeroIndex] = useState(0);
+  const [headerUnread, setHeaderUnread] = useState(false);
 
   useEffect(() => {
     recommendationFiltersRef.current = recommendationFilters;
@@ -1464,15 +1465,15 @@ export default function App() {
 
   function renderHeader() {
     if (featureView === "tonight") {
-      return <><AppHeader session={headerSession} onHome={() => goTab("home")} onSearch={() => setSearchMode(true)} onNotifications={() => openProfileView("notifications")} onProfile={() => openProfileView("profile")} /><TonightScreen token={usableSession?.access_token} onBack={() => setFeatureView(null)} onOpen={openItem} /></>;
+      return <><AppHeader session={headerSession} hasUnreadNotifications={headerUnread} onUnreadChange={setHeaderUnread} onHome={() => goTab("home")} onSearch={() => setSearchMode(true)} onNotifications={() => openProfileView("notifications")} onProfile={() => openProfileView("profile")} /><TonightScreen token={usableSession?.access_token} onBack={() => setFeatureView(null)} onOpen={openItem} /></>;
     }
     if (featureView === "up-next") {
-      return <><AppHeader session={headerSession} onHome={() => goTab("home")} onSearch={() => setSearchMode(true)} onNotifications={() => openProfileView("notifications")} onProfile={() => openProfileView("profile")} />{usableSession ? <UpNextScreen token={usableSession.access_token} onBack={() => setFeatureView(null)} onOpen={openUpNextEntry} /> : <><SectionTitle kicker="Your unfinished viewing" title="Up Next" action="Back" onAction={() => setFeatureView(null)} /><EmptyPanel title="Sign in for Up Next" body="Your unfinished episodes and evening queue are private to your account." /></>}</>;
+      return <><AppHeader session={headerSession} hasUnreadNotifications={headerUnread} onUnreadChange={setHeaderUnread} onHome={() => goTab("home")} onSearch={() => setSearchMode(true)} onNotifications={() => openProfileView("notifications")} onProfile={() => openProfileView("profile")} />{usableSession ? <UpNextScreen token={usableSession.access_token} onBack={() => setFeatureView(null)} onOpen={openUpNextEntry} /> : <><SectionTitle kicker="Your unfinished viewing" title="Up Next" action="Back" onAction={() => setFeatureView(null)} /><EmptyPanel title="Sign in for Up Next" body="Your unfinished episodes and evening queue are private to your account." /></>}</>;
     }
     if (searchMode) {
       return (
         <>
-          <AppHeader session={headerSession} onHome={() => goTab("home")} onSearch={() => undefined} onNotifications={() => openProfileView("notifications")} onProfile={() => { setSearchMode(false); openProfileView("profile"); }} />
+          <AppHeader session={headerSession} hasUnreadNotifications={headerUnread} onUnreadChange={setHeaderUnread} onHome={() => goTab("home")} onSearch={() => undefined} onNotifications={() => openProfileView("notifications")} onProfile={() => { setSearchMode(false); openProfileView("profile"); }} />
           <SectionTitle kicker="Across films and television" title="Search" action="Close" onAction={() => { setSearchMode(false); setSearchFeed(emptyFeed); }} />
           <SearchPanel query={searchQuery} onQuery={setSearchQuery} onSearch={() => loadSearch()} onClear={() => { setSearchQuery(""); setSearchFeed(emptyFeed); }} />
           {searchLoading ? <View style={styles.searchResultsLoading}><ActivityIndicator color={colors.accent} /><Text style={styles.searchResultsLoadingText}>Searching titles and people...</Text></View> : null}
@@ -1482,7 +1483,7 @@ export default function App() {
     if (selectedList) {
       return (
         <>
-          <AppHeader session={headerSession} onHome={() => goTab("home")} onSearch={() => setSearchMode(true)} onNotifications={() => openProfileView("notifications")} onProfile={() => { setSelectedList(null); openProfileView("profile"); }} />
+          <AppHeader session={headerSession} hasUnreadNotifications={headerUnread} onUnreadChange={setHeaderUnread} onHome={() => goTab("home")} onSearch={() => setSearchMode(true)} onNotifications={() => openProfileView("notifications")} onProfile={() => { setSelectedList(null); openProfileView("profile"); }} />
           <ListDetailHeader
             list={selectedList}
             loadedCount={selectedListFeed.items.length}
@@ -1505,7 +1506,7 @@ export default function App() {
     }
     return (
       <>
-        <AppHeader session={headerSession} onHome={() => goTab("home")} onSearch={() => setSearchMode(true)} onNotifications={() => openProfileView("notifications")} onProfile={() => openProfileView("profile")} />
+        <AppHeader session={headerSession} hasUnreadNotifications={headerUnread} onUnreadChange={setHeaderUnread} onHome={() => goTab("home")} onSearch={() => setSearchMode(true)} onNotifications={() => openProfileView("notifications")} onProfile={() => openProfileView("profile")} />
         {tab === "home" ? (
           <>
             <Hero item={homeHero[heroIndex] ?? null} index={heroIndex} count={homeHero.length} onOpen={openItem} onPrevious={() => setHeroIndex(index => (index - 1 + homeHero.length) % homeHero.length)} onNext={() => setHeroIndex(index => (index + 1) % homeHero.length)} />
@@ -1682,7 +1683,7 @@ export default function App() {
           />
         )}
       </KeyboardAvoidingView>
-      {!selectedEntity && !selectedEpisode && !selectedSeriesEpisodes && !selectedSeason && !selected ? <Animated.View style={[styles.floatingHeader, { transform: [{ translateY: floatingHeaderY }] }]}><AppHeader session={headerSession} onHome={() => goTab("home")} onSearch={() => setSearchMode(true)} onNotifications={() => openProfileView("notifications")} onProfile={() => openProfileView("profile")} /></Animated.View> : null}
+      {!selectedEntity && !selectedEpisode && !selectedSeriesEpisodes && !selectedSeason && !selected ? <Animated.View style={[styles.floatingHeader, { transform: [{ translateY: floatingHeaderY }] }]}><AppHeader session={headerSession} hasUnreadNotifications={headerUnread} listenForNotifications={false} onUnreadChange={setHeaderUnread} onHome={() => goTab("home")} onSearch={() => setSearchMode(true)} onNotifications={() => openProfileView("notifications")} onProfile={() => openProfileView("profile")} /></Animated.View> : null}
       {loading ? <View pointerEvents="none" style={styles.loading}><ActivityIndicator color={colors.accent} size="large" /></View> : null}
       <BottomNav tab={tab} onTab={goTab} />
       <PickerSheet title={picker?.title ?? ""} visible={Boolean(picker)} options={picker?.options ?? []} value={picker?.value ?? ""} multiValues={picker?.multiValues} anchor={picker?.anchor} onPick={value => picker?.onPick(value)} onApply={values => picker?.onApply?.(values)} onClose={() => setPicker(null)} />
