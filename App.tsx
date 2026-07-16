@@ -11,6 +11,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   ActivityIndicator,
   Alert,
+  Animated,
   AppState,
   BackHandler,
   FlatList,
@@ -338,7 +339,34 @@ export default function App() {
   const recommendationLoadedAt = useRef(0);
   const checkingMfa = useRef(false);
   const pendingMfaSession = useRef<Session | null>(null);
+  const floatingHeaderY = useRef(new Animated.Value(-96)).current;
+  const floatingHeaderVisible = useRef(false);
+  const lastRootScrollY = useRef(0);
   const usableSession = mfa.required || authVerifying ? null : session;
+
+  const setFloatingHeader = useCallback((visible: boolean) => {
+    if (floatingHeaderVisible.current === visible) return;
+    floatingHeaderVisible.current = visible;
+    Animated.timing(floatingHeaderY, {
+      toValue: visible ? 0 : -96,
+      duration: visible ? 180 : 140,
+      useNativeDriver: true
+    }).start();
+  }, [floatingHeaderY]);
+
+  const handleRootScroll = useCallback((event: any) => {
+    const y = Math.max(0, Number(event.nativeEvent?.contentOffset?.y ?? 0));
+    const delta = y - lastRootScrollY.current;
+    if (y < 110) setFloatingHeader(false);
+    else if (delta < -6) setFloatingHeader(true);
+    else if (delta > 6) setFloatingHeader(false);
+    lastRootScrollY.current = y;
+  }, [setFloatingHeader]);
+
+  useEffect(() => {
+    lastRootScrollY.current = 0;
+    setFloatingHeader(false);
+  }, [featureView, profileView, searchMode, selectedList?.id, setFloatingHeader, tab]);
 
 
   const scrollToTop = useCallback(() => {
@@ -1633,7 +1661,7 @@ export default function App() {
         ) : selected ? (
           <DetailScreenV2 key={`${selected.kind}-${selected.id}`} item={selected} session={usableSession} onBack={closeSelected} onOpen={openItem} onOpenEntity={openEntity} onOpenSeason={season => setSelectedSeason({ show: selected, season })} onOpenAllSeasons={seasons => setSelectedSeriesEpisodes({ show: selected, seasons })} onHide={hideRecommendation} onChanged={refreshAfterAction} />
         ) : selectedList && listGroup === "collections" ? (
-          <ScrollView contentContainerStyle={styles.listContent} refreshControl={<RefreshControl tintColor={colors.accent} refreshing={refreshing} onRefresh={refresh} />}>{listHeader}</ScrollView>
+          <ScrollView contentContainerStyle={styles.listContent} onScroll={handleRootScroll} scrollEventThrottle={16} refreshControl={<RefreshControl tintColor={colors.accent} refreshing={refreshing} onRefresh={refresh} />}>{listHeader}</ScrollView>
         ) : (
           <FlatList
             ref={listRef}
@@ -1648,10 +1676,13 @@ export default function App() {
             renderItem={({ item }) => <TitleCard item={item} onOpen={openItem} onMenu={setActionItem} />}
             onEndReached={loadMoreActive}
             onEndReachedThreshold={0.75}
+            onScroll={handleRootScroll}
+            scrollEventThrottle={16}
             ListFooterComponent={!featureView && loadingMore ? <View style={styles.feedFooter}><ActivityIndicator color={colors.accent} /><Text style={styles.feedFooterText}>Loading more titles...</Text></View> : null}
           />
         )}
       </KeyboardAvoidingView>
+      {!selectedEntity && !selectedEpisode && !selectedSeriesEpisodes && !selectedSeason && !selected ? <Animated.View style={[styles.floatingHeader, { transform: [{ translateY: floatingHeaderY }] }]}><AppHeader session={headerSession} onHome={() => goTab("home")} onSearch={() => setSearchMode(true)} onNotifications={() => openProfileView("notifications")} onProfile={() => openProfileView("profile")} /></Animated.View> : null}
       {loading ? <View pointerEvents="none" style={styles.loading}><ActivityIndicator color={colors.accent} size="large" /></View> : null}
       <BottomNav tab={tab} onTab={goTab} />
       <PickerSheet title={picker?.title ?? ""} visible={Boolean(picker)} options={picker?.options ?? []} value={picker?.value ?? ""} multiValues={picker?.multiValues} anchor={picker?.anchor} onPick={value => picker?.onPick(value)} onApply={values => picker?.onApply?.(values)} onClose={() => setPicker(null)} />
@@ -1785,14 +1816,14 @@ function LibraryFilters({ value, onChange }: { value: LibraryFilter; onChange: (
     { value: "lists", label: "Lists", icon: "list-outline" }
   ];
   return (
-    <View style={styles.filterPills}>
+    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterBar} contentContainerStyle={styles.filterPills}>
       {filters.map(filter => (
         <Pressable key={filter.value} onPress={() => onChange(filter.value)} style={[styles.filterPill, value === filter.value && styles.filterPillActive]}>
           {filter.icon ? <Ionicons name={filter.icon} size={15} color={value === filter.value ? colors.text : colors.muted} /> : null}
           <Text style={[styles.filterPillText, value === filter.value && styles.filterPillTextActive]}>{filter.label}</Text>
         </Pressable>
       ))}
-    </View>
+    </ScrollView>
   );
 }
 
@@ -1899,7 +1930,7 @@ function NotificationScreen({ session, onBack }: { session: Session; onBack: () 
 
   return <View style={styles.profileSection}>
     <SectionTitle kicker="Signals, not noise" title="Notifications" action="Back to profile" onAction={onBack} />
-    {items.length ? <Pressable onPress={() => Alert.alert("Clear all notifications?", "This removes every notification from your inbox.", [{ text: "Cancel", style: "cancel" }, { text: "Clear all", style: "destructive", onPress: () => void clearAll() }])} style={styles.settingsGhost}><Text style={styles.settingsGhostText}>Clear all</Text></Pressable> : null}
+    {items.length ? <Pressable onPress={() => Alert.alert("Clear all notifications?", "This removes every notification from your inbox.", [{ text: "Cancel", style: "cancel" }, { text: "Clear all", style: "destructive", onPress: () => void clearAll() }])} style={styles.notificationClearButton}><Ionicons name="trash-outline" size={15} color={colors.muted} /><Text style={styles.notificationClearText}>Clear all</Text></Pressable> : null}
     {loadingItems ? <ActivityIndicator color={colors.accent} /> : loadError ? <EmptyPanel title="Notifications did not load" body={loadError} action="Try again" onAction={() => void loadItems()} /> : items.length ? <View style={styles.notificationList}>{items.map(item => {
       const image = item.payload?.image;
       return <Pressable key={item.id} disabled={!item.payload?.href} onPress={() => void openNotification(item)} style={[styles.notificationCard, !item.read_at && styles.notificationCardUnread]}>
@@ -3089,8 +3120,8 @@ function MovieActionSheet({ item, visible, session, currentList, franchiseGroups
               <Pressable disabled={busy} style={styles.contextPrimaryButton} onPress={toggleFavorite}><Ionicons name={favorite ? "heart" : "heart-outline"} size={22} color={colors.text} /><Text style={styles.contextPrimaryText}>{favorite ? "Unfavorite" : "Favorite"}</Text></Pressable>
             </View>
             <View style={styles.actionDivider} />
-            {status === "completed" ? <><View style={styles.watchingRemovePanel}><Pressable disabled={busy} onPress={confirmClearCompleted} style={({ pressed }) => [styles.watchingRemoveAction, pressed && { opacity: .7 }]}><Ionicons name="eye-off-outline" size={19} color={colors.accent} /><Text style={styles.watchingRemoveText}>Remove from Completed</Text><Ionicons name="chevron-forward" size={17} color={colors.accent} /></Pressable><Text style={styles.watchingRemoveSub}>Keeps every watch event and rating.</Text></View><View style={styles.actionDivider} /></> : null}
-            {item?.activeRewatch || item?.reason === "Watching" ? <><View style={styles.watchingRemovePanel}><Pressable disabled={busy} onPress={confirmDismissRewatch} style={({ pressed }) => [styles.watchingRemoveAction, pressed && { opacity: .7 }]}><Ionicons name="eye-off-outline" size={19} color={colors.accent} /><Text style={styles.watchingRemoveText}>Remove from Watching</Text><Ionicons name="chevron-forward" size={17} color={colors.accent} /></Pressable><Text style={styles.watchingRemoveSub}>{item?.activeRewatch ? "Keeps Completed status and every watch event." : "Keeps every watch event."}</Text></View><View style={styles.actionDivider} /></> : null}
+            {status === "completed" ? <><View style={styles.watchingRemovePanel}><Pressable disabled={busy} onPress={confirmClearCompleted} style={({ pressed }) => [styles.watchingRemoveAction, pressed && { opacity: .7 }]}><View style={styles.watchingRemoveIcon}><Ionicons name="eye-off-outline" size={19} color={colors.accent} /></View><View style={styles.watchingRemoveCopy}><Text style={styles.watchingRemoveText}>Remove from Completed</Text><Text style={styles.watchingRemoveSub}>Keeps every watch event and rating.</Text></View><Ionicons name="chevron-forward" size={17} color={colors.accent} /></Pressable></View><View style={styles.actionDivider} /></> : null}
+            {item?.activeRewatch || item?.reason === "Watching" ? <><View style={styles.watchingRemovePanel}><Pressable disabled={busy} onPress={confirmDismissRewatch} style={({ pressed }) => [styles.watchingRemoveAction, pressed && { opacity: .7 }]}><View style={styles.watchingRemoveIcon}><Ionicons name="eye-off-outline" size={19} color={colors.accent} /></View><View style={styles.watchingRemoveCopy}><Text style={styles.watchingRemoveText}>Remove from Watching</Text><Text style={styles.watchingRemoveSub}>{item?.activeRewatch ? "Keeps Completed status and every watch event." : "Keeps every watch event."}</Text></View><Ionicons name="chevron-forward" size={17} color={colors.accent} /></Pressable></View><View style={styles.actionDivider} /></> : null}
             {activeCurrentList ? (
               <View style={styles.currentListSection}>
                 <Text style={styles.actionSectionLabel}>Current list</Text>
@@ -4324,14 +4355,17 @@ function ScoreControl({ value, onChange }: { value: number; onChange: (value: nu
       <TextInput
         value={text}
         onChangeText={input => {
-          const normalized = input.replace(",", ".").replace(/[^\d.]/g, "");
-          if (!/^\d{0,2}(?:\.\d?)?$/.test(normalized)) return;
-          setText(normalized);
-          if (/^(?:10(?:\.0)?|[1-9](?:\.\d)?)$/.test(normalized)) onChange(clampRating(Number(normalized)));
+          const draft = input.replace(/[^\d.,]/g, "").replace(/([.,].*)[.,]/, "$1");
+          if (!/^(?:|[1-9]|10|[1-9][.,]\d?|10[.,]0?)$/.test(draft)) return;
+          setText(draft);
+          const normalized = draft.replace(",", ".");
+          if (/^(?:10(?:\.0)?|[1-9](?:\.\d)?)$/.test(normalized)) onChange(Number(normalized));
         }}
         onFocus={() => { editing.current = true; }}
         onEndEditing={() => { editing.current = false; commit(); }}
         keyboardType="decimal-pad"
+        maxLength={4}
+        selectTextOnFocus
         returnKeyType="done"
         style={styles.scoreInput}
       />
@@ -5451,6 +5485,7 @@ function emptyText(tab: AppTab, signedIn: boolean) {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
+  floatingHeader: { position: "absolute", top: 0, left: 0, right: 0, zIndex: 80, elevation: 24, backgroundColor: colors.bg },
   listContent: { paddingBottom: 116 },
   columns: { paddingHorizontal: 8 },
   feedFooter: { minHeight: 86, alignItems: "center", justifyContent: "center", gap: 8 },
@@ -5467,8 +5502,9 @@ const styles = StyleSheet.create({
   forYouButton: { minHeight: 40, borderRadius: 14, borderWidth: 1, borderColor: colors.line, paddingHorizontal: 13, flexDirection: "row", alignItems: "center", gap: 7, backgroundColor: colors.panel },
   forYouText: { color: colors.text, fontSize: 13, fontWeight: "900" },
   inlineGrid: { flexDirection: "row", flexWrap: "wrap", paddingHorizontal: 8 },
-  filterPills: { flexDirection: "row", flexWrap: "wrap", gap: 10, paddingHorizontal: 18, paddingVertical: 14 },
-  filterPill: { minHeight: 42, borderRadius: 22, borderWidth: 1, borderColor: colors.line, paddingHorizontal: 14, flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: colors.panel },
+  filterBar: { marginTop: 4, marginBottom: 10 },
+  filterPills: { flexDirection: "row", gap: 7, paddingHorizontal: 18, paddingVertical: 8 },
+  filterPill: { minHeight: 36, borderRadius: 18, borderWidth: 1, borderColor: colors.line, paddingHorizontal: 13, flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: colors.panel },
   filterPillActive: { backgroundColor: colors.accent, borderColor: colors.accent },
   filterPillText: { color: colors.text, fontSize: 13, fontWeight: "900" },
   filterPillTextActive: { color: colors.text },
@@ -5520,6 +5556,8 @@ const styles = StyleSheet.create({
   profileNavTextActive: { color: colors.text },
   profileSection: { marginTop: 26 },
   notificationList: { gap: 10, paddingHorizontal: 18, paddingBottom: 120 },
+  notificationClearButton: { alignSelf: "flex-end", minHeight: 36, marginRight: 18, marginTop: -4, marginBottom: 12, borderRadius: 18, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel, paddingHorizontal: 13, flexDirection: "row", alignItems: "center", gap: 6 },
+  notificationClearText: { color: colors.muted, fontSize: 12, fontWeight: "900" },
   notificationCard: { minHeight: 92, borderWidth: 1, borderColor: colors.line, borderRadius: 16, backgroundColor: colors.panel, padding: 10, flexDirection: "row", alignItems: "center", gap: 12 },
   notificationCardUnread: { borderColor: colors.accent, backgroundColor: colors.accentSoft },
   notificationImage: { width: 86, height: 62, borderRadius: 10, backgroundColor: colors.panel2 },
@@ -5748,10 +5786,12 @@ const styles = StyleSheet.create({
   actionThumb: { width: 48, height: 66, borderRadius: 8, backgroundColor: colors.panel2 },
   actionTitle: { color: colors.text, fontSize: 22, fontWeight: "900" },
   actionSub: { color: colors.muted, marginTop: 4, marginBottom: 10, fontSize: 14 },
-  watchingRemovePanel: { marginVertical: 8, padding: 10, borderWidth: 1, borderColor: "rgba(255,91,62,.30)", borderRadius: 15, backgroundColor: "rgba(255,91,62,.08)" },
-  watchingRemoveAction: { minHeight: 42, flexDirection: "row", alignItems: "center", gap: 10 },
-  watchingRemoveText: { flex: 1, color: colors.text, fontSize: 15, fontWeight: "900" },
-  watchingRemoveSub: { color: colors.muted, marginLeft: 29, marginTop: -2, fontSize: 12, lineHeight: 17 },
+  watchingRemovePanel: { marginVertical: 8, borderWidth: 1, borderColor: "rgba(255,91,62,.30)", borderRadius: 15, backgroundColor: "rgba(255,91,62,.08)", overflow: "hidden" },
+  watchingRemoveAction: { minHeight: 72, paddingHorizontal: 12, paddingVertical: 10, flexDirection: "row", alignItems: "center", gap: 10 },
+  watchingRemoveIcon: { width: 30, alignItems: "center", justifyContent: "center" },
+  watchingRemoveCopy: { flex: 1, minWidth: 0, justifyContent: "center" },
+  watchingRemoveText: { color: colors.text, fontSize: 15, lineHeight: 20, fontWeight: "900" },
+  watchingRemoveSub: { color: colors.muted, marginTop: 3, fontSize: 12, lineHeight: 16 },
   closeButton: { width: 34, height: 34, borderRadius: 17, backgroundColor: colors.panel2, alignItems: "center", justifyContent: "center" },
   actionRow: { minHeight: 52, flexDirection: "row", alignItems: "center", borderRadius: 14, paddingHorizontal: 8 },
   actionIcon: { width: 38 },
