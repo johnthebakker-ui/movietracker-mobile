@@ -340,10 +340,11 @@ export default function App() {
   const recommendationLoadedAt = useRef(0);
   const checkingMfa = useRef(false);
   const pendingMfaSession = useRef<Session | null>(null);
-  const floatingHeaderY = useRef(new Animated.Value(-96)).current;
+  const floatingHeaderY = useRef(new Animated.Value(0)).current;
   const floatingHeaderVisible = useRef(false);
   const lastRootScrollY = useRef(0);
   const usableSession = mfa.required || authVerifying ? null : session;
+  const rootHeaderActive = !featureView && !searchMode && !selectedList && !selectedEntity && !selectedEpisode && !selectedSeriesEpisodes && !selectedSeason && !selected;
 
   const setFloatingHeader = useCallback((visible: boolean) => {
     if (floatingHeaderVisible.current === visible) return;
@@ -358,7 +359,7 @@ export default function App() {
   const handleRootScroll = useCallback((event: any) => {
     const y = Math.max(0, Number(event.nativeEvent?.contentOffset?.y ?? 0));
     const delta = y - lastRootScrollY.current;
-    if (y < 110) setFloatingHeader(false);
+    if (y < 110) setFloatingHeader(true);
     else if (delta < -6) setFloatingHeader(true);
     else if (delta > 6) setFloatingHeader(false);
     lastRootScrollY.current = y;
@@ -366,8 +367,8 @@ export default function App() {
 
   useEffect(() => {
     lastRootScrollY.current = 0;
-    setFloatingHeader(false);
-  }, [featureView, profileView, searchMode, selectedList?.id, setFloatingHeader, tab]);
+    setFloatingHeader(rootHeaderActive);
+  }, [profileView, rootHeaderActive, setFloatingHeader, tab]);
 
 
   const scrollToTop = useCallback(() => {
@@ -1506,7 +1507,6 @@ export default function App() {
     }
     return (
       <>
-        <AppHeader session={headerSession} hasUnreadNotifications={headerUnread} onUnreadChange={setHeaderUnread} onHome={() => goTab("home")} onSearch={() => setSearchMode(true)} onNotifications={() => openProfileView("notifications")} onProfile={() => openProfileView("profile")} />
         {tab === "home" ? (
           <>
             <Hero item={homeHero[heroIndex] ?? null} index={heroIndex} count={homeHero.length} onOpen={openItem} onPrevious={() => setHeroIndex(index => (index - 1 + homeHero.length) % homeHero.length)} onNext={() => setHeroIndex(index => (index + 1) % homeHero.length)} />
@@ -1671,7 +1671,7 @@ export default function App() {
             numColumns={2}
             ListHeaderComponent={listHeader}
             ListEmptyComponent={!loading && !featureView ? (selectedList && listGroup === "none" ? <EmptyPanel title="No titles in this list yet" body="Add titles from search, discovery, or a title page." /> : !selectedList && tab !== "home" && tab !== "calendar" && !(tab === "library" && libraryFilter === "lists" && !selectedList) && !(tab === "profile" && (profileView !== "recommendations" || !usableSession || mfa.required)) ? <EmptyPanel title="Nothing loaded yet" body={searchMode ? "Search for a title, person, or keyword." : emptyText(tab, Boolean(usableSession))} /> : null) : null}
-            contentContainerStyle={styles.listContent}
+            contentContainerStyle={[styles.listContent, rootHeaderActive && styles.listContentWithHeader]}
             columnWrapperStyle={styles.columns}
             refreshControl={<RefreshControl tintColor={colors.accent} refreshing={refreshing} onRefresh={refresh} />}
             renderItem={({ item }) => <TitleCard item={item} onOpen={openItem} onMenu={setActionItem} />}
@@ -1683,7 +1683,7 @@ export default function App() {
           />
         )}
       </KeyboardAvoidingView>
-      {!selectedEntity && !selectedEpisode && !selectedSeriesEpisodes && !selectedSeason && !selected ? <Animated.View style={[styles.floatingHeader, { transform: [{ translateY: floatingHeaderY }] }]}><AppHeader session={headerSession} hasUnreadNotifications={headerUnread} listenForNotifications={false} onUnreadChange={setHeaderUnread} onHome={() => goTab("home")} onSearch={() => setSearchMode(true)} onNotifications={() => openProfileView("notifications")} onProfile={() => openProfileView("profile")} /></Animated.View> : null}
+      {rootHeaderActive ? <Animated.View style={[styles.floatingHeader, { transform: [{ translateY: floatingHeaderY }] }]}><AppHeader session={headerSession} hasUnreadNotifications={headerUnread} onUnreadChange={setHeaderUnread} onHome={() => goTab("home")} onSearch={() => setSearchMode(true)} onNotifications={() => openProfileView("notifications")} onProfile={() => openProfileView("profile")} /></Animated.View> : null}
       {loading ? <View pointerEvents="none" style={styles.loading}><ActivityIndicator color={colors.accent} size="large" /></View> : null}
       <BottomNav tab={tab} onTab={goTab} />
       <PickerSheet title={picker?.title ?? ""} visible={Boolean(picker)} options={picker?.options ?? []} value={picker?.value ?? ""} multiValues={picker?.multiValues} anchor={picker?.anchor} onPick={value => picker?.onPick(value)} onApply={values => picker?.onApply?.(values)} onClose={() => setPicker(null)} />
@@ -1817,14 +1817,14 @@ function LibraryFilters({ value, onChange }: { value: LibraryFilter; onChange: (
     { value: "lists", label: "Lists", icon: "list-outline" }
   ];
   return (
-    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterBar} contentContainerStyle={styles.filterPills}>
+    <View style={styles.filterPills}>
       {filters.map(filter => (
         <Pressable key={filter.value} onPress={() => onChange(filter.value)} style={[styles.filterPill, value === filter.value && styles.filterPillActive]}>
           {filter.icon ? <Ionicons name={filter.icon} size={15} color={value === filter.value ? colors.text : colors.muted} /> : null}
           <Text style={[styles.filterPillText, value === filter.value && styles.filterPillTextActive]}>{filter.label}</Text>
         </Pressable>
       ))}
-    </ScrollView>
+    </View>
   );
 }
 
@@ -5488,6 +5488,7 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
   floatingHeader: { position: "absolute", top: 0, left: 0, right: 0, zIndex: 80, elevation: 24, backgroundColor: colors.bg },
   listContent: { paddingBottom: 116 },
+  listContentWithHeader: { paddingTop: 72 },
   columns: { paddingHorizontal: 8 },
   feedFooter: { minHeight: 86, alignItems: "center", justifyContent: "center", gap: 8 },
   feedFooterText: { color: colors.muted, fontSize: 13, fontWeight: "900" },
@@ -5504,10 +5505,10 @@ const styles = StyleSheet.create({
   forYouText: { color: colors.text, fontSize: 13, fontWeight: "900" },
   inlineGrid: { flexDirection: "row", flexWrap: "wrap", paddingHorizontal: 8 },
   filterBar: { marginTop: 4, marginBottom: 10 },
-  filterPills: { flexDirection: "row", gap: 7, paddingHorizontal: 18, paddingVertical: 8 },
-  filterPill: { minHeight: 36, borderRadius: 18, borderWidth: 1, borderColor: colors.line, paddingHorizontal: 13, flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: colors.panel },
+  filterPills: { flexDirection: "row", flexWrap: "wrap", gap: 7, paddingHorizontal: 18, paddingVertical: 8, marginBottom: 8 },
+  filterPill: { flexGrow: 1, flexBasis: "23%", minHeight: 36, borderRadius: 12, borderWidth: 1, borderColor: colors.line, paddingHorizontal: 7, flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 4, backgroundColor: colors.panel },
   filterPillActive: { backgroundColor: colors.accent, borderColor: colors.accent },
-  filterPillText: { color: colors.text, fontSize: 13, fontWeight: "900" },
+  filterPillText: { color: colors.text, fontSize: 11, fontWeight: "900" },
   filterPillTextActive: { color: colors.text },
   calendarWrap: { marginTop: 4 },
   segmented: { flexDirection: "row", marginHorizontal: 18, marginTop: 10, borderRadius: 22, borderWidth: 1, borderColor: colors.line, overflow: "hidden", backgroundColor: colors.panel },
