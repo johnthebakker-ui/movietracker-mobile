@@ -7,6 +7,7 @@ import { ActivityIndicator, Dimensions, Image, Modal, PanResponder, Platform, Pr
 import { colors, shadow } from "./theme";
 import { communityRatingLabel, countries, excludeGenreOptions, genres, SUPABASE_URL, titleYear, tmdbImage, userRatingLabel } from "./config";
 import type { AppTab, DiscoverFilters, MediaSummary, RecommendationFilters } from "./types";
+import { supabase } from "./supabase";
 
 const logoIcon = require("../assets/logo.png");
 
@@ -57,8 +58,18 @@ export function RemoteImage({ uri, style, resizeMode = "cover" }: { uri: string 
   );
 }
 
-export function AppHeader({ session, onProfile, onSearch, onNotifications, onHome }: { session: Session | null; onProfile: () => void; onSearch: () => void; onNotifications?: () => void; onHome?: () => void }) {
+export function AppHeader({ session, hasUnreadNotifications = false, onProfile, onSearch, onNotifications, onHome }: { session: Session | null; hasUnreadNotifications?: boolean; onProfile: () => void; onSearch: () => void; onNotifications?: () => void; onHome?: () => void }) {
   const avatarUrl = (session?.user.user_metadata?.avatar_url || session?.user.user_metadata?.picture) as string | undefined;
+  const [unread, setUnread] = useState(hasUnreadNotifications);
+  useEffect(() => {
+    const client = supabase; const userId = session?.user.id;
+    if (!client || !userId) { setUnread(false); return; }
+    const refresh = async () => { const { count } = await client.from("notifications").select("id", { count: "exact", head: true }).eq("user_id", userId).is("read_at", null); setUnread((count ?? 0) > 0); };
+    void refresh();
+    const timer = setInterval(() => void refresh(), 30_000);
+    const channel = client.channel(`header-notifications-${userId}`).on("postgres_changes", { event: "*", schema: "public", table: "notifications", filter: `user_id=eq.${userId}` }, () => void refresh()).subscribe();
+    return () => { clearInterval(timer); void client.removeChannel(channel); };
+  }, [session?.user.id]);
 
   return (
     <View style={styles.header}>
@@ -70,7 +81,7 @@ export function AppHeader({ session, onProfile, onSearch, onNotifications, onHom
       </Pressable>
       <View style={styles.headerSpacer} />
       <HeaderButton icon="search-outline" label="Search" onPress={onSearch} />
-      <HeaderButton icon="notifications-outline" label="Notifications" onPress={onNotifications} />
+      <HeaderButton icon="notifications-outline" label="Notifications" badge={unread} onPress={() => { setUnread(false); onNotifications?.(); }} />
       <Pressable onPress={onProfile} style={styles.avatar} hitSlop={8} accessibilityRole="button" accessibilityLabel={session ? "Open profile" : "Sign in"}>
         {avatarUrl ? (
           <RemoteImage uri={avatarUrl} style={styles.avatarImage} />
@@ -82,10 +93,11 @@ export function AppHeader({ session, onProfile, onSearch, onNotifications, onHom
   );
 }
 
-function HeaderButton({ icon, label, onPress }: { icon: keyof typeof Ionicons.glyphMap; label: string; onPress?: () => void }) {
+function HeaderButton({ icon, label, badge = false, onPress }: { icon: keyof typeof Ionicons.glyphMap; label: string; badge?: boolean; onPress?: () => void }) {
   return (
     <Pressable onPress={onPress} style={styles.headerButton} hitSlop={8} accessibilityRole="button" accessibilityLabel={label}>
       <Ionicons name={icon} size={23} color={colors.text} />
+      {badge ? <View style={styles.headerNotificationDot} /> : null}
     </Pressable>
   );
 }
@@ -452,6 +464,7 @@ export const styles = StyleSheet.create({
   logoText: { color: colors.text, fontSize: 24, fontWeight: "900", marginLeft: 10, letterSpacing: -0.8 },
   headerSpacer: { flex: 1 },
   headerButton: { width: 44, height: 44, borderRadius: 22, borderWidth: 1, borderColor: colors.line, alignItems: "center", justifyContent: "center", marginLeft: 8, backgroundColor: "rgba(14,18,19,0.86)" },
+  headerNotificationDot: { position: "absolute", top: 6, right: 6, width: 8, height: 8, borderRadius: 4, backgroundColor: colors.accent, borderWidth: 1.5, borderColor: colors.bg },
   avatar: { width: 42, height: 42, borderRadius: 21, marginLeft: 8, backgroundColor: colors.panel2, alignItems: "center", justifyContent: "center", overflow: "hidden" },
   avatarImage: { width: "100%", height: "100%" },
   bottomNav: { position: "absolute", left: 14, right: 14, bottom: 18, height: 78, borderRadius: 30, borderWidth: 1, borderColor: "rgba(255,255,255,0.12)", overflow: "hidden", flexDirection: "row", justifyContent: "space-around", alignItems: "center", ...shadow },
