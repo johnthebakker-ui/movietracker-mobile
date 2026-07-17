@@ -61,17 +61,19 @@ export function RemoteImage({ uri, style, resizeMode = "cover" }: { uri: string 
 export function AppHeader({ session, hasUnreadNotifications = false, listenForNotifications = true, onUnreadChange, onProfile, onSearch, onNotifications, onHome }: { session: Session | null; hasUnreadNotifications?: boolean; listenForNotifications?: boolean; onUnreadChange?: (unread: boolean) => void; onProfile: () => void; onSearch: () => void; onNotifications?: () => void; onHome?: () => void }) {
   const avatarUrl = (session?.user.user_metadata?.avatar_url || session?.user.user_metadata?.picture) as string | undefined;
   const [unread, setUnread] = useState(hasUnreadNotifications);
+  const onUnreadChangeRef = useRef(onUnreadChange);
+  useEffect(() => { onUnreadChangeRef.current = onUnreadChange; }, [onUnreadChange]);
   useEffect(() => { setUnread(hasUnreadNotifications); }, [hasUnreadNotifications]);
   useEffect(() => {
     const client = supabase; const userId = session?.user.id;
     if (!listenForNotifications) return;
-    if (!client || !userId) { setUnread(false); onUnreadChange?.(false); return; }
-    const refresh = async () => { const { count } = await client.from("notifications").select("id", { count: "exact", head: true }).eq("user_id", userId).is("read_at", null); const nextUnread = (count ?? 0) > 0; setUnread(nextUnread); onUnreadChange?.(nextUnread); };
+    if (!client || !userId) { setUnread(false); onUnreadChangeRef.current?.(false); return; }
+    const refresh = async () => { const { count } = await client.from("notifications").select("id", { count: "exact", head: true }).eq("user_id", userId).is("read_at", null); const nextUnread = (count ?? 0) > 0; setUnread(nextUnread); onUnreadChangeRef.current?.(nextUnread); };
     void refresh();
     const timer = setInterval(() => void refresh(), 30_000);
-    const channel = client.channel(`header-notifications-${userId}`).on("postgres_changes", { event: "*", schema: "public", table: "notifications", filter: `user_id=eq.${userId}` }, () => void refresh()).subscribe();
+    const channel = client.channel(`header-notifications-${userId}-${Date.now()}-${Math.random().toString(36).slice(2)}`).on("postgres_changes", { event: "*", schema: "public", table: "notifications", filter: `user_id=eq.${userId}` }, () => void refresh()).subscribe();
     return () => { clearInterval(timer); void client.removeChannel(channel); };
-  }, [listenForNotifications, onUnreadChange, session?.user.id]);
+  }, [listenForNotifications, session?.user.id]);
 
   return (
     <View style={styles.header}>

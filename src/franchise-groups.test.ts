@@ -25,4 +25,16 @@ describe("mobile franchise grouping contracts", () => {
     expect(listFranchiseName(fallback)).toEqual({ name: "Example Collection", explicit: false });
     expect(groupFranchises([fallback]).get("Other titles")).toEqual([fallback]);
   });
+
+  it.each([
+    ["Toy Story", "Toy Story 3", "Toy Story Collection"],
+    ["Kung Fu Panda", "Kung Fu Panda 2", "Kung Fu Panda Collection"],
+    ["Monsters, Inc.", "Monsters University", "Monsters, Inc. Collection"],
+    ["Zootopia", "Zootopia 2", "Zootopia Collection"],
+    ["How to Train Your Dragon", "How to Train Your Dragon 2", "How to Train Your Dragon Collection"],
+    ["Finding Nemo", "Finding Dory", "Finding Nemo Collection"],
+    ["Cars", "Cars 2", "Cars Collection"]
+  ])("recovers well-known animation franchises without replacing manual or TMDB grouping", (first, second, group) => {
+    expect([...groupFranchises([item(first), item(second)]).get(group) ?? []].map(entry => entry.title)).toEqual([first, second]);
+  });
 });

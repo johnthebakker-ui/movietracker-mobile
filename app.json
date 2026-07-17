@@ -3,7 +3,7 @@
     "name": "MovieTracker",
     "slug": "movietracker-mobile",
     "scheme": "movietracker",
-    "version": "1.0.12",
+    "version": "1.0.13",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -44,7 +44,8 @@
     },
     "android": {
       "package": "com.johnthebakker.movietracker",
-      "versionCode": 13,
+      "versionCode": 14,
+      "googleServicesFile": "./google-services.json",
       "blockedPermissions": [
         "android.permission.RECORD_AUDIO",
         "android.permission.SYSTEM_ALERT_WINDOW"
@@ -59,6 +60,12 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "62988c01-4bb4-40de-abfb-4cbe5f31c2bf"
+      }
+    },
+    "owner": "moviereview"
   }
 }

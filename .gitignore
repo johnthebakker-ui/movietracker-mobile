@@ -18,6 +18,12 @@ keystore.properties
 *.p12
 *.key
 *.mobileprovision
+# Firebase Admin/FCM service-account exports are private. The Android client
+# file is supplied locally or as an EAS file secret and is never versioned.
+google-services.json
+firebase-service-account*.json
+service-account*.json
+*-firebase-adminsdk-*.json
 
 # Metro
 .metro-health-check*

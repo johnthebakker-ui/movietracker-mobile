@@ -305,6 +305,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [notificationOpening, setNotificationOpening] = useState(false);
   const [error, setError] = useState("");
   const [heroIndex, setHeroIndex] = useState(0);
   const [headerUnread, setHeaderUnread] = useState(false);
@@ -345,6 +346,78 @@ export default function App() {
   const lastRootScrollY = useRef(0);
   const usableSession = mfa.required || authVerifying ? null : session;
   const rootHeaderActive = !featureView && !searchMode && !selectedList && !selectedEntity && !selectedEpisode && !selectedSeriesEpisodes && !selectedSeason && !selected;
+
+  const openNotificationHref = useCallback(async (rawHref: string) => {
+    let href = rawHref;
+    try {
+      if (!href.startsWith("/")) href = new URL(href).pathname;
+    } catch {
+      throw new Error("This notification has an invalid destination.");
+    }
+    const episodeMatch = href.match(/^\/title\/show\/(\d+)\/season\/(\d+)\/episode\/(\d+)(?:\/|$)/);
+    const seasonMatch = href.match(/^\/title\/show\/(\d+)\/season\/(\d+)(?:\/|$)/);
+    const titleMatch = href.match(/^\/title\/(movie|show)\/(\d+)(?:\/|$)/);
+    if (!episodeMatch && !seasonMatch && !titleMatch) throw new Error("This notification destination is not supported in the app yet.");
+
+    setNotificationOpening(true);
+    setActionItem(null);
+    setSelected(null);
+    setSelectedStack([]);
+    setSelectedEntity(null);
+    setSelectedEpisode(null);
+    setSelectedSeason(null);
+    setSelectedSeriesEpisodes(null);
+    setSelectedList(null);
+    setSearchMode(false);
+    setFeatureView(null);
+    try {
+      if (episodeMatch) {
+        const showId = Number(episodeMatch[1]);
+        const seasonNumber = Number(episodeMatch[2]);
+        const episodeNumber = Number(episodeMatch[3]);
+        const payload = await fetchMobileEpisode(showId, seasonNumber, episodeNumber, usableSession?.access_token);
+        const episode = payload.episode ?? {};
+        setSelectedEpisode({
+          episodeId: payload.episodeId ?? undefined,
+          show: payload.show,
+          seasonNumber,
+          episodeNumber,
+          title: episode.name,
+          overview: episode.overview,
+          airDate: episode.air_date ?? episode.airDate,
+          artwork: episode.still_path ?? episode.stillPath,
+          runtime: episode.runtime,
+          voteAverage: episode.vote_average ?? episode.voteAverage
+        });
+        return;
+      }
+      if (seasonMatch) {
+        const showId = Number(seasonMatch[1]);
+        const seasonNumber = Number(seasonMatch[2]);
+        const payload = await fetchMobileSeason(showId, seasonNumber, usableSession?.access_token);
+        const season = payload.season ?? {};
+        setSelectedSeason({
+          show: payload.show,
+          season: {
+            id: season.id,
+            seasonNumber: Number(season.seasonNumber ?? season.season_number ?? seasonNumber),
+            name: season.name || `Season ${seasonNumber}`,
+            overview: season.overview ?? null,
+            posterPath: season.posterPath ?? season.poster_path ?? null,
+            airDate: season.airDate ?? season.air_date ?? null,
+            episodeCount: season.episodeCount ?? season.episode_count ?? payload.episodes?.length ?? null
+          }
+        });
+        return;
+      }
+      const kind = titleMatch![1] as MediaSummary["kind"];
+      const id = Number(titleMatch![2]);
+      const payload = await fetchMobileTitle(kind, id, usableSession?.access_token, "core");
+      setSelected(payload.item);
+    } finally {
+      setNotificationOpening(false);
+    }
+  }, [usableSession?.access_token]);
 
   const setFloatingHeader = useCallback((visible: boolean) => {
     if (floatingHeaderVisible.current === visible) return;
@@ -517,37 +590,30 @@ export default function App() {
   }, [usableSession?.access_token, usableSession?.user.id]);
 
   useEffect(() => {
-    const subscription = Notifications.addNotificationResponseReceivedListener(response => {
-      const href = response.notification.request.content.data?.href;
-      const releaseKey = response.notification.request.content.data?.releaseKey;
-      if (usableSession?.user.id && supabase && typeof releaseKey === "string") {
-        if (usableSession.access_token) void deleteMobileNotifications(usableSession.access_token, { releaseKey }).catch(() => undefined);
+    const storageKey = `last-notification-response:${usableSession?.user.id ?? "guest"}`;
+    const handleResponse = async (response: Notifications.NotificationResponse) => {
+      const data = response.notification.request.content.data;
+      const href = data?.href;
+      if (typeof href !== "string") return;
+      const responseKey = String(response.notification.request.identifier || data?.releaseKey || href);
+      const previous = await AsyncStorage.getItem(storageKey).catch(() => null);
+      if (previous === responseKey) return;
+      await AsyncStorage.setItem(storageKey, responseKey).catch(() => undefined);
+      const releaseKey = data?.releaseKey;
+      if (usableSession?.access_token && typeof releaseKey === "string") {
+        void deleteMobileNotifications(usableSession.access_token, { releaseKey }).catch(() => undefined);
       }
-      if (typeof href !== "string" || !href.startsWith("/")) return;
-      const match = href.match(/^\/title\/show\/(\d+)\/season\/(\d+)\/episode\/(\d+)/);
-      if (!match) {
-        void WebBrowser.openBrowserAsync(`${API_URL}${href}`);
-        return;
+      try {
+        await openNotificationHref(href);
+      } catch (reason) {
+        setNotificationOpening(false);
+        Alert.alert("Could not open notification", reason instanceof Error ? reason.message : "Try again.");
       }
-      const [, showId, seasonNumber, episodeNumber] = match.map(Number);
-      void fetchMobileEpisode(showId, seasonNumber, episodeNumber, usableSession?.access_token).then(payload => {
-        const episode = payload.episode ?? {};
-        setSelectedEpisode({
-          episodeId: payload.episodeId ?? undefined,
-          show: payload.show,
-          seasonNumber,
-          episodeNumber,
-          title: episode.name,
-          overview: episode.overview,
-          airDate: episode.air_date,
-          artwork: episode.still_path,
-          runtime: episode.runtime,
-          voteAverage: episode.vote_average
-        });
-      }).catch(() => void WebBrowser.openBrowserAsync(`${API_URL}${href}`));
-    });
+    };
+    const subscription = Notifications.addNotificationResponseReceivedListener(response => { void handleResponse(response); });
+    void Notifications.getLastNotificationResponseAsync().then(response => { if (response) void handleResponse(response); });
     return () => subscription.remove();
-  }, [usableSession?.access_token, usableSession?.user.id]);
+  }, [openNotificationHref, usableSession?.access_token, usableSession?.user.id]);
 
   const loadHome = useCallback(async (force = false) => {
     const cacheKey = `home:v3:${usableSession?.user.id ?? "guest"}`;
@@ -1572,7 +1638,7 @@ export default function App() {
                 <View style={styles.afterFilters} />
               </>
             ) : usableSession && profileView === "notifications" ? (
-              <NotificationScreen session={usableSession} onBack={() => openProfileView("profile")} />
+              <NotificationScreen session={usableSession} onBack={() => openProfileView("profile")} onOpenHref={openNotificationHref} />
             ) : usableSession && profileView === "history" ? (
               <FullHistoryPage data={profileData} token={usableSession.access_token} onOpen={openHistoryItem} onMenu={setActionItem} onBack={() => openProfileView("profile")} onRemove={removeHistoryEvent} onScrollTop={scrollToTop} />
             ) : usableSession && profileView === "reviews" ? (
@@ -1686,6 +1752,7 @@ export default function App() {
       {rootHeaderActive ? <Animated.View style={[styles.floatingHeader, { transform: [{ translateY: floatingHeaderY }] }]}><AppHeader session={headerSession} hasUnreadNotifications={headerUnread} onUnreadChange={setHeaderUnread} onHome={() => goTab("home")} onSearch={() => setSearchMode(true)} onNotifications={() => openProfileView("notifications")} onProfile={() => openProfileView("profile")} /></Animated.View> : null}
       {loading ? <View pointerEvents="none" style={styles.loading}><ActivityIndicator color={colors.accent} size="large" /></View> : null}
       <BottomNav tab={tab} onTab={goTab} />
+      {notificationOpening ? <View style={styles.notificationRouteLoading}><ActivityIndicator color={colors.accent} size="large" /><Text style={styles.notificationRouteLoadingText}>Opening notification…</Text></View> : null}
       <PickerSheet title={picker?.title ?? ""} visible={Boolean(picker)} options={picker?.options ?? []} value={picker?.value ?? ""} multiValues={picker?.multiValues} anchor={picker?.anchor} onPick={value => picker?.onPick(value)} onApply={values => picker?.onApply?.(values)} onClose={() => setPicker(null)} />
       <MovieActionSheet item={actionItem} visible={Boolean(actionItem)} session={usableSession} currentList={selectedList} franchiseGroups={selectedListFranchiseGroups} allowNotInterested={tab === "profile" && profileView === "recommendations" && !selectedList && !selected} onClose={() => setActionItem(null)} onOpen={openItem} onNotInterested={hideRecommendation} onChanged={refreshAfterAction} />
     </SafeAreaView>
@@ -1896,7 +1963,7 @@ function AgendaRow({ event, onOpen, onMenu }: { event: CalendarEvent; onOpen: (e
   );
 }
 
-function NotificationScreen({ session, onBack }: { session: Session; onBack: () => void }) {
+function NotificationScreen({ session, onBack, onOpenHref }: { session: Session; onBack: () => void; onOpenHref: (href: string) => Promise<void> }) {
   const [items, setItems] = useState<any[]>([]);
   const [loadingItems, setLoadingItems] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -1918,9 +1985,12 @@ function NotificationScreen({ session, onBack }: { session: Session; onBack: () 
   useEffect(() => { void loadItems(); }, [loadItems]);
 
   async function openNotification(item: any) {
-    await deleteMobileNotifications(session.access_token, { id: item.id });
     setItems(current => current.filter(value => value.id !== item.id));
-    if (item.payload?.href) await WebBrowser.openBrowserAsync(`${API_URL}${item.payload.href}`);
+    void deleteMobileNotifications(session.access_token, { id: item.id }).catch(() => undefined);
+    if (item.payload?.href) {
+      try { await onOpenHref(String(item.payload.href)); }
+      catch (reason) { Alert.alert("Could not open notification", reason instanceof Error ? reason.message : "Try again."); }
+    }
   }
 
   async function clearAll() {
@@ -5493,6 +5563,19 @@ const styles = StyleSheet.create({
   feedFooter: { minHeight: 86, alignItems: "center", justifyContent: "center", gap: 8 },
   feedFooterText: { color: colors.muted, fontSize: 13, fontWeight: "900" },
   loading: { alignItems: "center", backgroundColor: "rgba(6,8,8,0.72)", bottom: 0, justifyContent: "center", left: 0, position: "absolute", right: 0, top: 0 },
+  notificationRouteLoading: {
+    alignItems: "center",
+    backgroundColor: "rgba(6,8,8,0.92)",
+    bottom: 0,
+    gap: 14,
+    justifyContent: "center",
+    left: 0,
+    position: "absolute",
+    right: 0,
+    top: 0,
+    zIndex: 120,
+  },
+  notificationRouteLoadingText: { color: colors.text, fontSize: 15, fontWeight: "900" },
   errorText: { color: colors.danger, fontSize: 14, fontWeight: "800", lineHeight: 20, marginHorizontal: 18, marginTop: 14 },
   afterFilters: { height: 18 },
   homeSection: { marginTop: 2 },

@@ -29,7 +29,12 @@ const universeRules: ReadonlyArray<readonly [RegExp, string]> = [
   [/\bavatar\b.*\b(last airbender|legend of aang)\b|\blegend of korra\b/i, "Avatar: The Last Airbender Collection"],
   [/\battack on titan\b/i, "Attack on Titan Collection"], [/\bchainsaw man\b/i, "Chainsaw Man Collection"],
   [/\bwreck it ralph\b|\bralph breaks the internet\b/i, "Wreck-It Ralph Collection"], [/\bincredibles\b/i, "The Incredibles Collection"],
-  [/\bice age\b/i, "Ice Age Collection"], [/\bmadagascar\b/i, "Madagascar Collection"]
+  [/\bice age\b/i, "Ice Age Collection"], [/\bmadagascar\b/i, "Madagascar Collection"],
+  [/\btoy story\b/i, "Toy Story Collection"], [/\bkung fu panda\b/i, "Kung Fu Panda Collection"],
+  [/\bmonsters,?\s*(inc\.?|university|at work)\b/i, "Monsters, Inc. Collection"],
+  [/\bzootopia\b|\bzootropolis\b/i, "Zootopia Collection"],
+  [/\bhow to train your dragon\b/i, "How to Train Your Dragon Collection"],
+  [/\bfinding (nemo|dory)\b/i, "Finding Nemo Collection"], [/^cars(?:\s+\d+)?$/i, "Cars Collection"]
 ];
 
 export function listFranchiseName(item: MediaSummary): FranchiseMatch | null {

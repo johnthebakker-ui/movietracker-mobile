@@ -8,6 +8,7 @@ export type HomePayload = {
 
 export type MobileTitlePayload = {
   completeness?: "core" | "full";
+  item: MediaSummary;
   dbId: number | null;
   overview: string | null;
   tagline: string | null;

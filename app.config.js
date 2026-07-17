@@ -8,6 +8,10 @@ module.exports = ({ config }) => {
   return {
     ...config,
     ...base,
+    android: {
+      ...base.android,
+      googleServicesFile: process.env.GOOGLE_SERVICES_JSON || base.android?.googleServicesFile
+    },
     extra: {
       ...base.extra,
       eas: projectId ? { projectId } : base.extra?.eas
