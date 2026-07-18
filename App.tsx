@@ -73,7 +73,7 @@ type EntityTarget =
   | { type: "person"; id: number; name: string; subtitle?: string | null; imagePath?: string | null }
   | { type: "company"; id: number; name: string; subtitle?: string | null; imagePath?: string | null };
 type UserList = { id: string; name: string; description: string | null; visibility: string | null; cover_url?: string | null; count: number; posters: string[] };
-type ReviewItem = { id: string; title: string; body: string; created_at: string; updated_at?: string | null; userId?: string | null; ratingId?: string | null; containsSpoilers?: boolean | null; isPrivate?: boolean | null; kind: MediaKind; mediaTitle: string; artwork: string | null; score?: number | null; item?: MediaSummary | null };
+type ReviewItem = { id: string; title: string; body: string; created_at: string; updated_at?: string | null; userId?: string | null; ratingId?: string | null; containsSpoilers?: boolean | null; isPrivate?: boolean | null; kind: MediaKind; targetLabel?: "season" | "episode"; mediaTitle: string; artwork: string | null; score?: number | null; item?: MediaSummary | null };
 type TrackedStatus = "completed" | "watching" | "planned" | "paused" | "dropped";
 type GenreStat = { name: string; total: number; statuses: Record<TrackedStatus, number>; items: Array<{ status: TrackedStatus; item: MediaSummary }> };
 type HistoryItem = {
@@ -344,6 +344,8 @@ export default function App() {
   const floatingHeaderY = useRef(new Animated.Value(0)).current;
   const floatingHeaderVisible = useRef(false);
   const lastRootScrollY = useRef(0);
+  const rootScrollDirection = useRef<"up" | "down" | null>(null);
+  const rootScrollTravel = useRef(0);
   const usableSession = mfa.required || authVerifying ? null : session;
   const rootHeaderActive = !featureView && !searchMode && !selectedList && !selectedEntity && !selectedEpisode && !selectedSeriesEpisodes && !selectedSeason && !selected;
 
@@ -432,14 +434,29 @@ export default function App() {
   const handleRootScroll = useCallback((event: any) => {
     const y = Math.max(0, Number(event.nativeEvent?.contentOffset?.y ?? 0));
     const delta = y - lastRootScrollY.current;
-    if (y < 110) setFloatingHeader(true);
-    else if (delta < -6) setFloatingHeader(true);
-    else if (delta > 6) setFloatingHeader(false);
+    const direction = delta > 0 ? "down" : delta < 0 ? "up" : rootScrollDirection.current;
+    if (direction !== rootScrollDirection.current) {
+      rootScrollDirection.current = direction;
+      rootScrollTravel.current = 0;
+    }
+    rootScrollTravel.current += Math.abs(delta);
+    if (y < 96) {
+      rootScrollTravel.current = 0;
+      setFloatingHeader(true);
+    } else if (direction === "up" && rootScrollTravel.current >= 12) {
+      rootScrollTravel.current = 0;
+      setFloatingHeader(true);
+    } else if (direction === "down" && rootScrollTravel.current >= 18) {
+      rootScrollTravel.current = 0;
+      setFloatingHeader(false);
+    }
     lastRootScrollY.current = y;
   }, [setFloatingHeader]);
 
   useEffect(() => {
     lastRootScrollY.current = 0;
+    rootScrollDirection.current = null;
+    rootScrollTravel.current = 0;
     setFloatingHeader(rootHeaderActive);
   }, [profileView, rootHeaderActive, setFloatingHeader, tab]);
 
@@ -969,7 +986,7 @@ export default function App() {
       supabase.from("follows").select("*", { count: "exact", head: true }).eq("follower_id", userId).eq("status", "accepted"),
       supabase.from("progress").select("status,updated_at,media(id,tmdb_id,kind,title,overview,poster_path,backdrop_path,release_date,end_date,status,vote_average,vote_count,popularity,runtime,genres,original_language,origin_countries,collection_tmdb_id,collection_name,collection_poster_path)").eq("user_id", userId).order("updated_at", { ascending: false }).limit(100),
       supabase.from("progress").select("*", { count: "exact", head: true }).eq("user_id", userId).eq("status", "completed"),
-      supabase.from("ratings").select("score,media_id").eq("user_id", userId),
+      supabase.from("ratings").select("score,media_id,episode_id").eq("user_id", userId),
       supabase.from("reviews").select("id,title,body,contains_spoilers,is_private,created_at,updated_at,media(id,tmdb_id,kind,title,overview,poster_path,backdrop_path,release_date,end_date,status,vote_average,vote_count,popularity,runtime,genres,original_language,origin_countries,collection_tmdb_id,collection_name,collection_poster_path),ratings(score)").eq("user_id", userId).order("updated_at", { ascending: false }).limit(20),
       supabase.from("reviews").select("*", { count: "exact", head: true }).eq("user_id", userId),
       supabase.from("favorites").select("media(id,tmdb_id,kind,title,overview,poster_path,backdrop_path,release_date,end_date,status,vote_average,vote_count,popularity,runtime,genres,original_language,origin_countries,collection_tmdb_id,collection_name,collection_poster_path)").eq("user_id", userId).order("position").limit(12),
@@ -981,7 +998,8 @@ export default function App() {
       supabase.from("watch_events").select("*", { count: "exact", head: true }).eq("user_id", userId)
     ]);
     const ratingsRows = ratings.data ?? [];
-    const ratingByMedia = new Map((ratingsRows as any[]).map(row => [row.media_id, Number(row.score)]));
+    const ratingByMedia = new Map((ratingsRows as any[]).filter(row => row.episode_id == null).map(row => [row.media_id, Number(row.score)]));
+    const ratingByEpisode = new Map((ratingsRows as any[]).filter(row => row.episode_id != null).map(row => [Number(row.episode_id), Number(row.score)]));
     const statusRows = progressStatuses.data ?? [];
     const favoriteItems = (favorites.data ?? []).flatMap((row: any) => {
       const media = firstRow(row.media);
@@ -1058,7 +1076,7 @@ export default function App() {
         metaLabel: episode ? `S${season?.season_number ?? "?"} E${episode.episode_number}` : media.kind === "show" ? "Series" : "Film",
         subtitle: episode ? `S${season?.season_number ?? "?"} E${episode.episode_number} - ${episode.name}` : "Movie watched",
         artwork: episode?.still_path ?? media.backdrop_path ?? media.poster_path ?? null,
-        rating: ratingByMedia.get(media.id) ?? null,
+        rating: episode ? ratingByEpisode.get(Number(event.episode_id ?? episode.id)) ?? null : ratingByMedia.get(media.id) ?? null,
         rewatchNumber: Math.max(0, watchNumber - 1),
         item: fromDbMedia(media, ratingByMedia),
         episodeTarget: episode ? { show: fromDbMedia(media, ratingByMedia), episodeId: Number(event.episode_id ?? episode.id), seasonNumber: Number(season?.season_number ?? 1), episodeNumber: Number(episode.episode_number), title: episode.name, artwork: episode.still_path ?? media.backdrop_path ?? media.poster_path ?? null } : null
@@ -1454,14 +1472,16 @@ export default function App() {
   }
 
   async function removeHistoryEvent(eventId: string, title: string, onResult?: (success: boolean) => void) {
-    if (!usableSession?.user.id || !supabase) return;
+    if (!usableSession?.user.id || !supabase) {
+      onResult?.(false);
+      return;
+    }
     Alert.alert("Remove watch?", `Remove this ${title} watch from your history?`, [
-      { text: "Cancel", style: "cancel" },
+      { text: "Cancel", style: "cancel", onPress: () => onResult?.(false) },
       {
         text: "Remove",
         style: "destructive",
         onPress: async () => {
-          setRefreshing(true);
           try {
             await deleteMobileHistoryEvent(usableSession.access_token, eventId);
             libraryLoadedKey.current = null;
@@ -1471,8 +1491,6 @@ export default function App() {
           } catch (reason) {
             onResult?.(false);
             Alert.alert("Could not remove watch", reason instanceof Error ? reason.message : "Try again.");
-          } finally {
-            setRefreshing(false);
           }
         }
       }
@@ -1897,12 +1915,17 @@ function LibraryFilters({ value, onChange }: { value: LibraryFilter; onChange: (
 
 function CalendarPanel({ mode, month, events, onMode, onMonth, onOpen, onMenu }: { mode: CalendarMode; month: string; events: CalendarEvent[]; onMode: (mode: CalendarMode) => void; onMonth: (month: string) => void; onOpen: (event: CalendarEvent) => void; onMenu: (item: MediaSummary) => void }) {
   const { cells, label } = calendarCells(month);
-  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const currentDate = localDateKey();
+  const defaultDate = currentDate.startsWith(`${month}-`) ? currentDate : `${month}-01`;
+  const [selectedDate, setSelectedDate] = useState(defaultDate);
   const [posterCalendar, setPosterCalendar] = useState(false);
+  useEffect(() => {
+    setSelectedDate(currentDate.startsWith(`${month}-`) ? currentDate : `${month}-01`);
+  }, [currentDate, month]);
   const eventsByDate = new Map<string, CalendarEvent[]>();
   events.forEach(event => eventsByDate.set(event.date, [...(eventsByDate.get(event.date) ?? []), event]));
-  const eventDays = [...eventsByDate.entries()].sort(([a], [b]) => b.localeCompare(a));
-  const orderedEventDays = selectedDate ? [...eventDays].sort(([a], [b]) => a === selectedDate ? -1 : b === selectedDate ? 1 : 0) : eventDays;
+  const eventDays = [...eventsByDate.entries()].sort(([a], [b]) => a.localeCompare(b));
+  const orderedEventDays = eventDays.filter(([date]) => date >= selectedDate);
   return (
     <View style={styles.calendarWrap}>
       <View style={styles.segmented}>
@@ -1923,7 +1946,7 @@ function CalendarPanel({ mode, month, events, onMode, onMonth, onOpen, onMenu }:
         {cells.map((date, index) => {
           const dayEvents = date ? eventsByDate.get(date) ?? [] : [];
           const count = dayEvents.length;
-          const today = date === localDateKey();
+          const today = date === currentDate;
           return (
             <Pressable key={date ?? `blank-${index}`} disabled={!date || !count} onPress={() => date && setSelectedDate(date)} style={[styles.dayCell, posterCalendar && styles.dayCellPosterMode, !date && styles.blankDay, today && styles.todayCell, date === selectedDate && styles.selectedDayCell]}>
               {date ? <Text style={[styles.dayText, today && styles.todayText]}>{Number(date.slice(8, 10))}</Text> : null}
@@ -1936,7 +1959,7 @@ function CalendarPanel({ mode, month, events, onMode, onMonth, onOpen, onMenu }:
           );
         })}
       </View>
-      {eventDays.length ? (
+      {orderedEventDays.length ? (
         <View style={styles.agenda}>
           {orderedEventDays.map(([date, dayEvents]) => (
             <View key={date} style={styles.agendaDay}>
@@ -1946,7 +1969,7 @@ function CalendarPanel({ mode, month, events, onMode, onMonth, onOpen, onMenu }:
           ))}
         </View>
       ) : (
-        <EmptyPanel title={mode === "watched" ? "Nothing logged this month" : "No upcoming episodes found"} body={mode === "watched" ? "Your watched movies and episodes will appear here." : "Track shows to populate upcoming air dates."} />
+        <EmptyPanel title={mode === "watched" ? "Nothing logged from this date" : "No releases from this date"} body={mode === "watched" ? "Choose an earlier date to see watched movies and episodes." : "Choose an earlier date or track more shows to see upcoming releases."} />
       )}
     </View>
   );
@@ -2498,7 +2521,7 @@ function SeasonDetailScreen({ target, session, onBack, onOpenEpisode }: { target
         ? await supabase.from("reviews").update({ ...reviewPayload, updated_at: now }).eq("id", existingReview.id).select("id,created_at,updated_at").single()
         : await supabase.from("reviews").insert(reviewPayload).select("id,created_at,updated_at").single();
       if (error) throw error;
-      const savedReview: ReviewItem = { id: saved.id, title: title || "Review", body, created_at: saved.created_at ?? now, updated_at: saved.updated_at ?? now, userId: session.user.id, ratingId, containsSpoilers: values.containsSpoilers, isPrivate: values.isPrivate, kind: target.show.kind, mediaTitle: `${target.show.title} season`, artwork: target.show.backdropPath ?? target.show.posterPath ?? null, score: values.score, item: target.show };
+      const savedReview: ReviewItem = { id: saved.id, title: title || "Review", body, created_at: saved.created_at ?? now, updated_at: saved.updated_at ?? now, userId: session.user.id, ratingId, containsSpoilers: values.containsSpoilers, isPrivate: values.isPrivate, kind: target.show.kind, targetLabel: "season", mediaTitle: `${target.show.title} season`, artwork: season.poster_path ?? season.posterPath ?? target.show.backdropPath ?? target.show.posterPath ?? null, score: values.score, item: target.show };
       setPayload((current: any) => current ? { ...current, userRating: values.score ?? current.userRating, myReview: savedReview, reviews: [savedReview, ...(current.reviews ?? []).filter((review: ReviewItem) => review.id !== savedReview.id && review.userId !== session.user.id)] } : current);
     } finally {
       setBusy(false);
@@ -2590,6 +2613,7 @@ function SeasonDetailScreen({ target, session, onBack, onOpenEpisode }: { target
           {episodes.map(episode => {
             const still = tmdbImage(episode.still_path ?? episode.stillPath, "w342");
             const episodeNumber = Number(episode.episode_number ?? episode.episodeNumber ?? 0);
+            const userScore = (payload?.userEpisodeRatings ?? []).find((rating: any) => Number(rating.episode) === episodeNumber)?.score;
             return (
               <Pressable key={`row-${episode.id ?? episodeNumber}`} onPress={() => openEpisodePress(episode)} onLongPress={() => openQuickEpisodeWatch(episode)} delayLongPress={300} style={styles.seasonCard}>
                 {still ? <RemoteImage uri={still} style={styles.seasonPoster} resizeMode="cover" /> : <View style={styles.seasonPoster}><Ionicons name="film-outline" size={20} color={colors.muted} /></View>}
@@ -2597,7 +2621,10 @@ function SeasonDetailScreen({ target, session, onBack, onOpenEpisode }: { target
                   <Text style={styles.seasonName} numberOfLines={1}>E{episodeNumber} - {episode.name ?? "Episode"}</Text>
                   <Text style={styles.seasonMeta}>{episode.air_date ?? "Air date TBA"}{episode.runtime ? ` - ${episode.runtime} min` : ""}</Text>
                 </View>
-                <Ionicons name="chevron-forward" size={18} color={colors.muted} />
+                <View style={styles.episodeCardTrailing}>
+                  {typeof userScore === "number" ? <View style={styles.episodeOwnRating}><Ionicons name="star" size={12} color="#ffc24b" /><Text style={styles.episodeOwnRatingText}>{Number(userScore).toFixed(1)}</Text></View> : null}
+                  <Ionicons name="chevron-forward" size={18} color={colors.muted} />
+                </View>
               </Pressable>
             );
           })}
@@ -2777,6 +2804,7 @@ function SeriesEpisodesScreen({ target, session, onBack, onOpenSeason, onOpenEpi
                 const still = tmdbImage(episode.still_path ?? episode.stillPath, "w342");
                 const episodeNumber = Number(episode.episode_number ?? episode.episodeNumber ?? 0);
                 const dimmed = dimUnwatched && !isEpisodeWatched(season.seasonNumber, episode);
+                const userScore = (payload?.userEpisodeRatings ?? []).find((rating: any) => Number(rating.episode) === episodeNumber)?.score;
                 return (
                   <Pressable key={`row-${season.seasonNumber}-${episode.id ?? episodeNumber}`} onPress={() => openEpisodePress(season, episode)} onLongPress={() => openQuickEpisodeWatch(season, payload, episode)} delayLongPress={300} style={[styles.seasonCard, dimmed && styles.dimmedEpisodeCard]}>
                     {still ? <RemoteImage uri={still} style={styles.seasonPoster} resizeMode="cover" /> : <View style={styles.seasonPoster}><Ionicons name="film-outline" size={20} color={colors.muted} /></View>}
@@ -2784,7 +2812,10 @@ function SeriesEpisodesScreen({ target, session, onBack, onOpenSeason, onOpenEpi
                       <Text style={styles.seasonName} numberOfLines={1}>E{episodeNumber} - {episode.name ?? "Episode"}</Text>
                       <Text style={styles.seasonMeta}>{episode.air_date ?? "Air date TBA"}{episode.runtime ? ` - ${episode.runtime} min` : ""}</Text>
                     </View>
-                    <Ionicons name="chevron-forward" size={18} color={colors.muted} />
+                    <View style={styles.episodeCardTrailing}>
+                      {typeof userScore === "number" ? <View style={styles.episodeOwnRating}><Ionicons name="star" size={12} color="#ffc24b" /><Text style={styles.episodeOwnRatingText}>{Number(userScore).toFixed(1)}</Text></View> : null}
+                      <Ionicons name="chevron-forward" size={18} color={colors.muted} />
+                    </View>
                   </Pressable>
                 );
               })}
@@ -2798,21 +2829,24 @@ function SeriesEpisodesScreen({ target, session, onBack, onOpenSeason, onOpenEpi
 }
 
 function ReviewRow({ review, onOpen }: { review: ReviewItem; onOpen: (item: MediaSummary) => void }) {
+  const [expanded, setExpanded] = useState(false);
   const image = tmdbImage(review.artwork, "w342");
   const score = typeof review.score === "number" ? review.score : null;
+  const canExpand = review.body.trim().length > 110;
   return (
-    <Pressable disabled={!review.item} onPress={() => review.item && onOpen(review.item)} style={styles.reviewRow}>
+    <Pressable disabled={!review.item && !canExpand} onPress={() => canExpand ? setExpanded(value => !value) : review.item && onOpen(review.item)} style={styles.reviewRow}>
       {image ? <RemoteImage uri={image} style={styles.reviewImage} resizeMode="cover" /> : <View style={styles.reviewImage} />}
       <View style={styles.reviewCopy}>
         <View style={styles.reviewKindRow}>
-          <Text style={styles.reviewKind}>{review.kind === "show" ? "Series review" : "Film review"}</Text>
+        <Text style={styles.reviewKind}>{review.targetLabel === "episode" ? "Episode review" : review.targetLabel === "season" ? "Season review" : review.kind === "show" ? "Series review" : "Film review"}</Text>
           {review.isPrivate ? <View style={styles.reviewPrivateBadge}><Ionicons name="lock-closed-outline" size={11} color={colors.muted} /><Text style={styles.reviewPrivateText}>Private</Text></View> : null}
           {score != null ? <View style={styles.reviewScore}><Ionicons name="star" size={14} color="#ffc24b" /><Text style={styles.reviewScoreText}>{score.toFixed(1)}</Text></View> : null}
         </View>
         <Text style={styles.reviewMedia} numberOfLines={1}>{review.mediaTitle}</Text>
-        <Text style={styles.reviewMeta}>{review.kind === "show" ? "Show" : "Movie"} - {formatShortDate(review.created_at)}{isEditedReview(review) ? " - edited" : ""}</Text>
+        <Text style={styles.reviewMeta}>{review.targetLabel === "episode" ? "Episode" : review.targetLabel === "season" ? "Season" : review.kind === "show" ? "Show" : "Movie"} - {formatShortDate(review.created_at)}{isEditedReview(review) ? " - edited" : ""}</Text>
         <Text style={styles.reviewTitle} numberOfLines={1}>{review.title}</Text>
-        <Text style={styles.reviewBody} numberOfLines={2}>{review.body}</Text>
+        <Text style={styles.reviewBody} numberOfLines={expanded ? undefined : 2}>{review.body}</Text>
+        {canExpand ? <Text style={styles.reviewExpand}>{expanded ? "Show less" : "Read full review"}</Text> : null}
       </View>
     </Pressable>
   );
@@ -3464,7 +3498,7 @@ function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity, on
         : await supabase!.from("reviews").insert({ user_id: session.user.id, episode_id: episodeId, ...payload }).select("id,created_at,updated_at").single();
       if (result.error) throw result.error;
       const show = firstRow(firstRow(episode?.seasons)?.media) ? fromDbMedia(firstRow(firstRow(episode?.seasons)?.media)) : target.show;
-      const savedReview: ReviewItem = { id: result.data.id, title: values.title.trim() || "Review", body: values.body.trim(), created_at: result.data.created_at ?? now, updated_at: result.data.updated_at ?? now, userId: session.user.id, ratingId, containsSpoilers: values.containsSpoilers, isPrivate: values.isPrivate, kind: show.kind, mediaTitle: `${show.title} episode`, artwork: show.backdropPath ?? show.posterPath ?? null, score: nextScore, item: show };
+      const savedReview: ReviewItem = { id: result.data.id, title: values.title.trim() || "Review", body: values.body.trim(), created_at: result.data.created_at ?? now, updated_at: result.data.updated_at ?? now, userId: session.user.id, ratingId, containsSpoilers: values.containsSpoilers, isPrivate: values.isPrivate, kind: show.kind, targetLabel: "episode", mediaTitle: `${show.title} episode`, artwork: target.artwork ?? show.backdropPath ?? show.posterPath ?? null, score: nextScore, item: show };
       setUserRating(nextScore);
       setMyReview(savedReview);
       setReviews(current => [savedReview, ...current.filter(review => review.id !== savedReview.id && review.userId !== session.user.id)]);
@@ -4171,6 +4205,7 @@ function mapTargetReview(review: any, item: MediaSummary, label: "season" | "epi
     containsSpoilers: Boolean(review.contains_spoilers),
     isPrivate: Boolean(review.is_private),
     kind: item.kind,
+    targetLabel: label,
     mediaTitle: `${item.title} ${label}`,
     artwork: item.backdropPath ?? item.posterPath ?? null,
     score: Number.isFinite(score) ? score : null,
@@ -5748,6 +5783,7 @@ const styles = StyleSheet.create({
   reviewMeta: { color: colors.muted, fontSize: 13, marginTop: 4 },
   reviewTitle: { color: colors.text, fontFamily: "serif", fontSize: 19, fontWeight: "700", marginTop: 6 },
   reviewBody: { color: colors.muted, fontSize: 14, lineHeight: 20, marginTop: 5 },
+  reviewExpand: { color: colors.accent, fontSize: 12, fontWeight: "800", marginTop: 7 },
   groupControls: { marginHorizontal: 18, marginTop: 6, marginBottom: 18, flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 },
   groupLabel: { color: colors.muted, fontSize: 13, fontWeight: "900", marginRight: 2 },
   groupChip: { minHeight: 36, borderRadius: 18, borderWidth: 1, borderColor: colors.line, paddingHorizontal: 12, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, backgroundColor: colors.panel },
@@ -6020,6 +6056,9 @@ const styles = StyleSheet.create({
   seasonCopy: { flex: 1, minWidth: 0 },
   seasonName: { color: colors.text, fontSize: 16, fontWeight: "900" },
   seasonMeta: { color: colors.muted, fontSize: 13, fontWeight: "700", marginTop: 4 },
+  episodeCardTrailing: { alignItems: "flex-end", justifyContent: "center", gap: 8 },
+  episodeOwnRating: { flexDirection: "row", alignItems: "center", gap: 4, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 5, backgroundColor: "rgba(255,194,75,0.10)", borderWidth: 1, borderColor: "rgba(255,194,75,0.24)" },
+  episodeOwnRatingText: { color: "#ffc24b", fontSize: 12, fontWeight: "900" },
   sourceTabs: { flexDirection: "row", gap: 9, paddingHorizontal: 18, marginTop: 10, flexWrap: "wrap" },
   sourceTab: { minHeight: 42, paddingHorizontal: 14, borderRadius: 14, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel, alignItems: "center", justifyContent: "center" },
   sourceTabActive: { borderColor: colors.accent, backgroundColor: "rgba(255,84,57,0.18)" },
