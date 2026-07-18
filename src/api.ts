@@ -263,7 +263,7 @@ export async function fetchEpisodeNotificationSchedule(token: string) {
 }
 
 export async function sendTestNotification(token: string) {
-  return request<{ created: boolean; pushed: number; href: string; notification: { releaseKey: string; title: string; message: string; href: string; image: string | null } }>("/api/mobile/notifications/test", token, { method: "POST" });
+  return request<{ created: boolean; pushed: number; href: string; mode: "upcoming" | "recent"; airDate: string; notification: { releaseKey: string; title: string; message: string; href: string; image: string | null } }>("/api/mobile/notifications/test", token, { method: "POST" });
 }
 
 export async function deleteMobileNotifications(token: string, filter?: { id?: string; releaseKey?: string }) {
