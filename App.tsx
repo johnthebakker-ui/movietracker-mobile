@@ -41,7 +41,7 @@ import { reportError } from "./src/telemetry";
 import { colors } from "./src/theme";
 import type { AppTab, DiscoverFilters, FeedResult, MediaKind, MediaSummary, RecommendationFilters } from "./src/types";
 import { episodeTargetForUpNext, type UpNextEntry } from "./src/up-next-navigation";
-import { completedRewatchProgress, viewingPassProgress } from "./src/viewing-passes";
+import { completedRewatchProgress, seriesViewingSummary, viewingPassProgress, type SeriesViewingSummary } from "./src/viewing-passes";
 
 const initialDiscoverFilters: DiscoverFilters = { kind: "all", genre: "", country: "", yearMode: "exact", year: "", fromYear: "", toYear: "", sort: "popularity", excludeGenres: [], hideWatched: false, hideListed: false };
 const initialRecommendationFilters: RecommendationFilters = { kind: "all", genre: "", country: "", yearMode: "exact", year: "", fromYear: "", toYear: "", hideWatched: true, hideListed: true, excludeGenres: [] };
@@ -61,6 +61,7 @@ type ListGroup = "none" | "collections";
 type ListSort = "none" | "title_asc" | "title_desc" | "release_desc" | "release_asc" | "added_desc" | "added_asc" | "list_order";
 type ActionRefreshReason = "profile" | "list" | "watch" | "rating";
 type CalendarMode = "upcoming" | "watched";
+type CalendarView = "month" | "week";
 type ProfilePanel = "lists" | "reviews" | "history" | "statistics";
 type ProfileView = "profile" | "recommendations" | "settings" | "history" | "reviews" | "statistics" | "wrapped" | "notifications";
 type FeatureView = "tonight" | "up-next" | null;
@@ -119,6 +120,7 @@ type DetailData = {
   externalRatings: Array<{ label: string; value: string }>;
   pendingExternalRatingSources?: string[];
   progressStatus: string | null;
+  seriesProgress?: SeriesViewingSummary | null;
   watched: boolean;
   lastWatchedAt?: string | null;
   favorite: boolean;
@@ -234,6 +236,26 @@ async function reconcileMobileEpisodeProgress(userId: string, mediaId: number) {
   if (error) throw error;
 }
 
+async function loadMobileSeriesViewingSummary(userId: string, mediaId: number, status?: string | null) {
+  if (!supabase) return null;
+  const [progressResult, seasonsResult, watchesResult] = await Promise.all([
+    supabase.from("progress").select("status,completed_at,started_at").eq("user_id", userId).eq("media_id", mediaId).maybeSingle(),
+    supabase.from("seasons").select("season_number,episodes(id,episode_number)").eq("media_id", mediaId).gt("season_number", 0),
+    supabase.from("watch_events").select("episode_id,watched_at,created_at").eq("user_id", userId).eq("media_id", mediaId).not("episode_id", "is", null)
+  ]);
+  if (progressResult.error || seasonsResult.error || watchesResult.error) return null;
+  const episodes = (seasonsResult.data ?? [])
+    .flatMap((season: any) => (season.episodes ?? []).map((episode: any) => ({ id: Number(episode.id), seasonNumber: Number(season.season_number), episodeNumber: Number(episode.episode_number) })))
+    .sort((left: any, right: any) => left.seasonNumber - right.seasonNumber || left.episodeNumber - right.episodeNumber);
+  const events = (watchesResult.data ?? []).map((watch: any) => ({ episodeId: Number(watch.episode_id), watchedAt: watch.watched_at, createdAt: watch.created_at }));
+  const progress = progressResult.data;
+  return seriesViewingSummary(episodes, events, progress ? {
+    status: progress.status,
+    completedAt: progress.completed_at,
+    startedAt: progress.started_at
+  } : null, endedSeriesStatuses.has(status ?? ""));
+}
+
 async function loadMobileActiveRewatchIds(userId: string, rows: any[]) {
   if (!supabase) return new Set<number>();
   const completed = rows.flatMap(row => {
@@ -289,7 +311,9 @@ export default function App() {
   const [listGroup, setListGroup] = useState<ListGroup>("none");
   const [libraryLists, setLibraryLists] = useState<UserList[]>([]);
   const [calendarMode, setCalendarMode] = useState<CalendarMode>("upcoming");
+  const [calendarView, setCalendarView] = useState<CalendarView>("month");
   const [calendarMonth, setCalendarMonth] = useState(() => monthKey(new Date()));
+  const [calendarWeek, setCalendarWeek] = useState(() => weekStartKey(new Date()));
   const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
   const [profileView, setProfileView] = useState<ProfileView>("profile");
   const [featureView, setFeatureView] = useState<FeatureView>(null);
@@ -886,7 +910,7 @@ export default function App() {
       setCalendarFeed(emptyFeed);
       return;
     }
-    const { start, end } = monthBounds(calendarMonth);
+    const { start, end } = calendarView === "week" ? weekBounds(calendarWeek) : monthBounds(calendarMonth);
     if (calendarMode === "watched") {
       const { data, error: calendarError } = await supabase
         .from("watch_events")
@@ -944,7 +968,7 @@ export default function App() {
       }];
     }));
     setCalendarFeed(emptyFeed);
-  }, [calendarMode, calendarMonth, usableSession?.user.id]);
+  }, [calendarMode, calendarMonth, calendarView, calendarWeek, usableSession?.user.id]);
 
   const loadProfileData = useCallback(async (force = true) => {
     if (!usableSession?.user.id || !supabase) {
@@ -1615,7 +1639,15 @@ export default function App() {
             {!authReady ? (
               <EmptyPanel title="Checking your account" body="Restoring your saved MovieTracker session." />
             ) : usableSession ? (
-              <CalendarPanel mode={calendarMode} month={calendarMonth} events={calendarEvents} onMode={setCalendarMode} onMonth={setCalendarMonth} onOpen={openCalendarEvent} onMenu={setActionItem} />
+              <CalendarPanel mode={calendarMode} view={calendarView} month={calendarMonth} week={calendarWeek} events={calendarEvents} onMode={setCalendarMode} onView={nextView => {
+                if (nextView === "week") {
+                  const anchor = calendarMonth === monthKey(new Date()) ? new Date() : new Date(`${calendarMonth}-01T12:00:00Z`);
+                  setCalendarWeek(weekStartKey(anchor));
+                } else {
+                  setCalendarMonth(calendarWeekDays(calendarWeek)[3].slice(0, 7));
+                }
+                setCalendarView(nextView);
+              }} onMonth={setCalendarMonth} onWeek={setCalendarWeek} onOpen={openCalendarEvent} onMenu={setActionItem} />
             ) : (
               <EmptyPanel title="Sign in for your calendar" body="The app can show upcoming episodes and watched history after you sign in." action="Go to profile" onAction={() => goTab("profile")} />
             )}
@@ -1913,35 +1945,42 @@ function LibraryFilters({ value, onChange }: { value: LibraryFilter; onChange: (
   );
 }
 
-function CalendarPanel({ mode, month, events, onMode, onMonth, onOpen, onMenu }: { mode: CalendarMode; month: string; events: CalendarEvent[]; onMode: (mode: CalendarMode) => void; onMonth: (month: string) => void; onOpen: (event: CalendarEvent) => void; onMenu: (item: MediaSummary) => void }) {
-  const { cells, label } = calendarCells(month);
+function CalendarPanel({ mode, view, month, week, events, onMode, onView, onMonth, onWeek, onOpen, onMenu }: { mode: CalendarMode; view: CalendarView; month: string; week: string; events: CalendarEvent[]; onMode: (mode: CalendarMode) => void; onView: (view: CalendarView) => void; onMonth: (month: string) => void; onWeek: (week: string) => void; onOpen: (event: CalendarEvent) => void; onMenu: (item: MediaSummary) => void }) {
+  const { cells, label: monthLabel } = calendarCells(month);
+  const weekDates = calendarWeekDays(week);
+  const label = view === "week" ? calendarWeekLabel(weekDates) : monthLabel;
   const currentDate = localDateKey();
-  const defaultDate = currentDate.startsWith(`${month}-`) ? currentDate : `${month}-01`;
+  const defaultDate = view === "week" ? (weekDates.includes(currentDate) ? currentDate : weekDates[0]) : currentDate.startsWith(`${month}-`) ? currentDate : `${month}-01`;
   const [selectedDate, setSelectedDate] = useState(defaultDate);
   const [posterCalendar, setPosterCalendar] = useState(false);
   useEffect(() => {
-    setSelectedDate(currentDate.startsWith(`${month}-`) ? currentDate : `${month}-01`);
-  }, [currentDate, month]);
+    setSelectedDate(view === "week" ? (weekDates.includes(currentDate) ? currentDate : weekDates[0]) : currentDate.startsWith(`${month}-`) ? currentDate : `${month}-01`);
+  }, [currentDate, month, view, week]);
   const eventsByDate = new Map<string, CalendarEvent[]>();
   events.forEach(event => eventsByDate.set(event.date, [...(eventsByDate.get(event.date) ?? []), event]));
   const eventDays = [...eventsByDate.entries()].sort(([a], [b]) => a.localeCompare(b));
   const orderedEventDays = eventDays.filter(([date]) => date >= selectedDate);
+  const displayedDays = view === "week" ? weekDates.map(date => [date, eventsByDate.get(date) ?? []] as const) : orderedEventDays;
   return (
     <View style={styles.calendarWrap}>
       <View style={styles.segmented}>
         <Pressable onPress={() => onMode("upcoming")} style={[styles.segment, mode === "upcoming" && styles.segmentActive]}><Text style={styles.segmentText}>Upcoming</Text></Pressable>
         <Pressable onPress={() => onMode("watched")} style={[styles.segment, mode === "watched" && styles.segmentActive]}><Text style={styles.segmentText}>Watched</Text></Pressable>
       </View>
-      <View style={styles.monthToolbar}>
-        <Pressable onPress={() => onMonth(shiftMonth(month, -1))} style={styles.monthButton}><Ionicons name="chevron-back" size={22} color={colors.text} /></Pressable>
-        <Text style={styles.monthTitle}>{label}</Text>
-        <Pressable onPress={() => onMonth(shiftMonth(month, 1))} style={styles.monthButton}><Ionicons name="chevron-forward" size={22} color={colors.text} /></Pressable>
+      <View style={styles.calendarViewSegmented}>
+        <Pressable onPress={() => onView("month")} style={[styles.calendarViewSegment, view === "month" && styles.calendarViewSegmentActive]}><Ionicons name="calendar-outline" size={15} color={view === "month" ? colors.text : colors.muted} /><Text style={[styles.calendarViewText, view === "month" && styles.calendarViewTextActive]}>Month</Text></Pressable>
+        <Pressable onPress={() => onView("week")} style={[styles.calendarViewSegment, view === "week" && styles.calendarViewSegmentActive]}><Ionicons name="list-outline" size={15} color={view === "week" ? colors.text : colors.muted} /><Text style={[styles.calendarViewText, view === "week" && styles.calendarViewTextActive]}>Week</Text></Pressable>
       </View>
-      <Pressable onPress={() => setPosterCalendar(value => !value)} style={styles.calendarDisplayToggle}>
+      <View style={styles.monthToolbar}>
+        <Pressable onPress={() => view === "week" ? onWeek(shiftWeek(week, -1)) : onMonth(shiftMonth(month, -1))} style={styles.monthButton}><Ionicons name="chevron-back" size={22} color={colors.text} /></Pressable>
+        <Text style={styles.monthTitle}>{label}</Text>
+        <Pressable onPress={() => view === "week" ? onWeek(shiftWeek(week, 1)) : onMonth(shiftMonth(month, 1))} style={styles.monthButton}><Ionicons name="chevron-forward" size={22} color={colors.text} /></Pressable>
+      </View>
+      {view === "month" ? <Pressable onPress={() => setPosterCalendar(value => !value)} style={styles.calendarDisplayToggle}>
         <Ionicons name={posterCalendar ? "grid-outline" : "image-outline"} size={15} color={colors.muted} />
         <Text style={styles.calendarDisplayToggleText}>{posterCalendar ? "Compact calendar" : "Poster calendar"}</Text>
-      </Pressable>
-      <View style={styles.calendarGrid}>
+      </Pressable> : null}
+      {view === "month" ? <View style={styles.calendarGrid}>
         {["M", "T", "W", "T", "F", "S", "S"].map((day, index) => <Text key={`${day}-${index}`} style={styles.weekday}>{day}</Text>)}
         {cells.map((date, index) => {
           const dayEvents = date ? eventsByDate.get(date) ?? [] : [];
@@ -1958,13 +1997,17 @@ function CalendarPanel({ mode, month, events, onMode, onMonth, onOpen, onMenu }:
             </Pressable>
           );
         })}
-      </View>
-      {orderedEventDays.length ? (
+      </View> : <View style={styles.calendarWeekStrip}>{weekDates.map(date => {
+        const count = eventsByDate.get(date)?.length ?? 0;
+        const today = date === currentDate;
+        return <View key={date} style={[styles.calendarWeekDay, today && styles.calendarWeekDayToday]}><Text style={styles.calendarWeekDayName}>{new Date(`${date}T12:00:00Z`).toLocaleDateString(undefined, { weekday: "short", timeZone: "UTC" })}</Text><Text style={[styles.calendarWeekDayNumber, today && styles.calendarWeekDayNumberToday]}>{Number(date.slice(8, 10))}</Text><Text style={styles.calendarWeekDayCount}>{count || "·"}</Text></View>;
+      })}</View>}
+      {displayedDays.length ? (
         <View style={styles.agenda}>
-          {orderedEventDays.map(([date, dayEvents]) => (
+          {displayedDays.map(([date, dayEvents]) => (
             <View key={date} style={styles.agendaDay}>
               <View style={styles.agendaHeader}><Text style={styles.agendaDate}>{formatCalendarDate(date)}</Text><Text style={styles.agendaCount}>{dayEvents.length}</Text></View>
-              {dayEvents.map(event => <AgendaRow key={event.id} event={event} onOpen={onOpen} onMenu={onMenu} />)}
+              {dayEvents.length ? dayEvents.map(event => <AgendaRow key={event.id} event={event} onOpen={onOpen} onMenu={onMenu} />) : <Text style={styles.calendarWeekEmpty}>{mode === "watched" ? "Nothing logged" : "No releases"}</Text>}
             </View>
           ))}
         </View>
@@ -3301,6 +3344,7 @@ function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity, on
   const [episodeLoadError, setEpisodeLoadError] = useState<string | null>(null);
   const [watched, setWatched] = useState(false);
   const [lastWatchedAt, setLastWatchedAt] = useState<string | null>(null);
+  const [seriesProgress, setSeriesProgress] = useState<SeriesViewingSummary | null>(null);
   const [userRating, setUserRating] = useState<number | null>(null);
   const [communityRating, setCommunityRating] = useState<number | null>(null);
   const [reviews, setReviews] = useState<ReviewItem[]>([]);
@@ -3336,6 +3380,7 @@ function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity, on
       });
       setWatched(Boolean(mobileEpisode.watched));
       setLastWatchedAt(mobileEpisode.lastWatchedAt ?? null);
+      setSeriesProgress(mobileEpisode.seriesProgress ?? null);
       setUserRating(mobileEpisode.userRating ?? null);
       setCommunityRating(mobileEpisode.communityRating ?? null);
       setReviews(mobileEpisode.reviews ?? []);
@@ -3384,6 +3429,7 @@ function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity, on
         const { data } = await watchQuery.order("watched_at", { ascending: false, nullsFirst: false }).limit(1).maybeSingle();
         setWatched(Boolean(data));
         setLastWatchedAt(data?.watched_at ?? null);
+        if (season?.media_id) setSeriesProgress(await loadMobileSeriesViewingSummary(session.user.id, Number(season.media_id), show.status));
       }
     }
     setEpisodeLoading(false);
@@ -3550,6 +3596,7 @@ function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity, on
           <Text style={styles.detailMeta}>{show.title} · {episode?.air_date ?? target.airDate ?? "Air date TBA"}{episode?.runtime ? ` · ${episode.runtime} min` : ""}</Text>
           <View style={styles.ratingSourceRow}>{episodeRatingSources.map(source => <RatingSource key={source.label} label={source.label} value={source.value} />)}</View>
           <Text style={styles.detailOverview}>{episode?.overview || "No description has been released for this episode yet."}</Text>
+          {seriesProgress ? <SeriesProgressCard summary={seriesProgress} /> : null}
           <View style={styles.detailQuickActions}>
             <Pressable onPress={() => onOpen(show)} style={styles.quickAction}><Ionicons name="albums-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>Open show</Text></Pressable>
             <Pressable onPress={() => onOpenSeason(seasonTarget, show, showSeasons.length ? showSeasons : [seasonTarget])} style={styles.quickAction}><Ionicons name="layers-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>{isLimitedSeries(show, showSeasons.length ? showSeasons : [seasonTarget]) ? "All episodes" : "Open season"}</Text></Pressable>
@@ -3742,6 +3789,7 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
         externalRatings: mobileDetail.externalRatings ?? [],
         pendingExternalRatingSources: mobileDetail.pendingExternalRatingSources ?? [],
         progressStatus: mobileDetail.progressStatus ?? null,
+        seriesProgress: mobileDetail.seriesProgress ?? null,
         watched: Boolean(mobileDetail.watched ?? mobileDetail.progressStatus === "completed"),
         lastWatchedAt: mobileDetail.lastWatchedAt ?? null,
         favorite: Boolean(mobileDetail.favorite),
@@ -3829,7 +3877,7 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
     const resolvedOverview = media.overview || raw.overview || websiteOverview || item.overview || null;
     const collectionId = media.collection_tmdb_id ?? raw.belongs_to_collection?.id ?? item.collectionTmdbId ?? null;
     const reviewSelect = "id,title,body,created_at,updated_at,user_id,rating_id,contains_spoilers,is_private,media(id,tmdb_id,kind,title,overview,poster_path,backdrop_path,release_date,end_date,status,vote_average,vote_count,popularity,runtime,genres,original_language,origin_countries,collection_tmdb_id,collection_name,collection_poster_path),ratings(score)";
-    const [ratings, reviews, myReviewResult, progress, userRating, favorite, lists, contains, seasonRows, collectionRows] = await Promise.all([
+    const [ratings, reviews, myReviewResult, progress, userRating, favorite, lists, contains, seasonRows, collectionRows, seriesProgress] = await Promise.all([
       client.from("ratings").select("score").eq("media_id", mediaId),
       client.from("reviews").select(reviewSelect).eq("media_id", mediaId).order("created_at", { ascending: false }).limit(8),
       session?.user.id ? client.from("reviews").select(reviewSelect).eq("user_id", session.user.id).eq("media_id", mediaId).maybeSingle() : Promise.resolve({ data: null }),
@@ -3839,7 +3887,8 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
       session?.user.id ? loadUserLists(session.user.id) : Promise.resolve([]),
       session?.user.id ? client.from("list_items").select("list_id").eq("media_id", mediaId) : Promise.resolve({ data: [] }),
       item.kind === "show" ? client.from("seasons").select("id,season_number,name,overview,poster_path,air_date,episode_count").eq("media_id", mediaId).gt("season_number", 0).order("season_number") : Promise.resolve({ data: [] }),
-      collectionId ? client.from("media").select("*").eq("kind", "movie").eq("collection_tmdb_id", collectionId).order("release_date", { ascending: true }) : Promise.resolve({ data: [] })
+      collectionId ? client.from("media").select("*").eq("kind", "movie").eq("collection_tmdb_id", collectionId).order("release_date", { ascending: true }) : Promise.resolve({ data: [] }),
+      item.kind === "show" && session?.user.id ? loadMobileSeriesViewingSummary(session.user.id, mediaId, media.status ?? item.status) : Promise.resolve(null)
     ]);
     const containing = new Set((contains.data ?? []).map((row: any) => row.list_id));
     const communityRows = ratings.data ?? [];
@@ -3887,6 +3936,7 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
       externalRatings,
       pendingExternalRatingSources: [],
       progressStatus: progress.data?.status ?? null,
+      seriesProgress,
       watched: progress.data?.status === "completed",
       favorite: Boolean(favorite.data),
       lists: (lists as UserList[]).map(list => ({ ...list, contains: containing.has(list.id) })),
@@ -4083,7 +4133,8 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
         <View style={styles.titleActionDock}>
           <Text style={styles.actionLabelBig}>My status</Text>
           {detail?.lastWatchedAt ? <Text style={styles.lastWatchedText}>Last watched {formatLastWatched(detail.lastWatchedAt)}</Text> : null}
-          <View style={styles.statusActions}>{detail?.progressStatus === "watching" ? <View style={[styles.detailStatusButton, styles.detailStatusButtonActive]}><Ionicons name="eye-outline" size={17} color={colors.accent} /><Text style={styles.detailStatusTextActive}>Watching</Text></View> : null}{detail?.watched ? <View style={[styles.detailStatusButton, styles.detailStatusButtonActive]}><Ionicons name="checkmark-circle-outline" size={17} color={colors.accent} /><Text style={styles.detailStatusTextActive}>Watched</Text></View> : null}{[
+          {item.kind === "show" && detail?.seriesProgress ? <SeriesProgressCard summary={detail.seriesProgress} /> : null}
+          <View style={styles.statusActions}>{item.kind === "movie" && detail?.progressStatus === "watching" ? <View style={[styles.detailStatusButton, styles.detailStatusButtonActive]}><Ionicons name="eye-outline" size={17} color={colors.accent} /><Text style={styles.detailStatusTextActive}>Watching</Text></View> : null}{item.kind === "movie" && detail?.watched ? <View style={[styles.detailStatusButton, styles.detailStatusButtonActive]}><Ionicons name="checkmark-circle-outline" size={17} color={colors.accent} /><Text style={styles.detailStatusTextActive}>Watched</Text></View> : null}{[
             { value: "planned", label: detail?.watched ? "Plan rewatch" : "Plan", icon: "bookmark-outline" },
             { value: "paused", label: "Paused", icon: "pause-circle-outline" },
             { value: "dropped", label: "Dropped", icon: "close-circle-outline" }
@@ -4096,7 +4147,7 @@ function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSea
             </View>
             <Ionicons name="chevron-forward" size={18} color={colors.muted} />
           </Pressable>
-          <View style={styles.detailQuickActions}><Pressable disabled={busy} onPress={toggleFavorite} style={styles.quickAction}><Ionicons name={detail?.favorite ? "heart" : "heart-outline"} size={19} color={colors.text} /><Text style={styles.quickActionText}>{detail?.favorite ? "Favorited" : "Favorite"}</Text></Pressable><Pressable disabled={busy} onPress={() => session?.access_token ? onHide(item) : Alert.alert("Sign in needed", "Sign in before changing recommendations.")} style={styles.quickAction}><Ionicons name="ban-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>Not interested</Text></Pressable><Pressable disabled={busy} onPress={() => setWatchSheetVisible(true)} style={styles.quickAction}><Ionicons name="calendar-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>{detail?.watched ? "Add another watch" : "First watch"}</Text></Pressable><Pressable onPress={() => sharePublicTitle(`/title/${item.kind}/${item.id}`, item.title, detailOverview)} style={styles.quickAction}><Ionicons name="share-social-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>Share</Text></Pressable></View>
+          <View style={styles.detailQuickActions}><Pressable disabled={busy} onPress={toggleFavorite} style={styles.quickAction}><Ionicons name={detail?.favorite ? "heart" : "heart-outline"} size={19} color={colors.text} /><Text style={styles.quickActionText}>{detail?.favorite ? "Favorited" : "Favorite"}</Text></Pressable><Pressable disabled={busy} onPress={() => session?.access_token ? onHide(item) : Alert.alert("Sign in needed", "Sign in before changing recommendations.")} style={styles.quickAction}><Ionicons name="ban-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>Not interested</Text></Pressable><Pressable disabled={busy} onPress={() => setWatchSheetVisible(true)} style={styles.quickAction}><Ionicons name="calendar-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>{detail?.watched || detail?.seriesProgress ? "Add another watch" : "First watch"}</Text></Pressable><Pressable onPress={() => sharePublicTitle(`/title/${item.kind}/${item.id}`, item.title, detailOverview)} style={styles.quickAction}><Ionicons name="share-social-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>Share</Text></Pressable></View>
           {detail?.lists.length ? <View style={styles.detailLists}><Pressable disabled={busy} onPress={() => setListSheetVisible(true)} style={styles.addToListButton}><Ionicons name="list-outline" size={21} color={colors.text} /><Text style={styles.addToListText}>Add to list</Text><Ionicons name="chevron-up" size={18} color={colors.muted} /></Pressable></View> : null}
         </View>
         <RatingSheet visible={ratingSheetVisible} value={detail?.userRating ?? null} busy={busy} onClose={() => setRatingSheetVisible(false)} onSave={saveUserRating} />
@@ -4159,6 +4210,22 @@ function DetailListSheet({ visible, lists, busy, onClose, onToggle }: { visible:
         </ScrollView>
       </View>
     </Modal>
+  );
+}
+
+function SeriesProgressCard({ summary }: { summary: SeriesViewingSummary }) {
+  const next = summary.nextSeasonNumber != null && summary.nextEpisodeNumber != null
+    ? ` · Next S${summary.nextSeasonNumber} E${summary.nextEpisodeNumber}`
+    : "";
+  const icon = summary.rewatching ? "repeat-outline" : summary.label === "Completed" ? "checkmark-circle-outline" : "eye-outline";
+  return (
+    <View style={[styles.seriesProgressCard, summary.rewatching && styles.seriesProgressCardRewatching]}>
+      <Ionicons name={icon} size={20} color={colors.accent} />
+      <View style={styles.seriesProgressCopy}>
+        <Text style={styles.seriesProgressTitle}>{summary.label}</Text>
+        <Text style={styles.seriesProgressMeta}>{summary.watched} / {summary.total} episodes{next}</Text>
+      </View>
+    </View>
   );
 }
 
@@ -5494,6 +5561,45 @@ function shiftMonth(month: string, delta: number) {
   return monthKey(new Date(Date.UTC(year, number - 1 + delta, 1)));
 }
 
+function weekStartKey(value: Date | string) {
+  const key = typeof value === "string" ? value : localDateKey(value);
+  const date = new Date(`${key}T12:00:00Z`);
+  const offset = (date.getUTCDay() + 6) % 7;
+  date.setUTCDate(date.getUTCDate() - offset);
+  return date.toISOString().slice(0, 10);
+}
+
+function weekBounds(week: string) {
+  const start = new Date(`${week}T00:00:00Z`);
+  const end = new Date(start);
+  end.setUTCDate(end.getUTCDate() + 7);
+  return { start, end };
+}
+
+function shiftWeek(week: string, delta: number) {
+  const date = new Date(`${week}T12:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + delta * 7);
+  return date.toISOString().slice(0, 10);
+}
+
+function calendarWeekDays(week: string) {
+  return Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(`${week}T12:00:00Z`);
+    date.setUTCDate(date.getUTCDate() + index);
+    return date.toISOString().slice(0, 10);
+  });
+}
+
+function calendarWeekLabel(days: string[]) {
+  const start = new Date(`${days[0]}T12:00:00Z`);
+  const end = new Date(`${days[6]}T12:00:00Z`);
+  const sameYear = start.getUTCFullYear() === end.getUTCFullYear();
+  const sameMonth = sameYear && start.getUTCMonth() === end.getUTCMonth();
+  if (sameMonth) return `${start.toLocaleDateString(undefined, { month: "short", timeZone: "UTC" })} ${start.getUTCDate()}–${end.getUTCDate()}, ${end.getUTCFullYear()}`;
+  if (sameYear) return `${start.toLocaleDateString(undefined, { month: "short", timeZone: "UTC" })} ${start.getUTCDate()}–${end.toLocaleDateString(undefined, { month: "short", timeZone: "UTC" })} ${end.getUTCDate()}, ${end.getUTCFullYear()}`;
+  return `${start.toLocaleDateString(undefined, { month: "short", timeZone: "UTC" })} ${start.getUTCDate()}, ${start.getUTCFullYear()}–${end.toLocaleDateString(undefined, { month: "short", timeZone: "UTC" })} ${end.getUTCDate()}, ${end.getUTCFullYear()}`;
+}
+
 function calendarCells(month: string) {
   const { start } = monthBounds(month);
   const leading = (start.getUTCDay() + 6) % 7;
@@ -5634,6 +5740,11 @@ const styles = StyleSheet.create({
   segment: { flex: 1, height: 48, alignItems: "center", justifyContent: "center" },
   segmentActive: { backgroundColor: colors.accent },
   segmentText: { color: colors.text, fontWeight: "900" },
+  calendarViewSegmented: { alignSelf: "center", marginTop: 12, padding: 3, borderRadius: 18, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel, flexDirection: "row" },
+  calendarViewSegment: { minHeight: 34, paddingHorizontal: 13, borderRadius: 15, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6 },
+  calendarViewSegmentActive: { backgroundColor: colors.panel2 },
+  calendarViewText: { color: colors.muted, fontSize: 12, fontWeight: "900" },
+  calendarViewTextActive: { color: colors.text },
   monthToolbar: { marginHorizontal: 18, marginTop: 20, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   monthButton: { width: 46, height: 46, borderRadius: 23, borderWidth: 1, borderColor: colors.line, alignItems: "center", justifyContent: "center", backgroundColor: colors.panel },
   monthTitle: { color: colors.text, fontFamily: "serif", fontSize: 30, fontWeight: "700" },
@@ -5653,6 +5764,14 @@ const styles = StyleSheet.create({
   dayPosterStrip: { position: "absolute", left: 5, right: 5, bottom: 5, height: 27, flexDirection: "row", gap: 3, alignItems: "center" },
   dayPosterThumb: { flex: 1, height: 27, borderRadius: 5, overflow: "hidden", backgroundColor: colors.panel },
   dayPosterMore: { minWidth: 22, height: 22, borderRadius: 11, overflow: "hidden", backgroundColor: "rgba(0,0,0,0.72)", color: colors.text, textAlign: "center", lineHeight: 22, fontSize: 9, fontWeight: "900" },
+  calendarWeekStrip: { marginHorizontal: 18, marginTop: 14, padding: 8, borderRadius: 20, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel, flexDirection: "row", gap: 4 },
+  calendarWeekDay: { flex: 1, minWidth: 0, minHeight: 76, paddingVertical: 8, borderRadius: 13, alignItems: "center", justifyContent: "center", gap: 3 },
+  calendarWeekDayToday: { backgroundColor: colors.accentSoft, borderWidth: 1, borderColor: colors.accent },
+  calendarWeekDayName: { color: colors.muted, fontSize: 10, fontWeight: "900", textTransform: "uppercase" },
+  calendarWeekDayNumber: { color: colors.text, fontFamily: "serif", fontSize: 22, fontWeight: "700" },
+  calendarWeekDayNumberToday: { color: colors.accent },
+  calendarWeekDayCount: { color: colors.muted, fontSize: 10, fontWeight: "900" },
+  calendarWeekEmpty: { minHeight: 48, paddingHorizontal: 12, borderRadius: 12, color: colors.muted, backgroundColor: colors.panel, textAlignVertical: "center", fontSize: 12, fontWeight: "800" },
   agenda: { marginHorizontal: 18, marginTop: 22, gap: 18 },
   agendaDay: { gap: 7 },
   agendaHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
@@ -5983,6 +6102,11 @@ const styles = StyleSheet.create({
   titleActionDock: { borderTopWidth: 1, borderBottomWidth: 1, borderColor: colors.line, paddingTop: 15, paddingBottom: 14, marginBottom: 22 },
   actionLabelBig: { color: colors.text, fontSize: 14, fontWeight: "900", letterSpacing: 1.8, textTransform: "uppercase", marginBottom: 12 },
   statusActions: { flexDirection: "row", gap: 3 },
+  seriesProgressCard: { minHeight: 58, marginBottom: 10, paddingHorizontal: 13, paddingVertical: 10, borderRadius: 13, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel, flexDirection: "row", alignItems: "center", gap: 11 },
+  seriesProgressCardRewatching: { borderColor: "rgba(255,84,57,0.48)", backgroundColor: colors.accentSoft },
+  seriesProgressCopy: { flex: 1, minWidth: 0, gap: 2 },
+  seriesProgressTitle: { color: colors.text, fontSize: 14, fontWeight: "900" },
+  seriesProgressMeta: { color: colors.muted, fontSize: 11, fontWeight: "800" },
   detailStatusButton: { flex: 1, minHeight: 46, borderRadius: 8, alignItems: "center", justifyContent: "center", gap: 3, backgroundColor: "transparent", position: "relative" },
   detailStatusButtonActive: { backgroundColor: colors.accentSoft, borderBottomWidth: 2, borderBottomColor: colors.accent },
   detailStatusText: { color: colors.muted, fontSize: 10, fontWeight: "900", textAlign: "center" },

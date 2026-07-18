@@ -1,5 +1,6 @@
 import { API_URL } from "./config";
 import type { DiscoverFilters, FeedResult, MediaSummary, RecommendationFilters } from "./types";
+import type { SeriesViewingSummary } from "./viewing-passes";
 
 export type HomePayload = {
   hero: MediaSummary[];
@@ -24,6 +25,7 @@ export type MobileTitlePayload = {
   externalRatings: Array<{ label: string; value: string }>;
   pendingExternalRatingSources?: string[];
   progressStatus: string | null;
+  seriesProgress?: SeriesViewingSummary | null;
   favorite: boolean;
   watched?: boolean;
   lastWatchedAt?: string | null;
@@ -64,6 +66,7 @@ export type MobileEpisodePayload = {
   communityRating: number | null;
   watched: boolean;
   lastWatchedAt?: string | null;
+  seriesProgress?: SeriesViewingSummary | null;
   reviews: any[];
   myReview: any | null;
   externalRatings: Array<{ label: string; value: string }>;
