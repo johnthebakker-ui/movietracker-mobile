@@ -319,7 +319,7 @@ export function RecommendationFiltersCard({ filters, onChange, onSelect, onRefre
         <YearFilter mode={filters.yearMode ?? "exact"} year={filters.year} fromYear={filters.fromYear ?? ""} toYear={filters.toYear ?? ""} onChange={values => onChange({ ...filters, ...values })} />
         <View style={styles.checkRow}>
           <CheckPill label="Hide watched" checked={filters.hideWatched} onPress={() => onChange({ ...filters, hideWatched: !filters.hideWatched })} />
-          <CheckPill label="Hide listed" checked={filters.hideListed} onPress={() => onChange({ ...filters, hideListed: !filters.hideListed })} />
+          <CheckPill label="Hide from library" checked={filters.hideListed} onPress={() => onChange({ ...filters, hideListed: !filters.hideListed })} />
         </View>
       </View> : null}
       <Pressable onPress={onRefresh} style={styles.primaryButton}>

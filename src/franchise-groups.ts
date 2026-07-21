@@ -1,11 +1,13 @@
 import type { MediaSummary } from "./types";
 
 type FranchiseMatch = { name: string; explicit: boolean; source: "manual" | "universe" | "tmdb" };
+export const NO_FRANCHISE_GROUP = "__movietracker_no_franchise__";
 
 const universeRules: ReadonlyArray<readonly [RegExp, string]> = [
   [/\bharry potter\b/i, "Harry Potter Collection"], [/\bplanet of the apes\b/i, "Planet of the Apes Collection"],
   [/\bhunger games\b|\bballad of songbirds\b|\bsunrise on the reaping\b/i, "The Hunger Games Collection"],
-  [/\blord of the rings\b|\bthe hobbit\b/i, "The Lord of the Rings Collection"], [/\bmaze runner\b/i, "Maze Runner Collection"],
+  [/\blord of the rings\b/i, "The Lord of the Rings Collection"], [/\bthe hobbit\b/i, "The Hobbit Collection"],
+  [/\bmaze runner\b/i, "Maze Runner Collection"],
   [/\bpirates of the caribbean\b/i, "Pirates of the Caribbean Collection"], [/\bpurge\b/i, "The Purge Collection"],
   [/\bnow you see me\b/i, "Now You See Me Collection"], [/\bdivergent\b|\binsurgent\b|\ballegiant\b/i, "Divergent Collection"],
   [/\bthe conjuring\b|\bannabelle\b|\bthe nun\b|\bla llorona\b/i, "The Conjuring Universe"], [/\binsidious\b/i, "Insidious Collection"],
@@ -39,6 +41,7 @@ const universeRules: ReadonlyArray<readonly [RegExp, string]> = [
 
 export function listFranchiseName(item: MediaSummary): FranchiseMatch | null {
   const manual = item.franchiseGroup?.trim();
+  if (manual === NO_FRANCHISE_GROUP) return null;
   if (manual) return { name: manual, explicit: true, source: "manual" };
   const title = item.title.toLowerCase().replace(/[-_]/g, " ");
   const match = universeRules.find(([pattern]) => pattern.test(title));

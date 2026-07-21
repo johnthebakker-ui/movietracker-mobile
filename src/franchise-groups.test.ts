@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { groupFranchises, listFranchiseName } from "./franchise-groups";
+import { groupFranchises, listFranchiseName, NO_FRANCHISE_GROUP } from "./franchise-groups";
 import type { MediaSummary } from "./types";
 
 const item = (title: string, overrides: Partial<MediaSummary> = {}): MediaSummary => ({
@@ -18,6 +18,16 @@ describe("mobile franchise grouping contracts", () => {
     const manual = item("The Conjuring", { franchiseGroup: "My horror order", collectionName: "The Conjuring Collection" });
     expect(listFranchiseName(manual)).toEqual({ name: "My horror order", explicit: true, source: "manual" });
     expect(groupFranchises([manual]).get("My horror order")).toEqual([manual]);
+  });
+
+  it("keeps The Hobbit separate from The Lord of the Rings", () => {
+    expect(listFranchiseName(item("The Hobbit: An Unexpected Journey"))?.name).toBe("The Hobbit Collection");
+    expect(listFranchiseName(item("The Lord of the Rings: The Fellowship of the Ring"))?.name).toBe("The Lord of the Rings Collection");
+  });
+
+  it("supports an explicit no-franchise override for official and custom groups", () => {
+    expect(listFranchiseName(item("Casino Royale", { collectionName: "James Bond Collection", franchiseGroup: NO_FRANCHISE_GROUP }))).toBeNull();
+    expect(groupFranchises([item("Custom title", { franchiseGroup: NO_FRANCHISE_GROUP })]).get("Other titles")?.length).toBe(1);
   });
 
   it("uses TMDB collection fallback and retains canonical singleton franchises", () => {
