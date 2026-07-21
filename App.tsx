@@ -2148,7 +2148,7 @@ function ProfileNav({ onChange }: { onChange: (value: ProfilePanel) => void }) {
 
 function ProfileHistorySection({ items, onOpen, onMenu, onHistory }: { items: HistoryItem[]; onOpen: (item: HistoryItem) => void; onMenu: (item: MediaSummary) => void; onHistory: () => void }) {
   if (!items.length) return null;
-  return <View style={styles.profileSection}><SectionTitle kicker="A dated viewing diary" title="Recent history" action="See complete history ->" onAction={onHistory} /><View style={styles.historyGrid}>{items.slice(0, 6).map(item => <HistoryCard key={item.id} item={item} onOpen={onOpen} onMenu={onMenu} />)}</View></View>;
+  return <View style={[styles.profileSection, styles.profileHistorySection]}><SectionTitle kicker="A dated viewing diary" title="Recent history" action="See complete history ->" onAction={onHistory} /><View style={styles.historyGrid}>{items.slice(0, 6).map(item => <HistoryCard key={item.id} item={item} onOpen={onOpen} onMenu={onMenu} />)}</View></View>;
 }
 
 function FullHistoryPage({ data, token, onOpen, onMenu, onBack, onRemove, onScrollTop }: { data: ProfileData; token: string; onOpen: (item: HistoryItem) => void; onMenu: (item: MediaSummary) => void; onBack: () => void; onRemove: (id: string, title: string, onResult?: (success: boolean) => void) => void; onScrollTop: () => void }) {
@@ -5874,6 +5874,7 @@ const styles = StyleSheet.create({
   profileNavText: { color: colors.muted, fontSize: 12, fontWeight: "900" },
   profileNavTextActive: { color: colors.text },
   profileSection: { marginTop: 26 },
+  profileHistorySection: { marginTop: -12 },
   notificationList: { gap: 10, paddingHorizontal: 18, paddingBottom: 120 },
   notificationClearButton: { alignSelf: "flex-end", minHeight: 36, marginRight: 18, marginTop: -4, marginBottom: 12, borderRadius: 18, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel, paddingHorizontal: 13, flexDirection: "row", alignItems: "center", gap: 6 },
   notificationClearText: { color: colors.muted, fontSize: 12, fontWeight: "900" },
