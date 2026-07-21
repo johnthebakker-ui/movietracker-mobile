@@ -1988,10 +1988,10 @@ function CalendarPanel({ mode, view, month, week, events, onMode, onView, onMont
         <Text style={styles.monthTitle}>{label}</Text>
         <Pressable onPress={() => view === "week" ? onWeek(shiftWeek(week, 1)) : onMonth(shiftMonth(month, 1))} style={styles.monthButton}><Ionicons name="chevron-forward" size={22} color={colors.text} /></Pressable>
       </View>
-      {view === "month" ? <Pressable onPress={() => setPosterCalendar(value => !value)} style={styles.calendarDisplayToggle}>
+      <Pressable onPress={() => setPosterCalendar(value => !value)} style={styles.calendarDisplayToggle}>
         <Ionicons name={posterCalendar ? "grid-outline" : "image-outline"} size={15} color={colors.muted} />
         <Text style={styles.calendarDisplayToggleText}>{posterCalendar ? "Compact calendar" : "Poster calendar"}</Text>
-      </Pressable> : null}
+      </Pressable>
       {view === "month" ? <View style={styles.calendarGrid}>
         {["M", "T", "W", "T", "F", "S", "S"].map((day, index) => <Text key={`${day}-${index}`} style={styles.weekday}>{day}</Text>)}
         {cells.map((date, index) => {
@@ -2013,7 +2013,11 @@ function CalendarPanel({ mode, view, month, week, events, onMode, onView, onMont
         const count = eventsByDate.get(date)?.length ?? 0;
         const today = date === currentDate;
         const selected = date === selectedDate;
-        return <Pressable key={date} onPress={() => setSelectedDate(date)} style={[styles.calendarWeekDay, today && styles.calendarWeekDayToday, selected && styles.calendarWeekDaySelected]}><Text style={styles.calendarWeekDayName}>{new Date(`${date}T12:00:00Z`).toLocaleDateString(undefined, { weekday: "short", timeZone: "UTC" })}</Text><Text style={[styles.calendarWeekDayNumber, today && styles.calendarWeekDayNumberToday]}>{Number(date.slice(8, 10))}</Text><Text style={[styles.calendarWeekDayCount, count > 0 && styles.calendarWeekDayCountActive]}>{count || "-"}</Text></Pressable>;
+        const dayEvents = eventsByDate.get(date) ?? [];
+        return <Pressable key={date} onPress={() => setSelectedDate(date)} style={[styles.calendarWeekDay, posterCalendar && styles.calendarWeekDayPosterMode, today && styles.calendarWeekDayToday, selected && styles.calendarWeekDaySelected]}><Text style={styles.calendarWeekDayName}>{new Date(`${date}T12:00:00Z`).toLocaleDateString(undefined, { weekday: "short", timeZone: "UTC" })}</Text><Text style={[styles.calendarWeekDayNumber, today && styles.calendarWeekDayNumberToday]}>{Number(date.slice(8, 10))}</Text><Text style={[styles.calendarWeekDayCount, count > 0 && styles.calendarWeekDayCountActive]}>{count || "-"}</Text>{posterCalendar && count ? <View style={styles.calendarWeekPosterStrip}>{dayEvents.slice(0, 1).map(event => {
+          const thumb = tmdbImage(event.artwork, "w342");
+          return thumb ? <RemoteImage key={event.id} uri={thumb} style={styles.calendarWeekPosterThumb} resizeMode="cover" /> : null;
+        })}{count > 1 ? <Text style={styles.calendarWeekPosterMore}>+{count - 1}</Text> : null}</View> : null}</Pressable>;
       })}</View>}
       {displayedDays.length ? (
         <View style={styles.agenda}>
@@ -5842,6 +5846,7 @@ const styles = StyleSheet.create({
   dayPosterMore: { minWidth: 22, height: 22, borderRadius: 11, overflow: "hidden", backgroundColor: "rgba(0,0,0,0.72)", color: colors.text, textAlign: "center", lineHeight: 22, fontSize: 9, fontWeight: "900" },
   calendarWeekStrip: { marginHorizontal: 18, marginTop: 14, padding: 8, borderRadius: 20, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel, flexDirection: "row", gap: 4 },
   calendarWeekDay: { flex: 1, minWidth: 0, minHeight: 76, paddingVertical: 8, borderRadius: 13, alignItems: "center", justifyContent: "center", gap: 3 },
+  calendarWeekDayPosterMode: { minHeight: 112, paddingBottom: 40 },
   calendarWeekDayToday: { backgroundColor: colors.accentSoft, borderWidth: 1, borderColor: colors.accent },
   calendarWeekDaySelected: { borderWidth: 1, borderColor: colors.accent, backgroundColor: colors.panel2 },
   calendarWeekDayName: { color: colors.muted, fontSize: 10, fontWeight: "900", textTransform: "uppercase" },
@@ -5849,6 +5854,9 @@ const styles = StyleSheet.create({
   calendarWeekDayNumberToday: { color: colors.accent },
   calendarWeekDayCount: { minWidth: 20, height: 20, borderRadius: 10, overflow: "hidden", color: colors.muted, textAlign: "center", lineHeight: 20, fontSize: 10, fontWeight: "900" },
   calendarWeekDayCountActive: { backgroundColor: colors.accent, color: colors.text },
+  calendarWeekPosterStrip: { position: "absolute", left: 4, right: 4, bottom: 5, height: 30, alignItems: "center", justifyContent: "center" },
+  calendarWeekPosterThumb: { width: "100%", height: 30, borderRadius: 5, overflow: "hidden", backgroundColor: colors.panel2 },
+  calendarWeekPosterMore: { position: "absolute", right: 2, bottom: 2, minWidth: 18, height: 18, paddingHorizontal: 3, borderRadius: 9, overflow: "hidden", backgroundColor: "rgba(0,0,0,0.78)", color: colors.text, textAlign: "center", lineHeight: 18, fontSize: 8, fontWeight: "900" },
   calendarWeekEmpty: { minHeight: 48, paddingHorizontal: 12, borderRadius: 12, color: colors.muted, backgroundColor: colors.panel, textAlignVertical: "center", fontSize: 12, fontWeight: "800" },
   agenda: { marginHorizontal: 18, marginTop: 22, gap: 18 },
   agendaDay: { gap: 7 },
