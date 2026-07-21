@@ -141,6 +141,7 @@ type ProfileData = {
   followers: number;
   following: number;
   tracked: number;
+  trackedLibraryTitles: number;
   watchEvents: number;
   screenTimeHours: number;
   historyUniqueTitles: number;
@@ -159,10 +160,10 @@ type ProfileData = {
 };
 
 const blankProgress: ProgressCounts = { planned: 0, watching: 0, completed: 0, paused: 0, dropped: 0, favorites: 0 };
-const blankProfileData: ProfileData = { followers: 0, following: 0, tracked: 0, watchEvents: 0, screenTimeHours: 0, historyUniqueTitles: 0, averageRating: "-", reviewCount: 0, listCount: 0, history: [], reviews: [], favorites: [], lists: [], progressGroups: [], currentStreak: 0, longestStreak: 0, currentlyWatching: [], genreStats: [] };
+const blankProfileData: ProfileData = { followers: 0, following: 0, tracked: 0, trackedLibraryTitles: 0, watchEvents: 0, screenTimeHours: 0, historyUniqueTitles: 0, averageRating: "-", reviewCount: 0, listCount: 0, history: [], reviews: [], favorites: [], lists: [], progressGroups: [], currentStreak: 0, longestStreak: 0, currentlyWatching: [], genreStats: [] };
 const trackedStatusOrder: TrackedStatus[] = ["completed", "watching", "planned", "paused", "dropped"];
 const profileCachePrefix = "movietracker-profile-v1";
-const profileDataCachePrefix = "movietracker-profile-data-v3";
+const profileDataCachePrefix = "movietracker-profile-data-v4";
 const libraryCachePrefix = "movietracker-library-v3";
 const titleDetailCachePrefix = "movietracker-title-detail-v2";
 const episodeNotificationIdsKey = "movietracker-episode-notification-ids-v1";
@@ -1005,9 +1006,10 @@ export default function App() {
         } catch { /* Ignore an outdated profile cache. */ }
       }
     }
+    const trackedLibraryTitlesPromise = loadTrackedLibraryTitleCount(userId).catch(() => 0);
     try {
-      const serverProfile = await fetchMobileProfile(accessToken);
-      const normalized = normalizeProfileDataTimes(serverProfile as ProfileData);
+      const [serverProfile, trackedLibraryTitles] = await Promise.all([fetchMobileProfile(accessToken), trackedLibraryTitlesPromise]);
+      const normalized = normalizeProfileDataTimes({ ...(serverProfile as ProfileData), trackedLibraryTitles });
       setProfileData(normalized);
       profileDataLoadedFor.current = userId;
       profileDataLoadedAt.current = Date.now();
@@ -1140,6 +1142,7 @@ export default function App() {
       followers: followers.count ?? 0,
       following: following.count ?? 0,
       tracked: completedStatusCount,
+      trackedLibraryTitles: await trackedLibraryTitlesPromise,
       watchEvents: watchCount.count ?? 0,
       screenTimeHours: Math.round(screenTimeMinutes / 60),
       historyUniqueTitles: completedStatusCount,
@@ -1274,8 +1277,8 @@ export default function App() {
     if (reason === "list") {
       if (selectedList?.id) setSelectedListFeed(await loadListFeed(selectedList.id, usableSession?.user.id));
       if (usableSession?.user.id && tab === "profile") {
-        const nextLists = await loadUserLists(usableSession.user.id);
-        setProfileData(current => ({ ...current, lists: nextLists, listCount: nextLists.length }));
+        const [nextLists, trackedLibraryTitles] = await Promise.all([loadUserLists(usableSession.user.id), loadTrackedLibraryTitleCount(usableSession.user.id).catch(() => null)]);
+        setProfileData(current => ({ ...current, lists: nextLists, listCount: nextLists.length, trackedLibraryTitles: trackedLibraryTitles ?? current.trackedLibraryTitles }));
       }
       if (tab === "library" && libraryFilter === "lists" && usableSession?.user.id) {
         setLibraryLists(await loadUserLists(usableSession.user.id));
@@ -1720,6 +1723,7 @@ export default function App() {
                 }} />
                 <ProfileStatBand data={profileData} onNavigate={target => {
                   if (target === "completed") { setLibraryFilter("completed"); goTab("library"); }
+                  if (target === "library") { setLibraryFilter("all"); goTab("library"); }
                   if (target === "history") openProfileView("history");
                   if (target === "reviews") openProfileView("reviews");
                   if (target === "lists") { setLibraryFilter("lists"); goTab("library"); }
@@ -2096,13 +2100,14 @@ function NotificationScreen({ session, onBack, onOpenHref }: { session: Session;
   </View>;
 }
 
-function ProfileStatBand({ data, onNavigate }: { data: ProfileData; onNavigate?: (target: "completed" | "history" | "reviews" | "lists") => void }) {
+function ProfileStatBand({ data, onNavigate }: { data: ProfileData; onNavigate?: (target: "completed" | "library" | "history" | "reviews" | "lists") => void }) {
   const stats = [
     { icon: "film-outline" as const, value: data.tracked, label: "unique watched titles", shortLabel: "titles", target: "completed" as const },
     { icon: "time-outline" as const, value: data.watchEvents, label: "watch events", shortLabel: "watches", target: "history" as const },
     { icon: "speedometer-outline" as const, value: data.averageRating, label: "average rating", shortLabel: "rating", target: "reviews" as const },
     { icon: "chatbox-outline" as const, value: data.reviewCount, label: "reviews", shortLabel: "reviews", target: "reviews" as const },
-    { icon: "list-outline" as const, value: data.listCount, label: "lists", shortLabel: "lists", target: "lists" as const }
+    { icon: "list-outline" as const, value: data.listCount, label: "lists", shortLabel: "lists", target: "lists" as const },
+    { icon: "bookmark-outline" as const, value: data.trackedLibraryTitles, label: "unique titles across lists, watchlist, and favorites", shortLabel: "tracked", target: "library" as const }
   ];
   return (
     <View style={styles.profileStats}>
@@ -5247,6 +5252,37 @@ async function enrichShowRuns(items: MediaSummary[], accessToken?: string, limit
   });
 }
 
+async function loadPagedRows<T>(loadPage: (from: number, to: number) => Promise<{ data: T[] | null; error: unknown }>): Promise<T[]> {
+  const pageSize = 500;
+  const rows: T[] = [];
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await loadPage(from, from + pageSize - 1);
+    if (error) throw error;
+    const page = data ?? [];
+    rows.push(...page);
+    if (page.length < pageSize) return rows;
+  }
+}
+
+async function loadTrackedLibraryTitleCount(userId: string): Promise<number> {
+  const client = supabase;
+  if (!client) return 0;
+  const [watchlistRows, favoriteRows, listRows] = await Promise.all([
+    loadPagedRows<{ media_id: number | null }>(async (from, to) => client.from("progress").select("media_id").eq("user_id", userId).eq("status", "planned").range(from, to)),
+    loadPagedRows<{ media_id: number | null }>(async (from, to) => client.from("favorites").select("media_id").eq("user_id", userId).range(from, to)),
+    loadPagedRows<{ id: string }>(async (from, to) => client.from("lists").select("id").eq("user_id", userId).range(from, to))
+  ]);
+  const listIds = listRows.map(row => row.id);
+  const listIdGroups = Array.from({ length: Math.ceil(listIds.length / 50) }, (_, index) => listIds.slice(index * 50, index * 50 + 50));
+  const listItemRows = (await Promise.all(listIdGroups.map(ids => loadPagedRows<{ media_id: number | null }>(async (from, to) => client.from("list_items").select("media_id").in("list_id", ids).range(from, to))))).flat();
+  const mediaIds = new Set<number>();
+  [...watchlistRows, ...favoriteRows, ...listItemRows].forEach(row => {
+    const mediaId = Number(row.media_id);
+    if (Number.isInteger(mediaId) && mediaId > 0) mediaIds.add(mediaId);
+  });
+  return mediaIds.size;
+}
+
 async function loadUserLists(userId: string): Promise<UserList[]> {
   const client = supabase;
   if (!client) return [];
@@ -5762,7 +5798,7 @@ function normalizeHistoryItemTime(item: HistoryItem): HistoryItem {
 }
 
 function normalizeProfileDataTimes(data: ProfileData): ProfileData {
-  return { ...data, history: (data.history ?? []).map(normalizeHistoryItemTime) };
+  return { ...data, trackedLibraryTitles: Number(data.trackedLibraryTitles ?? 0), history: (data.history ?? []).map(normalizeHistoryItemTime) };
 }
 
 function formatCalendarDate(value: string) {
@@ -5868,8 +5904,8 @@ const styles = StyleSheet.create({
   agendaCopy: { flex: 1, minWidth: 0 },
   agendaTitle: { color: colors.text, fontSize: 15, fontWeight: "900" },
   agendaSub: { color: colors.muted, fontSize: 13, marginTop: 4 },
-  profileStats: { marginTop: 10, marginHorizontal: 18, paddingVertical: 10, flexDirection: "row", alignItems: "center" },
-  profileStat: { width: "20%", minWidth: 0, minHeight: 62, paddingHorizontal: 2, paddingVertical: 5, alignItems: "center", justifyContent: "center", gap: 3 },
+  profileStats: { marginTop: 10, marginHorizontal: 18, paddingTop: 10, paddingBottom: 14, borderBottomWidth: 1, borderBottomColor: colors.line, flexDirection: "row", flexWrap: "wrap", alignItems: "center" },
+  profileStat: { width: "33.333%", minWidth: 0, minHeight: 62, paddingHorizontal: 2, paddingVertical: 5, alignItems: "center", justifyContent: "center", gap: 3 },
   profileStatPressed: { opacity: .55 },
   profileStatIcon: { width: 22, height: 20, alignItems: "center", justifyContent: "center" },
   profileStatCopy: { width: "100%", minWidth: 0, alignItems: "center" },
