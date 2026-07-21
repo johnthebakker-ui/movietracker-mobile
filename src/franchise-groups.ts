@@ -1,6 +1,6 @@
 import type { MediaSummary } from "./types";
 
-type FranchiseMatch = { name: string; explicit: boolean };
+type FranchiseMatch = { name: string; explicit: boolean; source: "manual" | "universe" | "tmdb" };
 
 const universeRules: ReadonlyArray<readonly [RegExp, string]> = [
   [/\bharry potter\b/i, "Harry Potter Collection"], [/\bplanet of the apes\b/i, "Planet of the Apes Collection"],
@@ -39,25 +39,25 @@ const universeRules: ReadonlyArray<readonly [RegExp, string]> = [
 
 export function listFranchiseName(item: MediaSummary): FranchiseMatch | null {
   const manual = item.franchiseGroup?.trim();
-  if (manual) return { name: manual, explicit: true };
+  if (manual) return { name: manual, explicit: true, source: "manual" };
   const title = item.title.toLowerCase().replace(/[-_]/g, " ");
   const match = universeRules.find(([pattern]) => pattern.test(title));
-  if (match) return { name: match[1], explicit: false };
-  return item.collectionName ? { name: item.collectionName, explicit: false } : null;
+  if (match) return { name: match[1], explicit: false, source: "universe" };
+  return item.collectionName ? { name: item.collectionName, explicit: false, source: "tmdb" } : null;
 }
 
 export function groupFranchises(items: MediaSummary[]) {
   const groups = new Map<string, MediaSummary[]>();
-  const explicit = new Set<string>();
+  const retained = new Set<string>();
   const other: MediaSummary[] = [];
   items.forEach(item => {
     const match = listFranchiseName(item);
     if (!match) return void other.push(item);
-    if (match.explicit) explicit.add(match.name);
+    if (match.explicit || match.source === "tmdb") retained.add(match.name);
     groups.set(match.name, [...(groups.get(match.name) ?? []), item]);
   });
   for (const [name, group] of groups) {
-    if (group.length < 2 && !explicit.has(name)) {
+    if (group.length < 2 && !retained.has(name)) {
       groups.delete(name);
       other.push(...group);
     }

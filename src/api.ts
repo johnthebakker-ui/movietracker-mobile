@@ -244,6 +244,10 @@ export async function fetchMobileTitle(kind: MediaSummary["kind"], id: number, t
   return request<MobileTitlePayload>(`/api/mobile/title/${kind}/${id}${query}`, token);
 }
 
+export async function fetchListFranchiseCollections(listId: string, token: string) {
+  return request<{ collections: Array<{ tmdbId: number; collectionTmdbId: number; collectionName: string }> }>(`/api/mobile/lists/${encodeURIComponent(listId)}/franchises`, token);
+}
+
 export async function fetchMobilePerson(id: number, token?: string) {
   return request<MobileEntityPayload>(`/api/mobile/person/${id}`, token);
 }

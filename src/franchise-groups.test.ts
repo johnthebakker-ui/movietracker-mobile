@@ -16,14 +16,23 @@ describe("mobile franchise grouping contracts", () => {
 
   it("keeps manual groups authoritative and retains manual singletons", () => {
     const manual = item("The Conjuring", { franchiseGroup: "My horror order", collectionName: "The Conjuring Collection" });
-    expect(listFranchiseName(manual)).toEqual({ name: "My horror order", explicit: true });
+    expect(listFranchiseName(manual)).toEqual({ name: "My horror order", explicit: true, source: "manual" });
     expect(groupFranchises([manual]).get("My horror order")).toEqual([manual]);
   });
 
-  it("uses TMDB collection fallback and moves automatic singletons to Other", () => {
+  it("uses TMDB collection fallback and retains canonical singleton franchises", () => {
     const fallback = item("Unmatched sequel", { collectionName: "Example Collection" });
-    expect(listFranchiseName(fallback)).toEqual({ name: "Example Collection", explicit: false });
-    expect(groupFranchises([fallback]).get("Other titles")).toEqual([fallback]);
+    expect(listFranchiseName(fallback)).toEqual({ name: "Example Collection", explicit: false, source: "tmdb" });
+    expect(groupFranchises([fallback]).get("Example Collection")).toEqual([fallback]);
+  });
+
+  it.each([
+    ["The Chronicles of Narnia: Prince Caspian", "The Chronicles of Narnia Collection"],
+    ["Casino Royale", "James Bond Collection"],
+    ["The Hangover", "The Hangover Collection"],
+    ["Dumb and Dumber", "Dumb and Dumber Collection"]
+  ])("uses canonical collection data rather than a title-specific rule for %s", (title, collectionName) => {
+    expect(listFranchiseName(item(title, { collectionName }))).toMatchObject({ name: collectionName, source: "tmdb" });
   });
 
   it.each([

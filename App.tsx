@@ -33,7 +33,7 @@ import {
 } from "react-native";
 
 import { AppHeader, BottomNav, DiscoverFiltersCard, Hero, PickerSheet, RecommendationFiltersCard, RemoteImage, resolveRemoteImageUri, SectionTitle, TitleCard, type PickerAnchor } from "./src/components";
-import { deleteMobileHistoryEvent, deleteMobileNotifications, disconnectTrakt, fetchDiscover, fetchEpisodeNotificationSchedule, fetchMobileCompany, fetchMobileEpisode, fetchMobileHistory, fetchMobilePerson, fetchMobileProfile, fetchMobileSeason, fetchMobileTitle, fetchRecommendations, fetchSearch, fetchTonight, fetchTraktStatus, fetchUpNext, fetchWebsiteEntityMetadata, fetchWebsiteHome, fetchWebsiteTitleMetadata, fetchWrapped, fetchWrappedShare, sendTestNotification, refreshRecommendations, setNotInterested, startTraktConnect, syncTrakt, type MobileTraktStatus } from "./src/api";
+import { deleteMobileHistoryEvent, deleteMobileNotifications, disconnectTrakt, fetchDiscover, fetchEpisodeNotificationSchedule, fetchListFranchiseCollections, fetchMobileCompany, fetchMobileEpisode, fetchMobileHistory, fetchMobilePerson, fetchMobileProfile, fetchMobileSeason, fetchMobileTitle, fetchRecommendations, fetchSearch, fetchTonight, fetchTraktStatus, fetchUpNext, fetchWebsiteEntityMetadata, fetchWebsiteHome, fetchWebsiteTitleMetadata, fetchWrapped, fetchWrappedShare, sendTestNotification, refreshRecommendations, setNotInterested, startTraktConnect, syncTrakt, type MobileTraktStatus } from "./src/api";
 import { API_URL, communityRatingLabel, countries, excludeGenreOptions, genres, HAS_SUPABASE, titleYear, tmdbImage, userRatingLabel } from "./src/config";
 import { groupFranchises, listFranchiseName } from "./src/franchise-groups";
 import { supabase } from "./src/supabase";
@@ -354,6 +354,7 @@ export default function App() {
   const [mfaBusy, setMfaBusy] = useState(false);
   const [authVerifying, setAuthVerifying] = useState(false);
   const listRef = useRef<FlatList<MediaSummary>>(null);
+  const selectedListIdRef = useRef<string | null>(null);
   const profileDataLoadedFor = useRef<string | null>(null);
   const profileDataLoadedAt = useRef(0);
   const homeLoadedKey = useRef<string | null>(null);
@@ -393,6 +394,7 @@ export default function App() {
     setSelectedEpisode(null);
     setSelectedSeason(null);
     setSelectedSeriesEpisodes(null);
+    selectedListIdRef.current = null;
     setSelectedList(null);
     setSearchMode(false);
     setFeatureView(null);
@@ -497,6 +499,7 @@ export default function App() {
     setSelectedSeason(null);
     setSelectedSeriesEpisodes(null);
     setSelectedEntity(null);
+    selectedListIdRef.current = null;
     setSelectedList(null);
     setSearchMode(false);
     setFeatureView(null);
@@ -512,6 +515,7 @@ export default function App() {
     setSelectedSeason(null);
     setSelectedSeriesEpisodes(null);
     setSelectedEntity(null);
+    selectedListIdRef.current = null;
     setSelectedList(null);
     setSearchMode(false);
     setFeatureView(null);
@@ -821,18 +825,25 @@ export default function App() {
 
   const openList = useCallback(async (list: UserList) => {
     if (!supabase) return;
+    selectedListIdRef.current = list.id;
     setSelectedList(list);
     setListGroup("none");
     setListSort("title_asc");
     setLoading(true);
     try {
-      setSelectedListFeed(await loadListFeed(list.id, usableSession?.user.id));
+      const feed = await loadListFeed(list.id, usableSession?.user.id);
+      setSelectedListFeed(feed);
+      if (usableSession?.access_token) {
+        void hydrateListFranchiseCollections(list.id, feed, usableSession.access_token).then(hydrated => {
+          if (selectedListIdRef.current === list.id) setSelectedListFeed(hydrated);
+        }).catch(() => undefined);
+      }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Could not open this list.");
     } finally {
       setLoading(false);
     }
-  }, [usableSession?.user.id]);
+  }, [usableSession?.access_token, usableSession?.user.id]);
 
   const loadLibrary = useCallback(async (force = false) => {
     if (!usableSession?.user.id || !supabase) {
@@ -1238,7 +1249,7 @@ export default function App() {
       if (selectedSeason) { setSelectedSeason(null); return true; }
       if (selectedSeriesEpisodes) { setSelectedSeriesEpisodes(null); return true; }
       if (selected) { closeSelected(); return true; }
-      if (selectedList) { setSelectedList(null); setSelectedListFeed(emptyFeed); return true; }
+      if (selectedList) { selectedListIdRef.current = null; setSelectedList(null); setSelectedListFeed(emptyFeed); return true; }
       if (searchMode) { setSearchMode(false); return true; }
       if (tab === "profile" && profileView !== "profile") { openProfileView("profile"); return true; }
       if (tab !== "home") { goTab("home"); return true; }
@@ -1592,7 +1603,7 @@ export default function App() {
     if (selectedList) {
       return (
         <>
-          <AppHeader session={headerSession} hasUnreadNotifications={headerUnread} onUnreadChange={setHeaderUnread} onHome={() => goTab("home")} onSearch={() => setSearchMode(true)} onNotifications={() => openProfileView("notifications")} onProfile={() => { setSelectedList(null); openProfileView("profile"); }} />
+          <AppHeader session={headerSession} hasUnreadNotifications={headerUnread} onUnreadChange={setHeaderUnread} onHome={() => goTab("home")} onSearch={() => setSearchMode(true)} onNotifications={() => openProfileView("notifications")} onProfile={() => { selectedListIdRef.current = null; setSelectedList(null); openProfileView("profile"); }} />
           <ListDetailHeader
             list={selectedList}
             loadedCount={selectedListFeed.items.length}
@@ -1601,6 +1612,7 @@ export default function App() {
             onSort={() => setPicker({ title: "Sort titles", value: listSort, options: listSortOptions, onPick: value => { setListSort(value as ListSort); setListGroup("none"); } })}
             onGroupBy={value => { setListGroup(value); setListSort(value === "collections" ? "none" : "list_order"); }}
             onBack={() => {
+              selectedListIdRef.current = null;
               setSelectedList(null);
               setSelectedListFeed(emptyFeed);
               setListGroup("none");
@@ -3209,19 +3221,31 @@ function MovieActionSheet({ item, visible, session, currentList, franchiseGroups
     ]);
   }
 
-  async function saveFranchiseGroup() {
+  async function applyFranchiseGroup(nextGroup: string) {
     const mediaId = item?.listMediaId ?? await ensureActionMediaId();
     if (!supabase || !currentList?.id || !mediaId) return Alert.alert("Unavailable", "Could not prepare this title yet. Try again in a second.");
-    const group = (newManualGroup || manualGroup).trim();
+    const group = nextGroup.trim();
+    const previousGroup = manualGroup;
+    setManualGroup(group);
+    setNewManualGroup("");
     setBusy(true);
     try {
-      await supabase.from("list_items").update({ franchise_group: group || null }).eq("list_id", currentList.id).eq("media_id", mediaId);
-      setManualGroup(group);
-      setNewManualGroup("");
+      const { data: updated, error } = await supabase.from("list_items").update({ franchise_group: group || null }).eq("list_id", currentList.id).eq("media_id", mediaId).select("franchise_group").maybeSingle();
+      if (error) throw error;
+      if (!updated) throw new Error("This title is no longer in the list.");
       await onChanged("list");
+    } catch (reason) {
+      setManualGroup(previousGroup);
+      Alert.alert("Could not update franchise group", reason instanceof Error ? reason.message : "Please try again.");
     } finally {
       setBusy(false);
     }
+  }
+
+  async function saveFranchiseGroup() {
+    const group = newManualGroup.trim();
+    if (!group) return Alert.alert("Name the group", "Enter a franchise group name first.");
+    await applyFranchiseGroup(group);
   }
 
   async function saveActionWatchLog(values: WatchLogValues) {
@@ -3283,9 +3307,9 @@ function MovieActionSheet({ item, visible, session, currentList, franchiseGroups
               <View style={styles.currentListSection}>
                 <Text style={styles.actionSectionLabel}>Franchise group</Text>
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.franchiseGroupChips}>
-                  <Pressable disabled={busy} onPress={() => setManualGroup("")} style={[styles.groupChip, !manualGroup && styles.groupChipActive]}><Text style={[styles.groupChipText, !manualGroup && styles.groupChipTextActive]}>Auto / none</Text></Pressable>
+                  <Pressable disabled={busy} onPress={() => void applyFranchiseGroup("")} style={[styles.groupChip, !manualGroup && styles.groupChipActive]}><Text style={[styles.groupChipText, !manualGroup && styles.groupChipTextActive]}>Auto / none</Text></Pressable>
                   {franchiseGroups.map(group => (
-                    <Pressable disabled={busy} key={group} onPress={() => setManualGroup(group)} style={[styles.groupChip, manualGroup === group && styles.groupChipActive]}><Text style={[styles.groupChipText, manualGroup === group && styles.groupChipTextActive]} numberOfLines={1}>{group}</Text></Pressable>
+                    <Pressable disabled={busy} key={group} onPress={() => void applyFranchiseGroup(group)} style={[styles.groupChip, manualGroup === group && styles.groupChipActive]}><Text style={[styles.groupChipText, manualGroup === group && styles.groupChipTextActive]} numberOfLines={1}>{group}</Text></Pressable>
                   ))}
                 </ScrollView>
                 <View style={styles.franchiseGroupCreateRow}>
@@ -5353,6 +5377,20 @@ async function scheduleEpisodeNotificationsInternal(userId: string, accessToken?
   }
   await AsyncStorage.setItem(episodeNotificationIdsKey, JSON.stringify(scheduledIds));
   await AsyncStorage.setItem(episodeNotificationReleaseKeysKey, JSON.stringify(storedReleaseKeys));
+}
+
+async function hydrateListFranchiseCollections(listId: string, feed: FeedResult, accessToken: string): Promise<FeedResult> {
+  if (!feed.items.some(item => item.kind === "movie" && !item.collectionName)) return feed;
+  const payload = await fetchListFranchiseCollections(listId, accessToken);
+  const discovered = new Map(payload.collections.map(collection => [collection.tmdbId, collection]));
+  if (!discovered.size) return feed;
+  return {
+    ...feed,
+    items: feed.items.map(item => {
+      const collection = discovered.get(item.id);
+      return collection ? { ...item, collectionTmdbId: collection.collectionTmdbId, collectionName: collection.collectionName } : item;
+    })
+  };
 }
 
 async function loadListFeed(listId: string, userId?: string | null): Promise<FeedResult> {
