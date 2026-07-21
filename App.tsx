@@ -2103,8 +2103,11 @@ function ProfileStatBand({ data, onNavigate }: { data: ProfileData; onNavigate?:
   return (
     <View style={styles.profileStats}>
       {stats.map((stat, index) => (
-        <Pressable key={stat.label} onPress={() => onNavigate?.(stat.target)} style={[styles.profileStat, index % 2 === 0 && styles.profileStatRight, index < 4 && styles.profileStatBottom]}>
-          <Ionicons name={stat.icon} size={19} color={colors.accent} />
+        <Pressable accessibilityRole="button" accessibilityLabel={`${stat.value} ${stat.label}`} key={stat.label} onPress={() => onNavigate?.(stat.target)} style={({ pressed }) => [styles.profileStat, index === stats.length - 1 && styles.profileStatWide, pressed && styles.profileStatPressed]}>
+          <View style={styles.profileStatHeader}>
+            <View style={styles.profileStatIcon}><Ionicons name={stat.icon} size={20} color={colors.accent} /></View>
+            <Ionicons name="arrow-forward" size={16} color={colors.muted} />
+          </View>
           <Text style={styles.profileStatValue}>{stat.value}</Text>
           <Text style={styles.profileStatLabel}>{stat.label}</Text>
         </Pressable>
@@ -5847,12 +5850,14 @@ const styles = StyleSheet.create({
   agendaCopy: { flex: 1, minWidth: 0 },
   agendaTitle: { color: colors.text, fontSize: 15, fontWeight: "900" },
   agendaSub: { color: colors.muted, fontSize: 13, marginTop: 4 },
-  profileStats: { marginTop: 18, marginHorizontal: 18, borderBottomWidth: 1, borderColor: colors.line, flexDirection: "row", flexWrap: "wrap" },
-  profileStat: { width: "50%", minHeight: 76, paddingVertical: 13, paddingHorizontal: 13, flexDirection: "row", alignItems: "center", gap: 9, borderColor: colors.line },
-  profileStatRight: { borderRightWidth: 1 },
-  profileStatBottom: { borderBottomWidth: 1 },
-  profileStatValue: { color: colors.text, fontFamily: "serif", fontSize: 25, fontWeight: "700" },
-  profileStatLabel: { color: colors.muted, flex: 1, fontSize: 11, fontWeight: "800" },
+  profileStats: { marginTop: 20, marginHorizontal: 18, flexDirection: "row", flexWrap: "wrap", gap: 10 },
+  profileStat: { flexBasis: "47%", flexGrow: 1, minHeight: 128, padding: 15, borderRadius: 19, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel, shadowColor: "#000", shadowOpacity: .18, shadowRadius: 8, shadowOffset: { width: 0, height: 4 }, elevation: 2 },
+  profileStatWide: { flexBasis: "100%", minHeight: 116 },
+  profileStatPressed: { opacity: .72, transform: [{ scale: .985 }] },
+  profileStatHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 13 },
+  profileStatIcon: { width: 36, height: 36, borderRadius: 12, backgroundColor: colors.accentSoft, alignItems: "center", justifyContent: "center" },
+  profileStatValue: { color: colors.text, fontFamily: "serif", fontSize: 34, lineHeight: 38, fontWeight: "700" },
+  profileStatLabel: { color: colors.muted, fontSize: 12, lineHeight: 17, fontWeight: "800", marginTop: 3 },
   profileNavOuter: { marginHorizontal: 18, borderTopWidth: 1, borderBottomWidth: 1, borderColor: colors.line },
   profileNav: { flexGrow: 1, paddingVertical: 10, paddingHorizontal: 0, alignItems: "center", justifyContent: "space-evenly" },
   profileNavPill: { flex: 1, minHeight: 30, paddingHorizontal: 4, alignItems: "center", justifyContent: "center" },
