@@ -2094,25 +2094,36 @@ function NotificationScreen({ session, onBack, onOpenHref }: { session: Session;
 
 function ProfileStatBand({ data, onNavigate }: { data: ProfileData; onNavigate?: (target: "completed" | "history" | "reviews" | "lists") => void }) {
   const stats = [
-    { icon: "film-outline" as const, value: data.tracked, label: "unique watched titles", target: "completed" as const },
-    { icon: "time-outline" as const, value: data.watchEvents, label: "watch events", target: "history" as const },
-    { icon: "speedometer-outline" as const, value: data.averageRating, label: "average rating", target: "reviews" as const },
-    { icon: "chatbox-outline" as const, value: data.reviewCount, label: "reviews", target: "reviews" as const },
-    { icon: "list-outline" as const, value: data.listCount, label: "lists", target: "lists" as const }
+    { icon: "film-outline" as const, value: data.tracked, label: "unique watched titles", shortLabel: "titles", target: "completed" as const },
+    { icon: "time-outline" as const, value: data.watchEvents, label: "watch events", shortLabel: "watches", target: "history" as const },
+    { icon: "speedometer-outline" as const, value: data.averageRating, label: "average rating", shortLabel: "rating", target: "reviews" as const },
+    { icon: "chatbox-outline" as const, value: data.reviewCount, label: "reviews", shortLabel: "reviews", target: "reviews" as const },
+    { icon: "list-outline" as const, value: data.listCount, label: "lists", shortLabel: "lists", target: "lists" as const }
   ];
   return (
     <View style={styles.profileStats}>
-      {stats.map((stat, index) => (
-        <Pressable accessibilityRole="button" accessibilityLabel={`${stat.value} ${stat.label}`} key={stat.label} onPress={() => onNavigate?.(stat.target)} style={({ pressed }) => [styles.profileStat, index >= 3 && styles.profileStatBottomRow, pressed && styles.profileStatPressed]}>
+      {stats.map(stat => (
+        <Pressable accessibilityRole="button" accessibilityLabel={`${stat.value} ${stat.label}`} key={stat.label} onPress={() => onNavigate?.(stat.target)} style={({ pressed }) => [styles.profileStat, pressed && styles.profileStatPressed]}>
           <View style={styles.profileStatIcon}><Ionicons name={stat.icon} size={18} color={colors.accent} /></View>
           <View style={styles.profileStatCopy}>
-            <Text style={styles.profileStatValue}>{stat.value}</Text>
-            <Text style={styles.profileStatLabel} numberOfLines={2}>{stat.label}</Text>
+            <Text style={styles.profileStatValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={.65}>{compactProfileStatValue(stat.value)}</Text>
+            <Text style={styles.profileStatLabel} numberOfLines={1}>{stat.shortLabel}</Text>
           </View>
         </Pressable>
       ))}
     </View>
   );
+}
+
+function compactProfileStatValue(value: number | string) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return String(value);
+  const absolute = Math.abs(numeric);
+  const units = [[1_000_000_000_000, "T"], [1_000_000_000, "B"], [1_000_000, "M"], [1_000, "K"]] as const;
+  const unit = units.find(([threshold]) => absolute >= threshold);
+  if (!unit) return String(value);
+  const scaled = numeric / unit[0];
+  return `${Number(scaled.toFixed(Math.abs(scaled) >= 100 ? 0 : 1))}${unit[1]}`;
 }
 
 function ProfileNav({ onChange }: { onChange: (value: ProfilePanel) => void }) {
@@ -5849,14 +5860,13 @@ const styles = StyleSheet.create({
   agendaCopy: { flex: 1, minWidth: 0 },
   agendaTitle: { color: colors.text, fontSize: 15, fontWeight: "900" },
   agendaSub: { color: colors.muted, fontSize: 13, marginTop: 4 },
-  profileStats: { marginTop: 10, marginHorizontal: 18, paddingVertical: 10, flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", rowGap: 6 },
-  profileStat: { flexBasis: "31%", minHeight: 58, paddingHorizontal: 4, paddingVertical: 6, flexDirection: "row", alignItems: "center", gap: 7 },
-  profileStatBottomRow: { flexBasis: "48%" },
+  profileStats: { marginTop: 10, marginHorizontal: 18, paddingVertical: 10, flexDirection: "row", alignItems: "center" },
+  profileStat: { width: "20%", minWidth: 0, minHeight: 62, paddingHorizontal: 2, paddingVertical: 5, alignItems: "center", justifyContent: "center", gap: 3 },
   profileStatPressed: { opacity: .55 },
-  profileStatIcon: { width: 24, height: 24, alignItems: "center", justifyContent: "center" },
-  profileStatCopy: { flex: 1, minWidth: 0 },
-  profileStatValue: { color: colors.text, fontFamily: "serif", fontSize: 23, lineHeight: 25, fontWeight: "700" },
-  profileStatLabel: { color: colors.muted, fontSize: 9, lineHeight: 11, fontWeight: "800", marginTop: 1 },
+  profileStatIcon: { width: 22, height: 20, alignItems: "center", justifyContent: "center" },
+  profileStatCopy: { width: "100%", minWidth: 0, alignItems: "center" },
+  profileStatValue: { width: "100%", color: colors.text, fontFamily: "serif", fontSize: 22, lineHeight: 24, fontWeight: "700", textAlign: "center" },
+  profileStatLabel: { color: colors.muted, fontSize: 9, lineHeight: 11, fontWeight: "800", marginTop: 1, textAlign: "center" },
   profileNavOuter: { marginHorizontal: 18, borderTopWidth: 1, borderBottomWidth: 1, borderColor: colors.line },
   profileNav: { flexGrow: 1, paddingVertical: 10, paddingHorizontal: 0, alignItems: "center", justifyContent: "space-evenly" },
   profileNavPill: { flex: 1, minHeight: 30, paddingHorizontal: 4, alignItems: "center", justifyContent: "center" },
