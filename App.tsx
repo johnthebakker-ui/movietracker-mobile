@@ -36,6 +36,7 @@ import { AppHeader, BottomNav, DiscoverFiltersCard, Hero, PickerSheet, Recommend
 import { deleteMobileHistoryEvent, deleteMobileNotifications, disconnectTrakt, fetchDiscover, fetchEpisodeNotificationSchedule, fetchListFranchiseCollections, fetchMobileCompany, fetchMobileEpisode, fetchMobileHistory, fetchMobilePerson, fetchMobileProfile, fetchMobileReviews, fetchMobileSeason, fetchMobileTitle, fetchRecommendations, fetchSearch, fetchTonight, fetchTraktStatus, fetchUpNext, fetchWebsiteEntityMetadata, fetchWebsiteHome, fetchWebsiteTitleMetadata, fetchWrapped, fetchWrappedShare, sendTestNotification, refreshRecommendations, setNotInterested, startTraktConnect, syncTrakt, type MobileTraktStatus } from "./src/api";
 import { API_URL, communityRatingLabel, countries, excludeGenreOptions, genres, HAS_SUPABASE, titleYear, tmdbImage, userRatingLabel } from "./src/config";
 import { groupFranchises, listFranchiseName, NO_FRANCHISE_GROUP } from "./src/franchise-groups";
+import { filterByMediaKind, type MediaKindFilter } from "./src/media-kind-filter";
 import { compactProfileStatValue } from "./src/profile-stats";
 import { supabase } from "./src/supabase";
 import { reportError } from "./src/telemetry";
@@ -312,6 +313,7 @@ export default function App() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [profileData, setProfileData] = useState<ProfileData>(blankProfileData);
   const [libraryFilter, setLibraryFilter] = useState<LibraryFilter>("all");
+  const [libraryKindFilter, setLibraryKindFilter] = useState<MediaKindFilter>("both");
   const [listGroup, setListGroup] = useState<ListGroup>("none");
   const [libraryLists, setLibraryLists] = useState<UserList[]>([]);
   const [librarySavedTitleCount, setLibrarySavedTitleCount] = useState<number | null>(null);
@@ -1600,7 +1602,9 @@ export default function App() {
   }
 
   const selectedListFranchiseGroups = useMemo(() => availableListFranchiseGroups(selectedListFeed.items), [selectedListFeed.items]);
-  const sortedSelectedListItems = useMemo(() => sortListItems(selectedListFeed.items, listSort), [listSort, selectedListFeed.items]);
+  const visibleSelectedListItems = useMemo(() => filterByMediaKind(selectedListFeed.items, libraryKindFilter, item => item.kind), [libraryKindFilter, selectedListFeed.items]);
+  const sortedSelectedListItems = useMemo(() => sortListItems(visibleSelectedListItems, listSort), [listSort, visibleSelectedListItems]);
+  const visibleActiveFeedItems = useMemo(() => tab === "library" && libraryFilter !== "favorites" && libraryFilter !== "lists" ? filterByMediaKind(activeFeed.items, libraryKindFilter, item => item.kind) : activeFeed.items, [activeFeed.items, libraryFilter, libraryKindFilter, tab]);
 
   function renderHeader() {
     if (featureView === "tonight") {
@@ -1628,8 +1632,10 @@ export default function App() {
             loadedCount={selectedListFeed.items.length}
             sort={listSort}
             groupBy={listGroup}
+            kindFilter={libraryKindFilter}
             onSort={() => setPicker({ title: "Sort titles", value: listSort, options: listSortOptions, onPick: value => { setListSort(value as ListSort); setListGroup("none"); } })}
             onGroupBy={value => { setListGroup(value); setListSort(value === "collections" ? "none" : "list_order"); }}
+            onKindFilter={setLibraryKindFilter}
             onBack={() => {
               selectedListIdRef.current = null;
               setSelectedList(null);
@@ -1640,7 +1646,7 @@ export default function App() {
               setProfileView("profile");
               goTab("library");
             }} />
-          {listGroup === "collections" ? <GroupedListContent groups={groupedListItems(selectedListFeed.items, listGroup)} onOpen={openItem} onMenu={setActionItem} /> : null}
+          {listGroup === "collections" ? visibleSelectedListItems.length ? <GroupedListContent groups={groupedListItems(visibleSelectedListItems, listGroup)} onOpen={openItem} onMenu={setActionItem} /> : <EmptyPanel title={`No ${libraryKindFilter === "movie" ? "movies" : "shows"} in this list`} body="Choose Both to see every title without changing the list." /> : null}
         </>
       );
     }
@@ -1692,6 +1698,7 @@ export default function App() {
                 {libraryFilter === "all" ? <ProfileDestinationTotal icon="bookmark-outline" value={librarySavedTitleCount ?? (profileData.trackedLibraryTitles || "…")} label="unique saved titles" detail="Across your watchlist, favorites, and custom lists" /> : null}
                 {libraryFilter === "lists" ? <ProfileDestinationTotal icon="list-outline" value={libraryListCount ?? (profileData.listCount || "…")} label="custom lists" detail="Every list you created" /> : null}
                 <LibraryFilters value={libraryFilter} onChange={setLibraryFilter} />
+                {libraryFilter !== "favorites" && libraryFilter !== "lists" ? <MediaKindFilterControl value={libraryKindFilter} onChange={setLibraryKindFilter} /> : null}
                 {libraryFilter === "lists" ? <ListGrid lists={libraryLists} onOpen={openList} /> : null}
               </>
             ) : (
@@ -1816,11 +1823,11 @@ export default function App() {
         ) : (
           <FlatList
             ref={listRef}
-            data={selectedList && listGroup === "none" ? sortedSelectedListItems : selectedList ? [] : activeFeed.items}
+            data={selectedList && listGroup === "none" ? sortedSelectedListItems : selectedList ? [] : visibleActiveFeedItems}
             keyExtractor={(item, index) => `${item.kind}-${item.id}-${item.reason ?? index}`}
             numColumns={2}
             ListHeaderComponent={listHeader}
-            ListEmptyComponent={!loading && !featureView ? (selectedList && listGroup === "none" ? <EmptyPanel title="No titles in this list yet" body="Add titles from search, discovery, or a title page." /> : !selectedList && tab !== "home" && tab !== "calendar" && !(tab === "library" && libraryFilter === "lists" && !selectedList) && !(tab === "profile" && (profileView !== "recommendations" || !usableSession || mfa.required)) ? <EmptyPanel title="Nothing loaded yet" body={searchMode ? "Search for a title, person, or keyword." : emptyText(tab, Boolean(usableSession))} /> : null) : null}
+            ListEmptyComponent={!loading && !featureView ? (selectedList && listGroup === "none" ? <EmptyPanel title={libraryKindFilter === "both" ? "No titles in this list yet" : `No ${libraryKindFilter === "movie" ? "movies" : "shows"} in this list`} body={libraryKindFilter === "both" ? "Add titles from search, discovery, or a title page." : "Choose Both to see every title without changing the list."} /> : !selectedList && tab !== "home" && tab !== "calendar" && !(tab === "library" && libraryFilter === "lists" && !selectedList) && !(tab === "profile" && (profileView !== "recommendations" || !usableSession || mfa.required)) ? <EmptyPanel title={tab === "library" && libraryKindFilter !== "both" && libraryFilter !== "favorites" ? `No ${libraryKindFilter === "movie" ? "movies" : "shows"} here` : "Nothing loaded yet"} body={tab === "library" && libraryKindFilter !== "both" && libraryFilter !== "favorites" ? "Choose Both to see every title in this section." : searchMode ? "Search for a title, person, or keyword." : emptyText(tab, Boolean(usableSession))} /> : null) : null}
             contentContainerStyle={[styles.listContent, rootHeaderActive && styles.listContentWithHeader]}
             columnWrapperStyle={styles.columns}
             refreshControl={<RefreshControl tintColor={colors.accent} refreshing={refreshing} onRefresh={refresh} />}
@@ -1931,7 +1938,7 @@ function DiscoverHeading({ view, onTonight, onForYou }: { view?: string; onTonig
   );
 }
 
-function ListDetailHeader({ list, loadedCount, sort, groupBy, onSort, onGroupBy, onBack }: { list: UserList; loadedCount?: number; sort: ListSort; groupBy: ListGroup; onSort: () => void; onGroupBy: (value: ListGroup) => void; onBack: () => void }) {
+function ListDetailHeader({ list, loadedCount, sort, groupBy, kindFilter, onSort, onGroupBy, onKindFilter, onBack }: { list: UserList; loadedCount?: number; sort: ListSort; groupBy: ListGroup; kindFilter: MediaKindFilter; onSort: () => void; onGroupBy: (value: ListGroup) => void; onKindFilter: (value: MediaKindFilter) => void; onBack: () => void }) {
   const sortLabel = sort === "none" ? "—" : listSortOptions.find(option => option.value === sort)?.label ?? "Name A-Z";
   const displayCount = loadedCount ?? list.count;
   return (
@@ -1952,6 +1959,7 @@ function ListDetailHeader({ list, loadedCount, sort, groupBy, onSort, onGroupBy,
           <Text style={[styles.groupChipText, groupBy === "collections" && styles.groupChipTextActive]}>Group franchises</Text>
         </Pressable>
       </View>
+      <MediaKindFilterControl value={kindFilter} onChange={onKindFilter} inline />
     </View>
   );
 }
@@ -1977,6 +1985,11 @@ function LibraryFilters({ value, onChange }: { value: LibraryFilter; onChange: (
       ))}
     </View>
   );
+}
+
+function MediaKindFilterControl({ value, onChange, inline = false }: { value: MediaKindFilter; onChange: (value: MediaKindFilter) => void; inline?: boolean }) {
+  const options: Array<{ value: MediaKindFilter; label: string }> = [{ value: "both", label: "Both" }, { value: "movie", label: "Movies" }, { value: "show", label: "Shows" }];
+  return <View style={[styles.mediaKindFilter, inline && styles.mediaKindFilterInline]}>{options.map(option => <Pressable accessibilityRole="button" accessibilityState={{ selected: value === option.value }} key={option.value} onPress={() => onChange(option.value)} style={({ pressed }) => [styles.mediaKindFilterOption, value === option.value && styles.mediaKindFilterOptionActive, pressed && styles.mediaKindFilterOptionPressed]}><Text style={[styles.mediaKindFilterText, value === option.value && styles.mediaKindFilterTextActive]}>{option.label}</Text></Pressable>)}</View>;
 }
 
 function CalendarPanel({ mode, view, month, week, events, onMode, onView, onMonth, onWeek, onOpen, onMenu }: { mode: CalendarMode; view: CalendarView; month: string; week: string; events: CalendarEvent[]; onMode: (mode: CalendarMode) => void; onView: (view: CalendarView) => void; onMonth: (month: string) => void; onWeek: (week: string) => void; onOpen: (event: CalendarEvent) => void; onMenu: (item: MediaSummary) => void }) {
@@ -2024,8 +2037,7 @@ function CalendarPanel({ mode, view, month, week, events, onMode, onView, onMont
           const today = date === currentDate;
           return (
             <Pressable key={date ?? `blank-${index}`} disabled={!date || !count} onPress={() => date && setSelectedDate(date)} style={[styles.dayCell, posterCalendar && styles.dayCellPosterMode, !date && styles.blankDay, today && styles.todayCell, date === selectedDate && styles.selectedDayCell]}>
-              {date ? <Text style={[styles.dayText, today && styles.todayText]}>{Number(date.slice(8, 10))}</Text> : null}
-              {count ? <Text style={styles.dayCount}>{count}</Text> : null}
+              {date ? <View style={[styles.dayHeading, count > 0 && styles.dayHeadingWithCount]}><Text style={[styles.dayText, today && styles.todayText]}>{Number(date.slice(8, 10))}</Text>{count ? <Text style={styles.dayCount}>{count}</Text> : null}</View> : null}
               {posterCalendar && count ? <View style={styles.dayPosterStrip}>{dayEvents.slice(0, 2).map(event => {
                 const thumb = tmdbImage(event.artwork, "w342");
                 return thumb ? <RemoteImage key={event.id} uri={thumb} style={styles.dayPosterThumb} resizeMode="cover" /> : null;
@@ -6001,6 +6013,13 @@ const styles = StyleSheet.create({
   filterPillActive: { backgroundColor: colors.accent, borderColor: colors.accent },
   filterPillText: { color: colors.text, fontSize: 11, fontWeight: "900" },
   filterPillTextActive: { color: colors.text },
+  mediaKindFilter: { height: 42, marginHorizontal: 18, marginTop: -1, marginBottom: 12, padding: 3, borderRadius: 13, backgroundColor: colors.panel, flexDirection: "row" },
+  mediaKindFilterInline: { marginHorizontal: 0, marginTop: 14, marginBottom: 0 },
+  mediaKindFilterOption: { flex: 1, borderRadius: 10, alignItems: "center", justifyContent: "center" },
+  mediaKindFilterOptionActive: { backgroundColor: colors.panel2 },
+  mediaKindFilterOptionPressed: { opacity: .58 },
+  mediaKindFilterText: { color: colors.muted, fontSize: 12, fontWeight: "900" },
+  mediaKindFilterTextActive: { color: colors.text },
   calendarWrap: { marginTop: 2 },
   segmented: { flexDirection: "row", height: 44, marginHorizontal: 18, marginTop: 8, padding: 3, borderRadius: 14, backgroundColor: colors.panel },
   segment: { flex: 1, borderRadius: 11, alignItems: "center", justifyContent: "center" },
@@ -6028,10 +6047,12 @@ const styles = StyleSheet.create({
   dayCellPosterMode: { minHeight: 72 },
   blankDay: { backgroundColor: "transparent" },
   todayCell: { backgroundColor: "transparent" },
+  dayHeading: { width: "100%", height: 26, alignItems: "center", justifyContent: "center" },
+  dayHeadingWithCount: { paddingHorizontal: 3, flexDirection: "row", justifyContent: "space-between" },
   dayText: { width: 26, height: 26, borderRadius: 13, overflow: "hidden", color: colors.text, fontSize: 13, lineHeight: 26, fontWeight: "900", textAlign: "center" },
   todayText: { color: colors.text, backgroundColor: colors.accent },
   selectedDayCell: { borderColor: colors.line, backgroundColor: colors.panel },
-  dayCount: { position: "absolute", right: 2, top: 3, minWidth: 17, height: 17, paddingHorizontal: 3, borderRadius: 9, overflow: "hidden", backgroundColor: colors.accentSoft, color: colors.accent, textAlign: "center", lineHeight: 17, fontSize: 9, fontWeight: "900" },
+  dayCount: { minWidth: 17, height: 17, paddingHorizontal: 3, borderRadius: 9, overflow: "hidden", backgroundColor: colors.accentSoft, color: colors.accent, textAlign: "center", lineHeight: 17, fontSize: 9, fontWeight: "900" },
   dayPosterStrip: { position: "absolute", left: 3, right: 3, bottom: 4, height: 28, flexDirection: "row", gap: 2, alignItems: "center" },
   dayPosterThumb: { flex: 1, height: 28, borderRadius: 3, overflow: "hidden", backgroundColor: colors.panel },
   dayPosterMore: { minWidth: 22, height: 22, borderRadius: 11, overflow: "hidden", backgroundColor: "rgba(0,0,0,0.72)", color: colors.text, textAlign: "center", lineHeight: 22, fontSize: 9, fontWeight: "900" },
