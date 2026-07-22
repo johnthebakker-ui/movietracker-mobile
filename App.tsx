@@ -2922,19 +2922,19 @@ function ReviewRow({ review, onOpen }: { review: ReviewItem; onOpen: (review: Re
   const openReviewedTitle = () => hasReviewTarget && onOpen(review);
   return (
     <View style={styles.reviewRow}>
-      <Pressable disabled={!hasReviewTarget} onPress={openReviewedTitle} accessibilityRole="button" accessibilityLabel={`Open ${review.mediaTitle}`}>
+      <Pressable disabled={!hasReviewTarget} onPress={openReviewedTitle} accessibilityRole="button" accessibilityLabel={`Open ${review.mediaTitle}`} style={({ pressed }) => [styles.reviewTargetRow, pressed && styles.reviewTargetRowPressed]}>
         {image ? <RemoteImage uri={image} style={styles.reviewImage} resizeMode="cover" /> : <View style={styles.reviewImage} />}
+        <View style={styles.reviewTargetCopy}>
+          <View style={styles.reviewKindRow}>
+            <Text style={styles.reviewKind}>{review.targetLabel === "episode" ? "Episode review" : review.targetLabel === "season" ? "Season review" : review.kind === "show" ? "Series review" : "Film review"}</Text>
+            {review.isPrivate ? <View style={styles.reviewPrivateBadge}><Ionicons name="lock-closed-outline" size={11} color={colors.muted} /><Text style={styles.reviewPrivateText}>Private</Text></View> : null}
+            {score != null ? <View style={styles.reviewScore}><Ionicons name="star" size={14} color="#ffc24b" /><Text style={styles.reviewScoreText}>{score.toFixed(1)}</Text></View> : null}
+          </View>
+          <Text style={styles.reviewMedia} numberOfLines={1}>{review.mediaTitle}</Text>
+          <Text style={styles.reviewMeta} numberOfLines={1}>{review.targetMeta ?? (review.targetLabel === "episode" ? "Episode" : review.targetLabel === "season" ? "Season" : review.kind === "show" ? "Show" : "Movie")} - {formatShortDate(review.created_at)}{isEditedReview(review) ? " - edited" : ""}</Text>
+        </View>
       </Pressable>
       <View style={styles.reviewCopy}>
-        <View style={styles.reviewKindRow}>
-          <Text style={styles.reviewKind}>{review.targetLabel === "episode" ? "Episode review" : review.targetLabel === "season" ? "Season review" : review.kind === "show" ? "Series review" : "Film review"}</Text>
-          {review.isPrivate ? <View style={styles.reviewPrivateBadge}><Ionicons name="lock-closed-outline" size={11} color={colors.muted} /><Text style={styles.reviewPrivateText}>Private</Text></View> : null}
-          {score != null ? <View style={styles.reviewScore}><Ionicons name="star" size={14} color="#ffc24b" /><Text style={styles.reviewScoreText}>{score.toFixed(1)}</Text></View> : null}
-        </View>
-        <Pressable disabled={!hasReviewTarget} onPress={openReviewedTitle} hitSlop={8} accessibilityRole="button" accessibilityLabel={`Open ${review.mediaTitle}`}>
-          <Text style={styles.reviewMedia} numberOfLines={1}>{review.mediaTitle}</Text>
-        </Pressable>
-        <Text style={styles.reviewMeta} numberOfLines={1}>{review.targetMeta ?? (review.targetLabel === "episode" ? "Episode" : review.targetLabel === "season" ? "Season" : review.kind === "show" ? "Show" : "Movie")} - {formatShortDate(review.created_at)}{isEditedReview(review) ? " - edited" : ""}</Text>
         <Text style={styles.reviewTitle} numberOfLines={1}>{review.title}</Text>
         <Text accessible={false} pointerEvents="none" style={[styles.reviewBody, styles.reviewBodyMeasure]} onTextLayout={event => {
           const nextLineCount = event.nativeEvent.lines.length;
@@ -6122,9 +6122,12 @@ const styles = StyleSheet.create({
   genreStatTotal: { width: 26, color: colors.muted, textAlign: "right", fontSize: 16, fontWeight: "800" },
   genreShelf: { marginTop: 16 },
   reviewList: { marginHorizontal: 18, borderTopWidth: 1, borderTopColor: colors.line },
-  reviewRow: { flexDirection: "row", gap: 12, paddingVertical: 18, borderBottomWidth: 1, borderBottomColor: colors.line },
+  reviewRow: { paddingVertical: 18, borderBottomWidth: 1, borderBottomColor: colors.line },
+  reviewTargetRow: { minHeight: 68, flexDirection: "row", alignItems: "flex-start", gap: 12, borderRadius: 10 },
+  reviewTargetRowPressed: { opacity: .58 },
   reviewImage: { width: 92, height: 68, borderRadius: 10, backgroundColor: colors.panel2 },
-  reviewCopy: { flex: 1, minWidth: 0 },
+  reviewTargetCopy: { flex: 1, minWidth: 0 },
+  reviewCopy: { minWidth: 0, marginLeft: 104 },
   reviewKindRow: { flexDirection: "row", alignItems: "center", gap: 12, flexWrap: "wrap" },
   reviewPrivateBadge: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 7, height: 22, borderRadius: 11, backgroundColor: colors.panel2 },
   reviewPrivateText: { color: colors.muted, fontSize: 10, fontWeight: "900" },
