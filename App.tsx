@@ -74,7 +74,7 @@ type EntityTarget =
   | { type: "person"; id: number; name: string; subtitle?: string | null; imagePath?: string | null }
   | { type: "company"; id: number; name: string; subtitle?: string | null; imagePath?: string | null };
 type UserList = { id: string; name: string; description: string | null; visibility: string | null; cover_url?: string | null; count: number; posters: string[] };
-type ReviewItem = { id: string; title: string; body: string; created_at: string; updated_at?: string | null; userId?: string | null; ratingId?: string | null; containsSpoilers?: boolean | null; isPrivate?: boolean | null; kind: MediaKind; targetLabel?: "season" | "episode"; mediaTitle: string; artwork: string | null; score?: number | null; item?: MediaSummary | null };
+type ReviewItem = { id: string; title: string; body: string; created_at: string; updated_at?: string | null; userId?: string | null; ratingId?: string | null; containsSpoilers?: boolean | null; isPrivate?: boolean | null; kind: MediaKind; targetLabel?: "season" | "episode"; targetMeta?: string | null; mediaTitle: string; artwork: string | null; score?: number | null; item?: MediaSummary | null; seasonTarget?: SeasonTarget | null; episodeTarget?: EpisodeTarget | null };
 type TrackedStatus = "completed" | "watching" | "planned" | "paused" | "dropped";
 type GenreStat = { name: string; total: number; statuses: Record<TrackedStatus, number>; items: Array<{ status: TrackedStatus; item: MediaSummary }> };
 type HistoryItem = {
@@ -162,8 +162,10 @@ type ProfileData = {
 const blankProgress: ProgressCounts = { planned: 0, watching: 0, completed: 0, paused: 0, dropped: 0, favorites: 0 };
 const blankProfileData: ProfileData = { followers: 0, following: 0, tracked: 0, trackedLibraryTitles: 0, watchEvents: 0, screenTimeHours: 0, historyUniqueTitles: 0, averageRating: "-", reviewCount: 0, listCount: 0, history: [], reviews: [], favorites: [], lists: [], progressGroups: [], currentStreak: 0, longestStreak: 0, currentlyWatching: [], genreStats: [] };
 const trackedStatusOrder: TrackedStatus[] = ["completed", "watching", "planned", "paused", "dropped"];
+const profileReviewMediaSelect = "id,tmdb_id,kind,title,overview,poster_path,backdrop_path,release_date,end_date,status,vote_average,vote_count,popularity,runtime,genres,original_language,origin_countries,collection_tmdb_id,collection_name,collection_poster_path";
+const profileReviewSelect = `id,title,body,contains_spoilers,is_private,created_at,updated_at,media(${profileReviewMediaSelect}),seasons(id,season_number,name,overview,poster_path,air_date,episode_count,media(${profileReviewMediaSelect})),episodes(id,name,overview,episode_number,air_date,still_path,runtime,vote_average,seasons(season_number,name,media(${profileReviewMediaSelect}))),ratings(score)`;
 const profileCachePrefix = "movietracker-profile-v1";
-const profileDataCachePrefix = "movietracker-profile-data-v4";
+const profileDataCachePrefix = "movietracker-profile-data-v5";
 const libraryCachePrefix = "movietracker-library-v3";
 const titleDetailCachePrefix = "movietracker-title-detail-v2";
 const episodeNotificationIdsKey = "movietracker-episode-notification-ids-v1";
@@ -1024,7 +1026,7 @@ export default function App() {
       supabase.from("progress").select("status,updated_at,media(id,tmdb_id,kind,title,overview,poster_path,backdrop_path,release_date,end_date,status,vote_average,vote_count,popularity,runtime,genres,original_language,origin_countries,collection_tmdb_id,collection_name,collection_poster_path)").eq("user_id", userId).order("updated_at", { ascending: false }).limit(100),
       supabase.from("progress").select("*", { count: "exact", head: true }).eq("user_id", userId).eq("status", "completed"),
       supabase.from("ratings").select("score,media_id,episode_id").eq("user_id", userId),
-      supabase.from("reviews").select("id,title,body,contains_spoilers,is_private,created_at,updated_at,media(id,tmdb_id,kind,title,overview,poster_path,backdrop_path,release_date,end_date,status,vote_average,vote_count,popularity,runtime,genres,original_language,origin_countries,collection_tmdb_id,collection_name,collection_poster_path),ratings(score)").eq("user_id", userId).order("updated_at", { ascending: false }).limit(20),
+      supabase.from("reviews").select(profileReviewSelect).eq("user_id", userId).order("updated_at", { ascending: false }).limit(500),
       supabase.from("reviews").select("*", { count: "exact", head: true }).eq("user_id", userId),
       supabase.from("favorites").select("media(id,tmdb_id,kind,title,overview,poster_path,backdrop_path,release_date,end_date,status,vote_average,vote_count,popularity,runtime,genres,original_language,origin_countries,collection_tmdb_id,collection_name,collection_poster_path)").eq("user_id", userId).order("position").limit(12),
       loadUserLists(userId),
@@ -1119,25 +1121,7 @@ export default function App() {
         episodeTarget: episode ? { show: fromDbMedia(media, ratingByMedia), episodeId: Number(event.episode_id ?? episode.id), seasonNumber: Number(season?.season_number ?? 1), episodeNumber: Number(episode.episode_number), title: episode.name, artwork: episode.still_path ?? media.backdrop_path ?? media.poster_path ?? null } : null
       }];
     });
-    const reviewItems = (reviews.data ?? []).flatMap((review: any) => {
-      const media = firstRow(review.media);
-      const rating = firstRow(review.ratings);
-      if (!media) return [];
-      return [{
-        id: review.id,
-        title: review.title,
-        body: review.body ?? "",
-        created_at: review.created_at,
-        updated_at: review.updated_at,
-        containsSpoilers: Boolean(review.contains_spoilers),
-        isPrivate: Boolean(review.is_private),
-        kind: media.kind,
-        mediaTitle: media.title,
-        artwork: media.backdrop_path ?? media.poster_path ?? null,
-        score: typeof rating?.score === "number" ? rating.score : null,
-        item: fromDbMedia(media, ratingByMedia)
-      }];
-    });
+    const reviewItems = (reviews.data ?? []).flatMap((review: any) => mapProfileReview(review, ratingByMedia));
     const nextProfileData: ProfileData = {
       followers: followers.count ?? 0,
       following: following.count ?? 0,
@@ -1569,6 +1553,24 @@ export default function App() {
     if (item.item) openItem(item.item);
   }
 
+  function openReviewItem(review: ReviewItem) {
+    setSelected(null);
+    setSelectedStack([]);
+    setSelectedEntity(null);
+    setSelectedSeriesEpisodes(null);
+    if (review.episodeTarget) {
+      setSelectedSeason(null);
+      setSelectedEpisode(review.episodeTarget);
+      return;
+    }
+    if (review.seasonTarget) {
+      setSelectedEpisode(null);
+      setSelectedSeason(review.seasonTarget);
+      return;
+    }
+    if (review.item) openItem(review.item);
+  }
+
   function openUpNextEntry(entry: UpNextEntry) {
     const episodeTarget = episodeTargetForUpNext(entry);
     if (episodeTarget) {
@@ -1707,7 +1709,7 @@ export default function App() {
             ) : usableSession && profileView === "history" ? (
               <FullHistoryPage data={profileData} token={usableSession.access_token} onOpen={openHistoryItem} onMenu={setActionItem} onBack={() => openProfileView("profile")} onRemove={removeHistoryEvent} onScrollTop={scrollToTop} />
             ) : usableSession && profileView === "reviews" ? (
-              <FullReviewsPage reviews={profileData.reviews} onBack={() => openProfileView("profile")} onOpen={openItem} />
+              <FullReviewsPage reviews={profileData.reviews} onBack={() => openProfileView("profile")} onOpen={openReviewItem} />
             ) : usableSession && profileView === "statistics" ? (
               <StatisticsPage data={profileData} onBack={() => openProfileView("profile")} onWrapped={() => openProfileView("wrapped")} onOpen={openItem} onGenreShelf={offset => setTimeout(() => listRef.current?.scrollToOffset({ offset, animated: true }), 80)} />
             ) : usableSession && profileView === "wrapped" ? (
@@ -1730,7 +1732,7 @@ export default function App() {
                 }} />
                 <ProfileHistorySection items={profileData.history} onOpen={openHistoryItem} onMenu={setActionItem} onHistory={() => openProfileView("history")} />
                 <ProfileProgressSection data={profileData} onLibrary={() => { setLibraryFilter("all"); goTab("library"); }} onStatus={status => { setLibraryFilter(status === "active" ? "watching" : status); goTab("library"); }} onWatching={() => { setLibraryFilter("watching"); goTab("library"); }} onOpen={openItem} onMenu={setActionItem} />
-                <ReviewSection reviews={profileData.reviews} onAll={() => openProfileView("reviews")} onOpen={openItem} />
+                <ReviewSection reviews={profileData.reviews} onAll={() => openProfileView("reviews")} onOpen={openReviewItem} />
                 <ProfileMediaSection kicker="Personal canon" title="Favorites" action="See all favorites ->" items={profileData.favorites.slice(0, 6)} onAction={() => { setLibraryFilter("favorites"); goTab("library"); }} onOpen={openItem} onMenu={setActionItem} /><ProfileListsSection owner={profile?.display_name || profile?.username || "you"} lists={profileData.lists} onOpenLists={() => { setLibraryFilter("lists"); goTab("library"); }} onOpenList={openList} />
                 <ProfileShortcuts onCalendar={() => goTab("calendar")} onHistory={() => openProfileView("history")} onReviews={() => openProfileView("reviews")} onSettings={() => openProfileView("settings")} />
               </>
@@ -2303,12 +2305,12 @@ function ProfileProgressSection({ data, onLibrary, onStatus, onWatching, onOpen,
   return <View style={styles.profileSection}><SectionTitle kicker="Your viewing momentum" title="Progress" action="Open library ->" onAction={onLibrary} /><View style={styles.progressGroups}>{data.progressGroups.map(group => <Pressable accessibilityRole="button" accessibilityLabel={`Open ${group.label.toLowerCase()} titles`} onPress={() => onStatus(group.key)} key={group.key} style={({ pressed }) => [styles.progressGroup, pressed && { opacity: .68 }]}><Text style={styles.progressCount}>{group.count}</Text><Text style={styles.progressLabel}>{group.label}</Text><View style={styles.miniPosters}>{group.posters.map((poster, index) => <Image key={`${poster}-${index}`} source={{ uri: poster }} style={styles.miniPoster} />)}</View></Pressable>)}</View><View style={styles.streakRow}><Ionicons name="flame-outline" size={30} color={colors.accent} /><View><Text style={styles.streakLabel}>Current streak</Text><Text style={styles.streakValue}>{data.currentStreak} {data.currentStreak === 1 ? "day" : "days"}</Text><Text style={styles.streakMeta}>Longest streak - {data.longestStreak} days</Text></View></View>{data.currentlyWatching.length ? <><View style={styles.profileSubhead}><Text style={styles.profileSubheadTitle}>Currently watching</Text><Pressable onPress={onWatching}><Text style={styles.profileSubheadAction}>{"See all ->"}</Text></Pressable></View><CardGrid items={data.currentlyWatching.slice(0, 4)} onOpen={onOpen} onMenu={onMenu} /></> : null}</View>;
 }
 
-function ReviewSection({ reviews, onAll, onOpen }: { reviews: ReviewItem[]; onAll?: () => void; onOpen: (item: MediaSummary) => void }) {
+function ReviewSection({ reviews, onAll, onOpen }: { reviews: ReviewItem[]; onAll?: () => void; onOpen: (review: ReviewItem) => void }) {
   if (!reviews.length) return null;
   return <View style={styles.profileSection}><SectionTitle kicker="Your opinions, collected" title="Your reviews" action={onAll ? "See all reviews ->" : undefined} onAction={onAll} /><View style={styles.reviewList}>{reviews.slice(0, onAll ? 6 : reviews.length).map(review => <ReviewRow key={review.id} review={review} onOpen={onOpen} />)}</View></View>;
 }
 
-function FullReviewsPage({ reviews, onBack, onOpen }: { reviews: ReviewItem[]; onBack: () => void; onOpen: (item: MediaSummary) => void }) {
+function FullReviewsPage({ reviews, onBack, onOpen }: { reviews: ReviewItem[]; onBack: () => void; onOpen: (review: ReviewItem) => void }) {
   return (
     <View style={styles.profileSection}>
       <SectionTitle kicker="Every take in one place" title="Your reviews" action="Back to profile ->" onAction={onBack} />
@@ -2909,7 +2911,7 @@ function SeriesEpisodesScreen({ target, session, onBack, onOpenSeason, onOpenEpi
   );
 }
 
-function ReviewRow({ review, onOpen }: { review: ReviewItem; onOpen: (item: MediaSummary) => void }) {
+function ReviewRow({ review, onOpen }: { review: ReviewItem; onOpen: (review: ReviewItem) => void }) {
   const [expanded, setExpanded] = useState(false);
   const [bodyLineCount, setBodyLineCount] = useState(0);
   const image = tmdbImage(review.artwork, "w342");
@@ -2919,23 +2921,24 @@ function ReviewRow({ review, onOpen }: { review: ReviewItem; onOpen: (item: Medi
     setExpanded(false);
     setBodyLineCount(0);
   }, [review.body, review.id]);
-  const openReviewedTitle = () => review.item && onOpen(review.item);
+  const hasReviewTarget = Boolean(review.item || review.seasonTarget || review.episodeTarget);
+  const openReviewedTitle = () => hasReviewTarget && onOpen(review);
   return (
     <View style={styles.reviewRow}>
-      <Pressable disabled={!review.item} onPress={openReviewedTitle} accessibilityRole="button" accessibilityLabel={`Open ${review.mediaTitle}`}>
+      <Pressable disabled={!hasReviewTarget} onPress={openReviewedTitle} accessibilityRole="button" accessibilityLabel={`Open ${review.mediaTitle}`}>
         {image ? <RemoteImage uri={image} style={styles.reviewImage} resizeMode="cover" /> : <View style={styles.reviewImage} />}
       </Pressable>
       <View style={styles.reviewCopy}>
-        <Pressable disabled={!review.item} onPress={openReviewedTitle} accessibilityRole="button" accessibilityLabel={`Open ${review.mediaTitle}`}>
-          <View style={styles.reviewKindRow}>
-            <Text style={styles.reviewKind}>{review.targetLabel === "episode" ? "Episode review" : review.targetLabel === "season" ? "Season review" : review.kind === "show" ? "Series review" : "Film review"}</Text>
-            {review.isPrivate ? <View style={styles.reviewPrivateBadge}><Ionicons name="lock-closed-outline" size={11} color={colors.muted} /><Text style={styles.reviewPrivateText}>Private</Text></View> : null}
-            {score != null ? <View style={styles.reviewScore}><Ionicons name="star" size={14} color="#ffc24b" /><Text style={styles.reviewScoreText}>{score.toFixed(1)}</Text></View> : null}
-          </View>
+        <View style={styles.reviewKindRow}>
+          <Text style={styles.reviewKind}>{review.targetLabel === "episode" ? "Episode review" : review.targetLabel === "season" ? "Season review" : review.kind === "show" ? "Series review" : "Film review"}</Text>
+          {review.isPrivate ? <View style={styles.reviewPrivateBadge}><Ionicons name="lock-closed-outline" size={11} color={colors.muted} /><Text style={styles.reviewPrivateText}>Private</Text></View> : null}
+          {score != null ? <View style={styles.reviewScore}><Ionicons name="star" size={14} color="#ffc24b" /><Text style={styles.reviewScoreText}>{score.toFixed(1)}</Text></View> : null}
+        </View>
+        <Pressable disabled={!hasReviewTarget} onPress={openReviewedTitle} hitSlop={8} accessibilityRole="button" accessibilityLabel={`Open ${review.mediaTitle}`}>
           <Text style={styles.reviewMedia} numberOfLines={1}>{review.mediaTitle}</Text>
-          <Text style={styles.reviewMeta}>{review.targetLabel === "episode" ? "Episode" : review.targetLabel === "season" ? "Season" : review.kind === "show" ? "Show" : "Movie"} - {formatShortDate(review.created_at)}{isEditedReview(review) ? " - edited" : ""}</Text>
-          <Text style={styles.reviewTitle} numberOfLines={1}>{review.title}</Text>
         </Pressable>
+        <Text style={styles.reviewMeta} numberOfLines={1}>{review.targetMeta ?? (review.targetLabel === "episode" ? "Episode" : review.targetLabel === "season" ? "Season" : review.kind === "show" ? "Show" : "Movie")} - {formatShortDate(review.created_at)}{isEditedReview(review) ? " - edited" : ""}</Text>
+        <Text style={styles.reviewTitle} numberOfLines={1}>{review.title}</Text>
         <Text accessible={false} pointerEvents="none" style={[styles.reviewBody, styles.reviewBodyMeasure]} onTextLayout={event => {
           const nextLineCount = event.nativeEvent.lines.length;
           if (nextLineCount !== bodyLineCount) setBodyLineCount(nextLineCount);
@@ -4430,7 +4433,7 @@ function CompanySection({ companies, onOpen }: { companies: DetailCompany[]; onO
 }
 
 function DetailReviewsSection({ reviews, onOpen }: { reviews: ReviewItem[]; onOpen: (item: MediaSummary) => void }) {
-  return <View style={styles.detailSection}><SectionTitle kicker="From the community" title="Reviews" />{reviews.length ? <View style={styles.reviewList}>{reviews.map(review => <ReviewRow key={review.id} review={review} onOpen={onOpen} />)}</View> : <EmptyPanel title="No reviews yet" body="The opening line could be yours." />}</View>;
+  return <View style={styles.detailSection}><SectionTitle kicker="From the community" title="Reviews" />{reviews.length ? <View style={styles.reviewList}>{reviews.map(review => <ReviewRow key={review.id} review={review} onOpen={target => target.item && onOpen(target.item)} />)}</View> : <EmptyPanel title="No reviews yet" body="The opening line could be yours." />}</View>;
 }
 
 function RatingSheet({ visible, value, busy, onClose, onSave }: { visible: boolean; value: number | null; busy: boolean; onClose: () => void; onSave: (value: number | null) => Promise<void> }) {
@@ -5203,6 +5206,73 @@ function fromDbMedia(row: any, ratingByMedia?: Map<any, number>): MediaSummary {
     companies: row.companies ?? row.raw?.production_companies ?? [],
     raw: row.raw ? { ...row.raw, keywords: row.keywords ?? row.raw.keywords } : row.keywords ? { keywords: row.keywords } : null
   };
+}
+
+function mapProfileReview(review: any, ratingByMedia: Map<any, number>): ReviewItem[] {
+  const directMedia = firstRow(review.media);
+  const season = firstRow<any>(review.seasons);
+  const seasonMedia = firstRow<any>(season?.media);
+  const episode = firstRow<any>(review.episodes);
+  const episodeSeason = firstRow<any>(episode?.seasons);
+  const episodeMedia = firstRow<any>(episodeSeason?.media);
+  const media: any = directMedia ?? seasonMedia ?? episodeMedia;
+  if (!media) return [];
+
+  const rating = firstRow<any>(review.ratings);
+  const item = fromDbMedia(media, ratingByMedia);
+  const seasonNumber = season?.season_number != null ? Number(season.season_number) : null;
+  const episodeSeasonNumber = episodeSeason?.season_number != null ? Number(episodeSeason.season_number) : null;
+  const episodeNumber = episode?.episode_number != null ? Number(episode.episode_number) : null;
+  const targetLabel: ReviewItem["targetLabel"] = episode && episodeSeasonNumber != null && episodeNumber != null
+    ? "episode"
+    : season && seasonNumber != null
+      ? "season"
+      : undefined;
+
+  return [{
+    id: review.id,
+    title: review.title || "Review",
+    body: review.body ?? "",
+    created_at: review.created_at,
+    updated_at: review.updated_at,
+    containsSpoilers: Boolean(review.contains_spoilers),
+    isPrivate: Boolean(review.is_private),
+    kind: media.kind,
+    targetLabel,
+    targetMeta: targetLabel === "episode"
+      ? `S${episodeSeasonNumber} E${episodeNumber}${episode.name ? ` - ${episode.name}` : ""}`
+      : targetLabel === "season"
+        ? `Season ${seasonNumber}${season.name ? ` - ${season.name}` : ""}`
+        : null,
+    mediaTitle: media.title,
+    artwork: episode?.still_path ?? season?.poster_path ?? media.backdrop_path ?? media.poster_path ?? null,
+    score: typeof rating?.score === "number" ? rating.score : null,
+    item,
+    seasonTarget: targetLabel === "season" ? {
+      show: item,
+      season: {
+        id: season.id != null ? Number(season.id) : undefined,
+        seasonNumber: seasonNumber!,
+        name: season.name ?? `Season ${seasonNumber}`,
+        overview: season.overview ?? null,
+        posterPath: season.poster_path ?? null,
+        airDate: season.air_date ?? null,
+        episodeCount: season.episode_count != null ? Number(season.episode_count) : null
+      }
+    } : null,
+    episodeTarget: targetLabel === "episode" ? {
+      show: item,
+      episodeId: episode.id != null ? Number(episode.id) : undefined,
+      seasonNumber: episodeSeasonNumber!,
+      episodeNumber: episodeNumber!,
+      title: episode.name ?? null,
+      overview: episode.overview ?? null,
+      airDate: episode.air_date ?? null,
+      artwork: episode.still_path ?? media.backdrop_path ?? media.poster_path ?? null,
+      runtime: episode.runtime != null ? Number(episode.runtime) : null,
+      voteAverage: episode.vote_average != null ? Number(episode.vote_average) : null
+    } : null
+  }];
 }
 
 function fromTmdbRaw(raw: any, forcedKind?: MediaKind): MediaSummary | null {
