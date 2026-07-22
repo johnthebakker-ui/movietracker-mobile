@@ -2919,26 +2919,33 @@ function ReviewRow({ review, onOpen }: { review: ReviewItem; onOpen: (item: Medi
     setExpanded(false);
     setBodyLineCount(0);
   }, [review.body, review.id]);
+  const openReviewedTitle = () => review.item && onOpen(review.item);
   return (
-    <Pressable disabled={!review.item && !canExpand} onPress={() => canExpand ? setExpanded(value => !value) : review.item && onOpen(review.item)} style={styles.reviewRow}>
-      {image ? <RemoteImage uri={image} style={styles.reviewImage} resizeMode="cover" /> : <View style={styles.reviewImage} />}
+    <View style={styles.reviewRow}>
+      <Pressable disabled={!review.item} onPress={openReviewedTitle} accessibilityRole="button" accessibilityLabel={`Open ${review.mediaTitle}`}>
+        {image ? <RemoteImage uri={image} style={styles.reviewImage} resizeMode="cover" /> : <View style={styles.reviewImage} />}
+      </Pressable>
       <View style={styles.reviewCopy}>
-        <View style={styles.reviewKindRow}>
-        <Text style={styles.reviewKind}>{review.targetLabel === "episode" ? "Episode review" : review.targetLabel === "season" ? "Season review" : review.kind === "show" ? "Series review" : "Film review"}</Text>
-          {review.isPrivate ? <View style={styles.reviewPrivateBadge}><Ionicons name="lock-closed-outline" size={11} color={colors.muted} /><Text style={styles.reviewPrivateText}>Private</Text></View> : null}
-          {score != null ? <View style={styles.reviewScore}><Ionicons name="star" size={14} color="#ffc24b" /><Text style={styles.reviewScoreText}>{score.toFixed(1)}</Text></View> : null}
-        </View>
-        <Text style={styles.reviewMedia} numberOfLines={1}>{review.mediaTitle}</Text>
-        <Text style={styles.reviewMeta}>{review.targetLabel === "episode" ? "Episode" : review.targetLabel === "season" ? "Season" : review.kind === "show" ? "Show" : "Movie"} - {formatShortDate(review.created_at)}{isEditedReview(review) ? " - edited" : ""}</Text>
-        <Text style={styles.reviewTitle} numberOfLines={1}>{review.title}</Text>
+        <Pressable disabled={!review.item} onPress={openReviewedTitle} accessibilityRole="button" accessibilityLabel={`Open ${review.mediaTitle}`}>
+          <View style={styles.reviewKindRow}>
+            <Text style={styles.reviewKind}>{review.targetLabel === "episode" ? "Episode review" : review.targetLabel === "season" ? "Season review" : review.kind === "show" ? "Series review" : "Film review"}</Text>
+            {review.isPrivate ? <View style={styles.reviewPrivateBadge}><Ionicons name="lock-closed-outline" size={11} color={colors.muted} /><Text style={styles.reviewPrivateText}>Private</Text></View> : null}
+            {score != null ? <View style={styles.reviewScore}><Ionicons name="star" size={14} color="#ffc24b" /><Text style={styles.reviewScoreText}>{score.toFixed(1)}</Text></View> : null}
+          </View>
+          <Text style={styles.reviewMedia} numberOfLines={1}>{review.mediaTitle}</Text>
+          <Text style={styles.reviewMeta}>{review.targetLabel === "episode" ? "Episode" : review.targetLabel === "season" ? "Season" : review.kind === "show" ? "Show" : "Movie"} - {formatShortDate(review.created_at)}{isEditedReview(review) ? " - edited" : ""}</Text>
+          <Text style={styles.reviewTitle} numberOfLines={1}>{review.title}</Text>
+        </Pressable>
         <Text accessible={false} pointerEvents="none" style={[styles.reviewBody, styles.reviewBodyMeasure]} onTextLayout={event => {
           const nextLineCount = event.nativeEvent.lines.length;
           if (nextLineCount !== bodyLineCount) setBodyLineCount(nextLineCount);
         }}>{review.body}</Text>
-        <Text style={styles.reviewBody} numberOfLines={expanded ? undefined : 2}>{review.body}</Text>
-        {canExpand ? <Text style={styles.reviewExpand}>{expanded ? "Show less" : "Read full review"}</Text> : null}
+        <Pressable disabled={!canExpand} onPress={() => setExpanded(value => !value)} accessibilityRole={canExpand ? "button" : undefined} accessibilityLabel={canExpand ? expanded ? "Show less" : "Read full review" : undefined}>
+          <Text style={styles.reviewBody} numberOfLines={expanded ? undefined : 2}>{review.body}</Text>
+          {canExpand ? <Text style={styles.reviewExpand}>{expanded ? "Show less" : "Read full review"}</Text> : null}
+        </Pressable>
       </View>
-    </Pressable>
+    </View>
   );
 }
 
