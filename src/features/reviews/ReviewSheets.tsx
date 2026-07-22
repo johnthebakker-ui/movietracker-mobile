@@ -1,12 +1,13 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Switch, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, Keyboard, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Switch, Text, TextInput, View } from "react-native";
 
 import { localDateKey, minutesToLabel } from "../../app/date-utils";
 import { styles } from "../../app/styles";
 import type { ReviewItem, WatchDateMode, WatchLogValues, WatchTimePoint } from "../../app/types";
 import { SectionTitle } from "../../components";
 import { colors } from "../../theme";
+import { formatWatchDateInput, isValidWatchDateTime, nextWatchTimeInput } from "./watch-log-input";
 
 export function RatingSheet({ visible, value, busy, onClose, onSave }: { visible: boolean; value: number | null; busy: boolean; onClose: () => void; onSave: (value: number | null) => Promise<void> }) {
   const [draft, setDraft] = useState(value ?? 5.5);
@@ -42,6 +43,7 @@ export function WatchLogSheet({ visible, title, releaseDate, runtime, busy, watc
   const [date, setDate] = useState(localDateKey(now));
   const [time, setTime] = useState(`${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`);
   const [timePoint, setTimePoint] = useState<WatchTimePoint>("end");
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
 
   useEffect(() => {
     if (!visible) return;
@@ -52,8 +54,23 @@ export function WatchLogSheet({ visible, title, releaseDate, runtime, busy, watc
     setTimePoint("end");
   }, [visible]);
 
+  useEffect(() => {
+    const showSubscription = Keyboard.addListener("keyboardDidShow", () => {
+      setKeyboardVisible(true);
+      scrollRef.current?.scrollTo({ y: 0, animated: false });
+    });
+    const hideSubscription = Keyboard.addListener("keyboardDidHide", () => setKeyboardVisible(false));
+    return () => {
+      showSubscription.remove();
+      hideSubscription.remove();
+    };
+  }, []);
+
+  const customDateTimeValid = isValidWatchDateTime(date, time);
+
   async function submit(nextMode = mode) {
     try {
+      if (nextMode === "custom" && !customDateTimeValid) throw new Error("Enter a valid date and time between 00:00 and 23:59.");
       await onSave({ mode: nextMode, date, time, timePoint });
       onClose();
     } catch (error) {
@@ -61,17 +78,13 @@ export function WatchLogSheet({ visible, title, releaseDate, runtime, busy, watc
     }
   }
 
-  function revealCustomActions() {
-    setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 180);
-  }
-
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <Pressable style={styles.modalScrim} onPress={onClose} />
       <KeyboardAvoidingView pointerEvents="box-none" behavior={Platform.OS === "ios" ? "padding" : "height"} keyboardVerticalOffset={16} style={styles.modalKeyboardAvoider}>
-      <View style={styles.watchLogSheet}>
+      <View style={[styles.watchLogSheet, keyboardVisible && styles.watchLogSheetKeyboard]}>
         <View style={styles.grabber} />
-        <ScrollView ref={scrollRef} style={styles.watchLogScroll} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" keyboardDismissMode="interactive" automaticallyAdjustKeyboardInsets={Platform.OS === "ios"} contentContainerStyle={styles.watchLogScrollContent}>
+        <ScrollView ref={scrollRef} scrollEnabled={!keyboardVisible} style={styles.watchLogScroll} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" keyboardDismissMode="interactive" automaticallyAdjustKeyboardInsets={Platform.OS === "ios"} contentContainerStyle={styles.watchLogScrollContent}>
           <View style={styles.actionHeader}>
             <View style={{ flex: 1 }}>
               <Text style={styles.actionTitle}>{watched ? "Add another watch" : "Mark watched"}</Text>
@@ -79,24 +92,25 @@ export function WatchLogSheet({ visible, title, releaseDate, runtime, busy, watc
             </View>
             <Pressable onPress={onClose} style={styles.closeButton}><Ionicons name="close" size={20} color={colors.text} /></Pressable>
           </View>
-          <View style={styles.watchQuickGrid}>
+          {!keyboardVisible ? <View style={styles.watchQuickGrid}>
             <Pressable disabled={busy} onPress={() => submit("now")} style={styles.watchQuickButton}><Ionicons name="time-outline" size={21} color={colors.accent} /><Text style={styles.watchQuickTitle}>Right now</Text><Text style={styles.watchQuickSub}>Use current time</Text></Pressable>
             <Pressable disabled={busy || !releaseDate} onPress={() => releaseDate && submit("release")} style={[styles.watchQuickButton, !releaseDate && styles.disabledButton]}><Ionicons name="calendar-outline" size={21} color={colors.accent} /><Text style={styles.watchQuickTitle}>Release date</Text><Text style={styles.watchQuickSub}>{releaseDate ?? "Unknown"}</Text></Pressable>
             <Pressable disabled={busy} onPress={() => submit("unknown")} style={styles.watchQuickButton}><Ionicons name="help-circle-outline" size={21} color={colors.accent} /><Text style={styles.watchQuickTitle}>Date unknown</Text><Text style={styles.watchQuickSub}>No calendar entry</Text></Pressable>
-          </View>
-          <View style={styles.watchCustomBox}>
+          </View> : null}
+          <View style={[styles.watchCustomBox, keyboardVisible && styles.watchCustomBoxKeyboard]}>
             <Text style={styles.actionSectionLabel}>Custom date and time</Text>
             <View style={styles.watchInputsRow}>
-              <TextInput value={date} onChangeText={setDate} onFocus={revealCustomActions} placeholder="YYYY-MM-DD" placeholderTextColor={colors.muted} style={[styles.settingsInput, styles.watchInput]} />
-              <TextInput value={time} onChangeText={setTime} onFocus={revealCustomActions} placeholder="HH:mm" placeholderTextColor={colors.muted} style={[styles.settingsInput, styles.watchTimeInput]} />
+              <TextInput value={date} onChangeText={value => setDate(formatWatchDateInput(value))} inputMode="numeric" keyboardType="number-pad" maxLength={10} placeholder="YYYY-MM-DD" placeholderTextColor={colors.muted} style={[styles.settingsInput, styles.watchInput]} />
+              <TextInput value={time} onChangeText={value => setTime(previous => nextWatchTimeInput(previous, value))} inputMode="numeric" keyboardType="number-pad" maxLength={5} placeholder="HH:mm" placeholderTextColor={colors.muted} style={[styles.settingsInput, styles.watchTimeInput]} />
             </View>
             <View style={styles.timePointRow}>
               {(["end", "start"] as WatchTimePoint[]).map(value => <Pressable key={value} onPress={() => setTimePoint(value)} style={[styles.timePointButton, timePoint === value && styles.timePointButtonActive]}><Text style={[styles.timePointText, timePoint === value && styles.timePointTextActive]}>{value === "end" ? "End time" : "Start time"}</Text></Pressable>)}
             </View>
             {timePoint === "start" && runtime ? <Text style={styles.watchHint}>The app will add {minutesToLabel(runtime)} and store the finished-at time, just like the website.</Text> : null}
+            {!customDateTimeValid ? <Text style={styles.watchInputError}>Use a real date and a time from 00:00 to 23:59.</Text> : null}
           </View>
         </ScrollView>
-        <Pressable disabled={busy} onPress={() => submit("custom")} style={[styles.settingsSave, styles.watchLogSave]}>{busy ? <ActivityIndicator color={colors.text} /> : <Text style={styles.settingsSaveText}>Save watch</Text>}</Pressable>
+        <Pressable disabled={busy || !customDateTimeValid} onPress={() => submit("custom")} style={[styles.settingsSave, styles.watchLogSave, !customDateTimeValid && styles.disabledButton]}>{busy ? <ActivityIndicator color={colors.text} /> : <Text style={styles.settingsSaveText}>Save watch</Text>}</Pressable>
       </View>
       </KeyboardAvoidingView>
     </Modal>
