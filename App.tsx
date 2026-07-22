@@ -36,6 +36,7 @@ import { AppHeader, BottomNav, DiscoverFiltersCard, Hero, PickerSheet, Recommend
 import { deleteMobileHistoryEvent, deleteMobileNotifications, disconnectTrakt, fetchDiscover, fetchEpisodeNotificationSchedule, fetchListFranchiseCollections, fetchMobileCompany, fetchMobileEpisode, fetchMobileHistory, fetchMobilePerson, fetchMobileProfile, fetchMobileSeason, fetchMobileTitle, fetchRecommendations, fetchSearch, fetchTonight, fetchTraktStatus, fetchUpNext, fetchWebsiteEntityMetadata, fetchWebsiteHome, fetchWebsiteTitleMetadata, fetchWrapped, fetchWrappedShare, sendTestNotification, refreshRecommendations, setNotInterested, startTraktConnect, syncTrakt, type MobileTraktStatus } from "./src/api";
 import { API_URL, communityRatingLabel, countries, excludeGenreOptions, genres, HAS_SUPABASE, titleYear, tmdbImage, userRatingLabel } from "./src/config";
 import { groupFranchises, listFranchiseName, NO_FRANCHISE_GROUP } from "./src/franchise-groups";
+import { compactProfileStatValue } from "./src/profile-stats";
 import { supabase } from "./src/supabase";
 import { reportError } from "./src/telemetry";
 import { colors } from "./src/theme";
@@ -1675,6 +1676,8 @@ export default function App() {
             <SectionTitle kicker="Your screen life" title="My library" action="Up Next ->" onAction={() => setFeatureView("up-next")} />
             {usableSession ? (
               <>
+                {libraryFilter === "all" ? <ProfileDestinationTotal icon="bookmark-outline" value={profileData.trackedLibraryTitles} label="unique saved titles" detail="Across your watchlist, favorites, and custom lists" /> : null}
+                {libraryFilter === "lists" ? <ProfileDestinationTotal icon="list-outline" value={profileData.listCount} label="custom lists" detail="Every list you created" /> : null}
                 <LibraryFilters value={libraryFilter} onChange={setLibraryFilter} />
                 {libraryFilter === "lists" ? <ListGrid lists={libraryLists} onOpen={openList} /> : null}
               </>
@@ -1709,7 +1712,7 @@ export default function App() {
             ) : usableSession && profileView === "history" ? (
               <FullHistoryPage data={profileData} token={usableSession.access_token} onOpen={openHistoryItem} onMenu={setActionItem} onBack={() => openProfileView("profile")} onRemove={removeHistoryEvent} onScrollTop={scrollToTop} />
             ) : usableSession && profileView === "reviews" ? (
-              <FullReviewsPage reviews={profileData.reviews} onBack={() => openProfileView("profile")} onOpen={openReviewItem} />
+              <FullReviewsPage reviews={profileData.reviews} count={profileData.reviewCount} onBack={() => openProfileView("profile")} onOpen={openReviewItem} />
             ) : usableSession && profileView === "statistics" ? (
               <StatisticsPage data={profileData} onBack={() => openProfileView("profile")} onWrapped={() => openProfileView("wrapped")} onOpen={openItem} onGenreShelf={offset => setTimeout(() => listRef.current?.scrollToOffset({ offset, animated: true }), 80)} />
             ) : usableSession && profileView === "wrapped" ? (
@@ -1724,10 +1727,10 @@ export default function App() {
                   else if (next === "lists") { setLibraryFilter("lists"); goTab("library"); }
                 }} />
                 <ProfileStatBand data={profileData} onNavigate={target => {
-                  if (target === "completed") { setLibraryFilter("completed"); goTab("library"); }
                   if (target === "library") { setLibraryFilter("all"); goTab("library"); }
                   if (target === "history") openProfileView("history");
                   if (target === "reviews") openProfileView("reviews");
+                  if (target === "statistics") openProfileView("statistics");
                   if (target === "lists") { setLibraryFilter("lists"); goTab("library"); }
                 }} />
                 <ProfileHistorySection items={profileData.history} onOpen={openHistoryItem} onMenu={setActionItem} onHistory={() => openProfileView("history")} />
@@ -2102,14 +2105,14 @@ function NotificationScreen({ session, onBack, onOpenHref }: { session: Session;
   </View>;
 }
 
-function ProfileStatBand({ data, onNavigate }: { data: ProfileData; onNavigate?: (target: "completed" | "library" | "history" | "reviews" | "lists") => void }) {
+function ProfileStatBand({ data, onNavigate }: { data: ProfileData; onNavigate?: (target: "library" | "history" | "reviews" | "statistics" | "lists") => void }) {
   const stats = [
-    { icon: "film-outline" as const, value: data.tracked, label: "unique watched titles", shortLabel: "titles", target: "completed" as const },
-    { icon: "time-outline" as const, value: data.watchEvents, label: "watch events", shortLabel: "watches", target: "history" as const },
-    { icon: "speedometer-outline" as const, value: data.averageRating, label: "average rating", shortLabel: "rating", target: "reviews" as const },
-    { icon: "chatbox-outline" as const, value: data.reviewCount, label: "reviews", shortLabel: "reviews", target: "reviews" as const },
-    { icon: "list-outline" as const, value: data.listCount, label: "lists", shortLabel: "lists", target: "lists" as const },
-    { icon: "bookmark-outline" as const, value: data.trackedLibraryTitles, label: "unique titles across lists, watchlist, and favorites", shortLabel: "tracked", target: "library" as const }
+    { icon: "film-outline" as const, value: data.historyUniqueTitles, label: "unique watched titles", shortLabel: "watched\ntitles", target: "history" as const },
+    { icon: "time-outline" as const, value: data.watchEvents, label: "watch events", shortLabel: "watch\nevents", target: "history" as const },
+    { icon: "speedometer-outline" as const, value: data.averageRating, label: "average rating", shortLabel: "average\nrating", target: "statistics" as const },
+    { icon: "chatbox-outline" as const, value: data.reviewCount, label: "written reviews", shortLabel: "written\nreviews", target: "reviews" as const },
+    { icon: "list-outline" as const, value: data.listCount, label: "custom lists", shortLabel: "custom\nlists", target: "lists" as const },
+    { icon: "bookmark-outline" as const, value: data.trackedLibraryTitles, label: "unique saved titles across your watchlist, favorites, and custom lists", shortLabel: "saved\ntitles", target: "library" as const }
   ];
   return (
     <View style={styles.profileStats}>
@@ -2118,23 +2121,12 @@ function ProfileStatBand({ data, onNavigate }: { data: ProfileData; onNavigate?:
           <View style={styles.profileStatIcon}><Ionicons name={stat.icon} size={18} color={colors.accent} /></View>
           <View style={styles.profileStatCopy}>
             <Text style={styles.profileStatValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={.65}>{compactProfileStatValue(stat.value)}</Text>
-            <Text style={styles.profileStatLabel} numberOfLines={1}>{stat.shortLabel}</Text>
+            <Text style={styles.profileStatLabel} numberOfLines={2}>{stat.shortLabel}</Text>
           </View>
         </Pressable>
       ))}
     </View>
   );
-}
-
-function compactProfileStatValue(value: number | string) {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return String(value);
-  const absolute = Math.abs(numeric);
-  const units = [[1_000_000_000_000, "T"], [1_000_000_000, "B"], [1_000_000, "M"], [1_000, "K"]] as const;
-  const unit = units.find(([threshold]) => absolute >= threshold);
-  if (!unit) return String(value);
-  const scaled = numeric / unit[0];
-  return `${Number(scaled.toFixed(Math.abs(scaled) >= 100 ? 0 : 1))}${unit[1]}`;
 }
 
 function ProfileNav({ onChange }: { onChange: (value: ProfilePanel) => void }) {
@@ -2226,6 +2218,11 @@ function FullHistoryPage({ data, token, onOpen, onMenu, onBack, onRemove, onScro
   return (
     <View style={styles.profileSection}>
       <SectionTitle kicker="Every play, kept in order" title="Watch history" action="Back to profile ->" onAction={onBack} />
+      <View style={styles.historySummary}>
+        <HistorySummary icon="time-outline" value={data.watchEvents} label="watch events" />
+        <HistorySummary icon="time-outline" value={`${data.screenTimeHours}h`} label="screen time" />
+        <HistorySummary icon="film-outline" value={data.historyUniqueTitles} label="unique watched titles" last />
+      </View>
       <View style={styles.historyTools}>
         <View style={styles.historySearchRow}>
           <Ionicons name="search-outline" size={19} color={colors.muted} />
@@ -2237,11 +2234,6 @@ function FullHistoryPage({ data, token, onOpen, onMenu, onBack, onRemove, onScro
       </View>
       {items.length ? (
         <>
-          <View style={styles.historySummary}>
-            <HistorySummary icon="time-outline" value={data.watchEvents} label="watch events" />
-            <HistorySummary icon="time-outline" value={`${data.screenTimeHours}h`} label="screen time" />
-            <HistorySummary icon="film-outline" value={data.historyUniqueTitles} label="unique titles" last />
-          </View>
           <View style={styles.historyTimeline}>
             {groups.map(group => <MemoHistoryDay key={group.dateKey} group={group} removingIds={removingIds} onOpen={onOpen} onMenu={onMenu} onRemove={removeItem} />)}
           </View>
@@ -2259,7 +2251,7 @@ function FullHistoryPage({ data, token, onOpen, onMenu, onBack, onRemove, onScro
 }
 
 function HistorySummary({ icon, value, label, last }: { icon: keyof typeof Ionicons.glyphMap; value: string | number; label: string; last?: boolean }) {
-  return <View style={[styles.historySummaryCell, last && styles.historySummaryCellLast]}><Ionicons name={icon} size={18} color={colors.accent} /><Text style={styles.historySummaryValue}>{value}</Text><Text style={styles.historySummaryLabel}>{label}</Text></View>;
+  return <View style={[styles.historySummaryCell, last && styles.historySummaryCellLast]}><Ionicons name={icon} size={18} color={colors.accent} /><Text style={styles.historySummaryValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={.5}>{value}</Text><Text style={styles.historySummaryLabel}>{label}</Text></View>;
 }
 
 function HistoryDay({ group, removingIds, onOpen, onMenu, onRemove }: { group: { dateTitle: string; dateSubtitle: string; items: HistoryItem[] }; removingIds: Set<string>; onOpen: (item: HistoryItem) => void; onMenu: (item: MediaSummary) => void; onRemove: (id: string, title: string) => void }) {
@@ -2310,13 +2302,18 @@ function ReviewSection({ reviews, onAll, onOpen }: { reviews: ReviewItem[]; onAl
   return <View style={styles.profileSection}><SectionTitle kicker="Your opinions, collected" title="Your reviews" action={onAll ? "See all reviews ->" : undefined} onAction={onAll} /><View style={styles.reviewList}>{reviews.slice(0, onAll ? 6 : reviews.length).map(review => <ReviewRow key={review.id} review={review} onOpen={onOpen} />)}</View></View>;
 }
 
-function FullReviewsPage({ reviews, onBack, onOpen }: { reviews: ReviewItem[]; onBack: () => void; onOpen: (review: ReviewItem) => void }) {
+function FullReviewsPage({ reviews, count, onBack, onOpen }: { reviews: ReviewItem[]; count: number; onBack: () => void; onOpen: (review: ReviewItem) => void }) {
   return (
     <View style={styles.profileSection}>
       <SectionTitle kicker="Every take in one place" title="Your reviews" action="Back to profile ->" onAction={onBack} />
+      <ProfileDestinationTotal icon="chatbox-outline" value={count} label="reviews written" detail="Your complete collection of film, series, season, and episode reviews" />
       {reviews.length ? <View style={styles.reviewList}>{reviews.map(review => <ReviewRow key={review.id} review={review} onOpen={onOpen} />)}</View> : <EmptyPanel title="No reviews yet" body="Reviews you write on MovieTracker will appear here." />}
     </View>
   );
+}
+
+function ProfileDestinationTotal({ icon, value, label, detail }: { icon: keyof typeof Ionicons.glyphMap; value: number | string; label: string; detail: string }) {
+  return <View style={styles.profileDestinationTotal}><View style={styles.profileDestinationIcon}><Ionicons name={icon} size={19} color={colors.accent} /></View><Text style={styles.profileDestinationValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={.5}>{value}</Text><View style={styles.profileDestinationCopy}><Text style={styles.profileDestinationLabel}>{label}</Text><Text style={styles.profileDestinationDetail} numberOfLines={2}>{detail}</Text></View></View>;
 }
 
 function ChoiceChips({ values, value, onChange }: { values: Array<[string, string]>; value: string; onChange: (value: string) => void }) {
@@ -2427,7 +2424,7 @@ function StatisticsPage({ data, onBack, onWrapped, onOpen, onGenreShelf }: { dat
       <View style={styles.statisticsGrid}>
         {cards.map(card => (
           <View key={card.label} style={styles.statisticsCard}>
-            <Text style={styles.statisticsValue}>{card.value}</Text>
+            <Text style={styles.statisticsValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={.5}>{card.value}</Text>
             <Text style={styles.statisticsLabel}>{card.label}</Text>
           </View>
         ))}
@@ -6010,12 +6007,18 @@ const styles = StyleSheet.create({
   agendaTitle: { color: colors.text, fontSize: 15, fontWeight: "900" },
   agendaSub: { color: colors.muted, fontSize: 13, marginTop: 4 },
   profileStats: { marginTop: 10, marginHorizontal: 18, paddingTop: 10, paddingBottom: 14, borderBottomWidth: 1, borderBottomColor: colors.line, flexDirection: "row", flexWrap: "wrap", alignItems: "center" },
-  profileStat: { width: "33.333%", minWidth: 0, minHeight: 62, paddingHorizontal: 2, paddingVertical: 5, alignItems: "center", justifyContent: "center", gap: 3 },
+  profileStat: { width: "33.333%", minWidth: 0, minHeight: 70, paddingHorizontal: 2, paddingVertical: 4, alignItems: "center", justifyContent: "center", gap: 2 },
   profileStatPressed: { opacity: .55 },
   profileStatIcon: { width: 22, height: 20, alignItems: "center", justifyContent: "center" },
   profileStatCopy: { width: "100%", minWidth: 0, alignItems: "center" },
   profileStatValue: { width: "100%", color: colors.text, fontFamily: "serif", fontSize: 22, lineHeight: 24, fontWeight: "700", textAlign: "center" },
-  profileStatLabel: { color: colors.muted, fontSize: 9, lineHeight: 11, fontWeight: "800", marginTop: 1, textAlign: "center" },
+  profileStatLabel: { minHeight: 22, color: colors.muted, fontSize: 9, lineHeight: 11, fontWeight: "800", marginTop: 1, textAlign: "center" },
+  profileDestinationTotal: { minHeight: 68, marginHorizontal: 18, marginBottom: 18, paddingVertical: 10, borderTopWidth: 1, borderBottomWidth: 1, borderColor: colors.line, flexDirection: "row", alignItems: "center", gap: 10 },
+  profileDestinationIcon: { width: 34, height: 34, borderRadius: 17, backgroundColor: colors.accentSoft, alignItems: "center", justifyContent: "center" },
+  profileDestinationValue: { minWidth: 42, maxWidth: "44%", flexShrink: 1, color: colors.text, fontFamily: "serif", fontSize: 26, lineHeight: 29, fontWeight: "700", textAlign: "right" },
+  profileDestinationCopy: { flex: 1, minWidth: 0 },
+  profileDestinationLabel: { color: colors.text, fontSize: 13, fontWeight: "900" },
+  profileDestinationDetail: { color: colors.muted, fontSize: 10, lineHeight: 14, fontWeight: "700", marginTop: 2 },
   profileNavOuter: { marginHorizontal: 18, borderTopWidth: 1, borderBottomWidth: 1, borderColor: colors.line },
   profileNav: { flexGrow: 1, paddingVertical: 10, paddingHorizontal: 0, alignItems: "center", justifyContent: "space-evenly" },
   profileNavPill: { flex: 1, minHeight: 30, paddingHorizontal: 4, alignItems: "center", justifyContent: "center" },
