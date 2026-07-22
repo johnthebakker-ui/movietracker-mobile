@@ -22,7 +22,9 @@ export const genres = [
   { value: "9648", label: "Mystery" },
   { value: "10749", label: "Romance" },
   { value: "878", label: "Sci-Fi" },
+  { value: "sitcom", label: "Sitcom" },
   { value: "superhero", label: "Superhero" },
+  { value: "talk-show", label: "Talk Show" },
   { value: "53", label: "Thriller" }
 ];
 
@@ -43,7 +45,9 @@ export const excludeGenreOptions = [
   { value: "9648", label: "Mystery" },
   { value: "10749", label: "Romance" },
   { value: "878", label: "Sci-Fi" },
+  { value: "sitcom", label: "Sitcom" },
   { value: "superhero", label: "Superhero" },
+  { value: "talk-show", label: "Talk Show" },
   { value: "53", label: "Thriller" }
 ];
 

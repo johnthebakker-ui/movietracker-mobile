@@ -154,9 +154,9 @@ export function Hero({ item, index, count, onOpen, onPrevious, onNext }: { item:
       {backdrop ? <RemoteImage uri={backdrop} style={StyleSheet.absoluteFill} resizeMode="cover" /> : null}
       <View style={styles.heroShade} />
       <View style={styles.heroCopy}>
-        <Text style={styles.kicker}>THIS WEEK'S ESSENTIAL WATCHES{count ? ` · ${(index ?? 0) + 1} OF ${count}` : ""}</Text>
+        <Text style={[styles.kicker, styles.heroKicker]} numberOfLines={2}>THIS WEEK'S ESSENTIAL WATCHES{count ? ` · ${(index ?? 0) + 1} OF ${count}` : ""}</Text>
         <Text style={styles.heroTitle} numberOfLines={2}>{item.title}</Text>
-        <Text style={styles.meta}>{heroMeta}</Text>
+        <Text style={styles.meta} numberOfLines={1}>{heroMeta}</Text>
         <Text style={styles.heroOverview} numberOfLines={4}>{item.overview || "A cinematic pick from the MovieTracker catalog."}</Text>
         <Pressable onPress={() => onOpen(item)} style={styles.heroButton} accessibilityRole="button" accessibilityLabel={`Explore ${item.title}`}>
           <Ionicons name="play" size={16} color={colors.text} />
@@ -481,9 +481,10 @@ export const styles = StyleSheet.create({
   heroShade: { ...StyleSheet.absoluteFill, backgroundColor: "rgba(0,0,0,0.43)" },
   heroCopy: { padding: 26, paddingBottom: 88 },
   kicker: { color: colors.accent, letterSpacing: 4, fontSize: 11, fontWeight: "900", textTransform: "uppercase" },
-  heroTitle: { color: colors.text, fontSize: 48, lineHeight: 50, fontFamily: "serif", marginTop: 10 },
-  meta: { color: colors.text, fontSize: 13, fontWeight: "700", marginTop: 12 },
-  heroOverview: { color: colors.text, fontSize: 16, lineHeight: 24, marginTop: 16, maxWidth: 620 },
+  heroKicker: { height: 28, lineHeight: 14 },
+  heroTitle: { height: 100, color: colors.text, fontSize: 48, lineHeight: 50, fontFamily: "serif", marginTop: 10, textAlignVertical: "top" },
+  meta: { height: 16, lineHeight: 16, color: colors.text, fontSize: 13, fontWeight: "700", marginTop: 12 },
+  heroOverview: { height: 96, color: colors.text, fontSize: 16, lineHeight: 24, marginTop: 16, maxWidth: 620, textAlignVertical: "top" },
   heroButton: { alignSelf: "flex-start", marginTop: 20, backgroundColor: colors.accent, borderRadius: 24, paddingHorizontal: 18, paddingVertical: 12, flexDirection: "row", alignItems: "center", gap: 8 },
   heroButtonText: { color: colors.text, fontWeight: "900" },
   heroControls: { position: "absolute", right: 24, bottom: 28, flexDirection: "row", alignItems: "center", gap: 10 },

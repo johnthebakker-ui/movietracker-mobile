@@ -2911,9 +2911,14 @@ function SeriesEpisodesScreen({ target, session, onBack, onOpenSeason, onOpenEpi
 
 function ReviewRow({ review, onOpen }: { review: ReviewItem; onOpen: (item: MediaSummary) => void }) {
   const [expanded, setExpanded] = useState(false);
+  const [bodyLineCount, setBodyLineCount] = useState(0);
   const image = tmdbImage(review.artwork, "w342");
   const score = typeof review.score === "number" ? review.score : null;
-  const canExpand = review.body.trim().length > 110;
+  const canExpand = bodyLineCount > 2;
+  useEffect(() => {
+    setExpanded(false);
+    setBodyLineCount(0);
+  }, [review.body, review.id]);
   return (
     <Pressable disabled={!review.item && !canExpand} onPress={() => canExpand ? setExpanded(value => !value) : review.item && onOpen(review.item)} style={styles.reviewRow}>
       {image ? <RemoteImage uri={image} style={styles.reviewImage} resizeMode="cover" /> : <View style={styles.reviewImage} />}
@@ -2926,6 +2931,10 @@ function ReviewRow({ review, onOpen }: { review: ReviewItem; onOpen: (item: Medi
         <Text style={styles.reviewMedia} numberOfLines={1}>{review.mediaTitle}</Text>
         <Text style={styles.reviewMeta}>{review.targetLabel === "episode" ? "Episode" : review.targetLabel === "season" ? "Season" : review.kind === "show" ? "Show" : "Movie"} - {formatShortDate(review.created_at)}{isEditedReview(review) ? " - edited" : ""}</Text>
         <Text style={styles.reviewTitle} numberOfLines={1}>{review.title}</Text>
+        <Text accessible={false} pointerEvents="none" style={[styles.reviewBody, styles.reviewBodyMeasure]} onTextLayout={event => {
+          const nextLineCount = event.nativeEvent.lines.length;
+          if (nextLineCount !== bodyLineCount) setBodyLineCount(nextLineCount);
+        }}>{review.body}</Text>
         <Text style={styles.reviewBody} numberOfLines={expanded ? undefined : 2}>{review.body}</Text>
         {canExpand ? <Text style={styles.reviewExpand}>{expanded ? "Show less" : "Read full review"}</Text> : null}
       </View>
@@ -5185,7 +5194,7 @@ function fromDbMedia(row: any, ratingByMedia?: Map<any, number>): MediaSummary {
     originalLanguage: row.original_language ?? null,
     originCountries: row.origin_countries ?? [],
     companies: row.companies ?? row.raw?.production_companies ?? [],
-    raw: row.raw ?? null
+    raw: row.raw ? { ...row.raw, keywords: row.keywords ?? row.raw.keywords } : row.keywords ? { keywords: row.keywords } : null
   };
 }
 
@@ -5542,6 +5551,8 @@ function passesRecommendationFilters(item: MediaSummary, filters: Recommendation
     const genreMatches = filters.genre === "christmas" ? isChristmasLike(item)
       : filters.genre === "superhero" ? isSuperheroLike(item)
       : filters.genre === "kdrama" ? isKDramaLike(item)
+      : filters.genre === "sitcom" ? isSitcomLike(item)
+      : filters.genre === "talk-show" ? isTalkShowLike(item)
       : item.genres?.some(genre => String(genre.id) === filters.genre || genre.name.toLowerCase() === filters.genre.toLowerCase());
     if (!genreMatches) return false;
   }
@@ -5551,6 +5562,8 @@ function passesRecommendationFilters(item: MediaSummary, filters: Recommendation
     : value === "superhero" ? isSuperheroLike(item)
     : value === "kdrama" ? isKDramaLike(item)
     : value === "anime" ? isAnimeLike(item)
+    : value === "sitcom" ? isSitcomLike(item)
+    : value === "talk-show" ? isTalkShowLike(item)
     : item.genres?.some(genre => String(genre.id) === value || genre.name.toLowerCase().includes(value.toLowerCase())))) return false;
   if (hidden.has(`${item.kind}-${item.id}`)) return false;
   return true;
@@ -5588,6 +5601,21 @@ function isAnimeLike(media: any) {
 function isKDramaLike(media: any) {
   const countries = Array.isArray(media?.originCountries) ? media.originCountries : Array.isArray(media?.origin_countries) ? media.origin_countries : [];
   return media?.kind === "show" && ((media?.originalLanguage ?? media?.original_language) === "ko" || countries.includes("KR"));
+}
+
+function mediaKeywordMatches(media: any, keywordId: number, keywordName: string) {
+  const sources = [media?.keywords, media?.raw?.keywords];
+  const keywords = sources.flatMap(source => Array.isArray(source) ? source : Array.isArray(source?.results) ? source.results : Array.isArray(source?.keywords) ? source.keywords : []);
+  return keywords.some((keyword: any) => Number(keyword?.id) === keywordId || String(keyword?.name ?? "").toLowerCase() === keywordName);
+}
+
+function isSitcomLike(media: any) {
+  return media?.kind === "show" && (mediaKeywordMatches(media, 193171, "sitcom") || /\bsitcom\b/i.test(searchableMediaText(media)));
+}
+
+function isTalkShowLike(media: any) {
+  const genresValue = Array.isArray(media?.genres) ? media.genres : [];
+  return media?.kind === "show" && (genresValue.some((genre: any) => Number(genre?.id) === 10767 || String(genre?.name ?? "").toLowerCase() === "talk") || mediaKeywordMatches(media, 3741, "talk show") || /\btalk[\s-]?show\b/i.test(searchableMediaText(media)));
 }
 
 function isSuperheroLike(media: any) {
@@ -6027,6 +6055,7 @@ const styles = StyleSheet.create({
   reviewMeta: { color: colors.muted, fontSize: 13, marginTop: 4 },
   reviewTitle: { color: colors.text, fontFamily: "serif", fontSize: 19, fontWeight: "700", marginTop: 6 },
   reviewBody: { color: colors.muted, fontSize: 14, lineHeight: 20, marginTop: 5 },
+  reviewBodyMeasure: { position: "absolute", left: 0, right: 0, top: 0, opacity: 0 },
   reviewExpand: { color: colors.accent, fontSize: 12, fontWeight: "800", marginTop: 7 },
   groupControls: { marginHorizontal: 18, marginTop: 6, marginBottom: 18, flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 },
   groupLabel: { color: colors.muted, fontSize: 13, fontWeight: "900", marginRight: 2 },
