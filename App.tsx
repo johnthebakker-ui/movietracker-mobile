@@ -4556,7 +4556,7 @@ function WatchLogSheet({ visible, title, releaseDate, runtime, busy, watched, on
       <KeyboardAvoidingView pointerEvents="box-none" behavior={Platform.OS === "ios" ? "padding" : "height"} keyboardVerticalOffset={16} style={styles.modalKeyboardAvoider}>
       <View style={styles.watchLogSheet}>
         <View style={styles.grabber} />
-        <ScrollView ref={scrollRef} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" keyboardDismissMode="interactive" automaticallyAdjustKeyboardInsets={Platform.OS === "ios"} contentContainerStyle={styles.watchLogScrollContent}>
+        <ScrollView ref={scrollRef} style={styles.watchLogScroll} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" keyboardDismissMode="interactive" automaticallyAdjustKeyboardInsets={Platform.OS === "ios"} contentContainerStyle={styles.watchLogScrollContent}>
           <View style={styles.actionHeader}>
             <View style={{ flex: 1 }}>
               <Text style={styles.actionTitle}>{watched ? "Add another watch" : "Mark watched"}</Text>
@@ -4579,9 +4579,9 @@ function WatchLogSheet({ visible, title, releaseDate, runtime, busy, watched, on
               {(["end", "start"] as WatchTimePoint[]).map(value => <Pressable key={value} onPress={() => setTimePoint(value)} style={[styles.timePointButton, timePoint === value && styles.timePointButtonActive]}><Text style={[styles.timePointText, timePoint === value && styles.timePointTextActive]}>{value === "end" ? "End time" : "Start time"}</Text></Pressable>)}
             </View>
             {timePoint === "start" && runtime ? <Text style={styles.watchHint}>The app will add {minutesToLabel(runtime)} and store the finished-at time, just like the website.</Text> : null}
-            <Pressable disabled={busy} onPress={() => submit("custom")} style={styles.settingsSave}>{busy ? <ActivityIndicator color={colors.text} /> : <Text style={styles.settingsSaveText}>Save watch</Text>}</Pressable>
           </View>
         </ScrollView>
+        <Pressable disabled={busy} onPress={() => submit("custom")} style={[styles.settingsSave, styles.watchLogSave]}>{busy ? <ActivityIndicator color={colors.text} /> : <Text style={styles.settingsSaveText}>Save watch</Text>}</Pressable>
       </View>
       </KeyboardAvoidingView>
     </Modal>
@@ -6384,7 +6384,9 @@ const styles = StyleSheet.create({
   franchiseGroupSaveText: { color: colors.text, fontSize: 14, fontWeight: "900" },
   currentListRemove: { minHeight: 54, borderRadius: 16, backgroundColor: "rgba(255,77,77,0.12)", flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 },
   currentListRemoveText: { color: "#ff8585", fontSize: 15, fontWeight: "900" },
-  watchLogScrollContent: { paddingBottom: 28 },
+  watchLogScroll: { flexShrink: 1 },
+  watchLogScrollContent: { paddingBottom: 12 },
+  watchLogSave: { flexShrink: 0, marginTop: 12 },
   episodeHero: { minHeight: 640, backgroundColor: colors.panel, justifyContent: "flex-end", overflow: "hidden" },
   entityHeader: { padding: 18, paddingBottom: 4 },
   entityHeroRow: { flexDirection: "row", gap: 16, alignItems: "center", marginTop: 18 },
