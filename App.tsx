@@ -1998,22 +1998,24 @@ function CalendarPanel({ mode, view, month, week, events, onMode, onView, onMont
   return (
     <View style={styles.calendarWrap}>
       <View style={styles.segmented}>
-        <Pressable onPress={() => onMode("upcoming")} style={[styles.segment, mode === "upcoming" && styles.segmentActive]}><Text style={styles.segmentText}>Upcoming</Text></Pressable>
-        <Pressable onPress={() => onMode("watched")} style={[styles.segment, mode === "watched" && styles.segmentActive]}><Text style={styles.segmentText}>Watched</Text></Pressable>
+        <Pressable accessibilityRole="button" accessibilityState={{ selected: mode === "upcoming" }} onPress={() => onMode("upcoming")} style={({ pressed }) => [styles.segment, mode === "upcoming" && styles.segmentActive, pressed && styles.calendarControlPressed]}><Text style={[styles.segmentText, mode === "upcoming" && styles.segmentTextActive]}>Upcoming</Text></Pressable>
+        <Pressable accessibilityRole="button" accessibilityState={{ selected: mode === "watched" }} onPress={() => onMode("watched")} style={({ pressed }) => [styles.segment, mode === "watched" && styles.segmentActive, pressed && styles.calendarControlPressed]}><Text style={[styles.segmentText, mode === "watched" && styles.segmentTextActive]}>Watched</Text></Pressable>
       </View>
-      <View style={styles.calendarViewSegmented}>
-        <Pressable onPress={() => onView("month")} style={[styles.calendarViewSegment, view === "month" && styles.calendarViewSegmentActive]}><Ionicons name="calendar-outline" size={15} color={view === "month" ? colors.text : colors.muted} /><Text style={[styles.calendarViewText, view === "month" && styles.calendarViewTextActive]}>Month</Text></Pressable>
-        <Pressable onPress={() => onView("week")} style={[styles.calendarViewSegment, view === "week" && styles.calendarViewSegmentActive]}><Ionicons name="list-outline" size={15} color={view === "week" ? colors.text : colors.muted} /><Text style={[styles.calendarViewText, view === "week" && styles.calendarViewTextActive]}>Week</Text></Pressable>
+      <View style={styles.calendarControlRow}>
+        <View style={styles.calendarViewSegmented}>
+          <Pressable accessibilityRole="button" accessibilityState={{ selected: view === "month" }} onPress={() => onView("month")} style={({ pressed }) => [styles.calendarViewSegment, view === "month" && styles.calendarViewSegmentActive, pressed && styles.calendarControlPressed]}><Ionicons name="calendar-outline" size={15} color={view === "month" ? colors.text : colors.muted} /><Text style={[styles.calendarViewText, view === "month" && styles.calendarViewTextActive]}>Month</Text></Pressable>
+          <Pressable accessibilityRole="button" accessibilityState={{ selected: view === "week" }} onPress={() => onView("week")} style={({ pressed }) => [styles.calendarViewSegment, view === "week" && styles.calendarViewSegmentActive, pressed && styles.calendarControlPressed]}><Ionicons name="list-outline" size={15} color={view === "week" ? colors.text : colors.muted} /><Text style={[styles.calendarViewText, view === "week" && styles.calendarViewTextActive]}>Week</Text></Pressable>
+        </View>
+        <Pressable accessibilityRole="button" accessibilityState={{ selected: posterCalendar }} onPress={() => setPosterCalendar(value => !value)} style={({ pressed }) => [styles.calendarDisplayToggle, posterCalendar && styles.calendarDisplayToggleActive, pressed && styles.calendarControlPressed]}>
+          <Ionicons name="image-outline" size={16} color={posterCalendar ? colors.accent : colors.muted} />
+          <Text style={[styles.calendarDisplayToggleText, posterCalendar && styles.calendarDisplayToggleTextActive]}>Posters</Text>
+        </Pressable>
       </View>
       <View style={styles.monthToolbar}>
-        <Pressable onPress={() => view === "week" ? onWeek(shiftWeek(week, -1)) : onMonth(shiftMonth(month, -1))} style={styles.monthButton}><Ionicons name="chevron-back" size={22} color={colors.text} /></Pressable>
+        <Pressable accessibilityRole="button" accessibilityLabel={`Previous ${view}`} onPress={() => view === "week" ? onWeek(shiftWeek(week, -1)) : onMonth(shiftMonth(month, -1))} style={({ pressed }) => [styles.monthButton, pressed && styles.calendarControlPressed]}><Ionicons name="chevron-back" size={21} color={colors.text} /></Pressable>
         <Text style={styles.monthTitle}>{label}</Text>
-        <Pressable onPress={() => view === "week" ? onWeek(shiftWeek(week, 1)) : onMonth(shiftMonth(month, 1))} style={styles.monthButton}><Ionicons name="chevron-forward" size={22} color={colors.text} /></Pressable>
+        <Pressable accessibilityRole="button" accessibilityLabel={`Next ${view}`} onPress={() => view === "week" ? onWeek(shiftWeek(week, 1)) : onMonth(shiftMonth(month, 1))} style={({ pressed }) => [styles.monthButton, pressed && styles.calendarControlPressed]}><Ionicons name="chevron-forward" size={21} color={colors.text} /></Pressable>
       </View>
-      <Pressable onPress={() => setPosterCalendar(value => !value)} style={styles.calendarDisplayToggle}>
-        <Ionicons name={posterCalendar ? "grid-outline" : "image-outline"} size={15} color={colors.muted} />
-        <Text style={styles.calendarDisplayToggleText}>{posterCalendar ? "Compact calendar" : "Poster calendar"}</Text>
-      </Pressable>
       {view === "month" ? <View style={styles.calendarGrid}>
         {["M", "T", "W", "T", "F", "S", "S"].map((day, index) => <Text key={`${day}-${index}`} style={styles.weekday}>{day}</Text>)}
         {cells.map((date, index) => {
@@ -2060,7 +2062,7 @@ function CalendarPanel({ mode, view, month, week, events, onMode, onView, onMont
 function AgendaRow({ event, onOpen, onMenu }: { event: CalendarEvent; onOpen: (event: CalendarEvent) => void; onMenu: (item: MediaSummary) => void }) {
   const image = tmdbImage(event.artwork, "w342");
   return (
-    <Pressable onPress={() => onOpen(event)} onLongPress={() => event.item && onMenu(event.item)} delayLongPress={280} style={styles.agendaRow}>
+    <Pressable onPress={() => onOpen(event)} onLongPress={() => event.item && onMenu(event.item)} delayLongPress={280} style={({ pressed }) => [styles.agendaRow, pressed && styles.agendaRowPressed]}>
       <View style={styles.agendaImage}>{image ? <RemoteImage uri={image} style={styles.posterImage} resizeMode="cover" /> : <Ionicons name="calendar-outline" size={20} color={colors.muted} />}</View>
       <View style={styles.agendaCopy}><Text style={styles.agendaTitle} numberOfLines={1}>{event.title}</Text><Text style={styles.agendaSub} numberOfLines={1}>{event.subtitle}</Text></View>
       <Ionicons name="chevron-forward" size={18} color={colors.muted} />
@@ -5999,56 +6001,62 @@ const styles = StyleSheet.create({
   filterPillActive: { backgroundColor: colors.accent, borderColor: colors.accent },
   filterPillText: { color: colors.text, fontSize: 11, fontWeight: "900" },
   filterPillTextActive: { color: colors.text },
-  calendarWrap: { marginTop: 4 },
-  segmented: { flexDirection: "row", marginHorizontal: 18, marginTop: 10, borderRadius: 22, borderWidth: 1, borderColor: colors.line, overflow: "hidden", backgroundColor: colors.panel },
-  segment: { flex: 1, height: 48, alignItems: "center", justifyContent: "center" },
+  calendarWrap: { marginTop: 2 },
+  segmented: { flexDirection: "row", height: 44, marginHorizontal: 18, marginTop: 8, padding: 3, borderRadius: 14, backgroundColor: colors.panel },
+  segment: { flex: 1, borderRadius: 11, alignItems: "center", justifyContent: "center" },
   segmentActive: { backgroundColor: colors.accent },
-  segmentText: { color: colors.text, fontWeight: "900" },
-  calendarViewSegmented: { alignSelf: "center", marginTop: 12, padding: 3, borderRadius: 18, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel, flexDirection: "row" },
-  calendarViewSegment: { minHeight: 34, paddingHorizontal: 13, borderRadius: 15, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6 },
+  segmentText: { color: colors.muted, fontSize: 13, fontWeight: "900" },
+  segmentTextActive: { color: colors.text },
+  calendarControlPressed: { opacity: .62 },
+  calendarControlRow: { marginHorizontal: 18, marginTop: 10, flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
+  calendarViewSegmented: { height: 38, padding: 3, borderRadius: 12, backgroundColor: colors.panel, flexDirection: "row", flex: 1 },
+  calendarViewSegment: { flex: 1, borderRadius: 9, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6 },
   calendarViewSegmentActive: { backgroundColor: colors.panel2 },
   calendarViewText: { color: colors.muted, fontSize: 12, fontWeight: "900" },
   calendarViewTextActive: { color: colors.text },
-  monthToolbar: { marginHorizontal: 18, marginTop: 20, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  monthButton: { width: 46, height: 46, borderRadius: 23, borderWidth: 1, borderColor: colors.line, alignItems: "center", justifyContent: "center", backgroundColor: colors.panel },
-  monthTitle: { color: colors.text, fontFamily: "serif", fontSize: 30, fontWeight: "700" },
-  calendarDisplayToggle: { alignSelf: "center", marginTop: 12, minHeight: 34, borderRadius: 17, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel, paddingHorizontal: 12, flexDirection: "row", alignItems: "center", gap: 6 },
+  monthToolbar: { minHeight: 54, marginHorizontal: 18, marginTop: 12, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  monthButton: { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", backgroundColor: colors.panel },
+  monthTitle: { flex: 1, color: colors.text, fontFamily: "serif", fontSize: 27, fontWeight: "700", textAlign: "center" },
+  calendarDisplayToggle: { height: 38, borderRadius: 12, backgroundColor: colors.panel, paddingHorizontal: 12, flexDirection: "row", alignItems: "center", gap: 6 },
+  calendarDisplayToggleActive: { backgroundColor: colors.accentSoft },
   calendarDisplayToggleText: { color: colors.muted, fontSize: 12, fontWeight: "900" },
+  calendarDisplayToggleTextActive: { color: colors.text },
   recommendationIntro: { color: colors.muted, fontSize: 16, lineHeight: 24, marginHorizontal: 18, marginBottom: 8 },
-  calendarGrid: { marginHorizontal: 18, marginTop: 12, padding: 12, borderRadius: 22, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel, flexDirection: "row", flexWrap: "wrap" },
-  weekday: { width: "14.285%", color: colors.muted, textAlign: "center", fontSize: 12, fontWeight: "900", paddingBottom: 10 },
-  dayCell: { width: "14.285%", minHeight: 50, borderRadius: 12, backgroundColor: colors.panel2, alignItems: "flex-start", justifyContent: "flex-start", padding: 7, borderWidth: 2, borderColor: colors.panel },
-  dayCellPosterMode: { minHeight: 70 },
+  calendarGrid: { marginHorizontal: 18, marginTop: 4, paddingVertical: 10, borderTopWidth: 1, borderBottomWidth: 1, borderColor: colors.line, flexDirection: "row", flexWrap: "wrap" },
+  weekday: { width: "14.285%", color: colors.muted, textAlign: "center", fontSize: 10, fontWeight: "900", paddingBottom: 9 },
+  dayCell: { width: "14.285%", minHeight: 48, borderRadius: 9, backgroundColor: "transparent", alignItems: "center", justifyContent: "flex-start", paddingTop: 5, borderWidth: 1, borderColor: "transparent" },
+  dayCellPosterMode: { minHeight: 72 },
   blankDay: { backgroundColor: "transparent" },
-  todayCell: { backgroundColor: colors.accent },
-  dayText: { color: colors.text, fontSize: 13, lineHeight: 16, fontWeight: "900" },
-  todayText: { color: colors.text },
-  selectedDayCell: { borderColor: colors.accent },
-  dayCount: { position: "absolute", right: 4, top: 4, minWidth: 20, height: 20, paddingHorizontal: 4, borderRadius: 10, overflow: "hidden", backgroundColor: "rgba(0,0,0,0.82)", color: colors.text, textAlign: "center", lineHeight: 20, fontSize: 11, fontWeight: "900" },
-  dayPosterStrip: { position: "absolute", left: 5, right: 5, bottom: 5, height: 27, flexDirection: "row", gap: 3, alignItems: "center" },
-  dayPosterThumb: { flex: 1, height: 27, borderRadius: 5, overflow: "hidden", backgroundColor: colors.panel },
+  todayCell: { backgroundColor: "transparent" },
+  dayText: { width: 26, height: 26, borderRadius: 13, overflow: "hidden", color: colors.text, fontSize: 13, lineHeight: 26, fontWeight: "900", textAlign: "center" },
+  todayText: { color: colors.text, backgroundColor: colors.accent },
+  selectedDayCell: { borderColor: colors.line, backgroundColor: colors.panel },
+  dayCount: { position: "absolute", right: 2, top: 3, minWidth: 17, height: 17, paddingHorizontal: 3, borderRadius: 9, overflow: "hidden", backgroundColor: colors.accentSoft, color: colors.accent, textAlign: "center", lineHeight: 17, fontSize: 9, fontWeight: "900" },
+  dayPosterStrip: { position: "absolute", left: 3, right: 3, bottom: 4, height: 28, flexDirection: "row", gap: 2, alignItems: "center" },
+  dayPosterThumb: { flex: 1, height: 28, borderRadius: 3, overflow: "hidden", backgroundColor: colors.panel },
   dayPosterMore: { minWidth: 22, height: 22, borderRadius: 11, overflow: "hidden", backgroundColor: "rgba(0,0,0,0.72)", color: colors.text, textAlign: "center", lineHeight: 22, fontSize: 9, fontWeight: "900" },
-  calendarWeekStrip: { marginHorizontal: 18, marginTop: 14, padding: 8, borderRadius: 20, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel, flexDirection: "row", gap: 4 },
-  calendarWeekDay: { flex: 1, minWidth: 0, minHeight: 76, paddingVertical: 8, borderRadius: 13, alignItems: "center", justifyContent: "center", gap: 3 },
-  calendarWeekDayPosterMode: { minHeight: 112, paddingBottom: 40 },
-  calendarWeekDayToday: { backgroundColor: colors.accentSoft, borderWidth: 1, borderColor: colors.accent },
-  calendarWeekDaySelected: { borderWidth: 1, borderColor: colors.accent, backgroundColor: colors.panel2 },
+  calendarWeekStrip: { marginHorizontal: 18, marginTop: 4, paddingVertical: 10, borderTopWidth: 1, borderBottomWidth: 1, borderColor: colors.line, flexDirection: "row", gap: 3 },
+  calendarWeekDay: { flex: 1, minWidth: 0, minHeight: 72, paddingVertical: 7, borderRadius: 10, borderWidth: 1, borderColor: "transparent", alignItems: "center", justifyContent: "center", gap: 3 },
+  calendarWeekDayPosterMode: { minHeight: 108, paddingBottom: 39 },
+  calendarWeekDayToday: { backgroundColor: colors.accentSoft },
+  calendarWeekDaySelected: { borderColor: colors.line, backgroundColor: colors.panel },
   calendarWeekDayName: { color: colors.muted, fontSize: 10, fontWeight: "900", textTransform: "uppercase" },
   calendarWeekDayNumber: { color: colors.text, fontFamily: "serif", fontSize: 22, fontWeight: "700" },
   calendarWeekDayNumberToday: { color: colors.accent },
   calendarWeekDayCount: { minWidth: 20, height: 20, borderRadius: 10, overflow: "hidden", color: colors.muted, textAlign: "center", lineHeight: 20, fontSize: 10, fontWeight: "900" },
-  calendarWeekDayCountActive: { backgroundColor: colors.accent, color: colors.text },
+  calendarWeekDayCountActive: { backgroundColor: colors.accentSoft, color: colors.accent },
   calendarWeekPosterStrip: { position: "absolute", left: 4, right: 4, bottom: 5, height: 30, alignItems: "center", justifyContent: "center" },
-  calendarWeekPosterThumb: { width: "100%", height: 30, borderRadius: 5, overflow: "hidden", backgroundColor: colors.panel2 },
+  calendarWeekPosterThumb: { width: "100%", height: 30, borderRadius: 3, overflow: "hidden", backgroundColor: colors.panel2 },
   calendarWeekPosterMore: { position: "absolute", right: 2, bottom: 2, minWidth: 18, height: 18, paddingHorizontal: 3, borderRadius: 9, overflow: "hidden", backgroundColor: "rgba(0,0,0,0.78)", color: colors.text, textAlign: "center", lineHeight: 18, fontSize: 8, fontWeight: "900" },
-  calendarWeekEmpty: { minHeight: 48, paddingHorizontal: 12, borderRadius: 12, color: colors.muted, backgroundColor: colors.panel, textAlignVertical: "center", fontSize: 12, fontWeight: "800" },
-  agenda: { marginHorizontal: 18, marginTop: 22, gap: 18 },
-  agendaDay: { gap: 7 },
+  calendarWeekEmpty: { minHeight: 44, paddingHorizontal: 12, borderRadius: 10, color: colors.muted, backgroundColor: colors.panel, textAlignVertical: "center", fontSize: 12, fontWeight: "800" },
+  agenda: { marginHorizontal: 18, marginTop: 18, gap: 20 },
+  agendaDay: { gap: 6 },
   agendaHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   agendaDate: { color: colors.text, fontFamily: "serif", fontSize: 20, fontWeight: "700" },
-  agendaCount: { minWidth: 24, height: 24, borderRadius: 12, backgroundColor: colors.panel2, color: colors.muted, textAlign: "center", lineHeight: 24, fontWeight: "900" },
-  agendaRow: { minHeight: 72, borderRadius: 14, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.panel, padding: 8, flexDirection: "row", alignItems: "center", gap: 10 },
-  agendaImage: { width: 76, height: 54, borderRadius: 8, overflow: "hidden", backgroundColor: colors.panel2, alignItems: "center", justifyContent: "center" },
+  agendaCount: { minWidth: 24, height: 24, borderRadius: 12, backgroundColor: colors.accentSoft, color: colors.accent, textAlign: "center", lineHeight: 24, fontWeight: "900" },
+  agendaRow: { minHeight: 68, borderRadius: 11, backgroundColor: colors.panel, padding: 7, flexDirection: "row", alignItems: "center", gap: 10 },
+  agendaRowPressed: { opacity: .62, transform: [{ scale: .99 }] },
+  agendaImage: { width: 72, height: 52, borderRadius: 6, overflow: "hidden", backgroundColor: colors.panel2, alignItems: "center", justifyContent: "center" },
   agendaCopy: { flex: 1, minWidth: 0 },
   agendaTitle: { color: colors.text, fontSize: 15, fontWeight: "900" },
   agendaSub: { color: colors.muted, fontSize: 13, marginTop: 4 },
