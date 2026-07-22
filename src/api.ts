@@ -287,6 +287,11 @@ export async function fetchMobileHistory(token: string, page = 1, type: "all" | 
   return request<{ items: any[]; page: number; pageSize: number; hasMore: boolean }>(`/api/mobile/history?${params}`, token);
 }
 
+export async function fetchMobileReviews(token: string, page = 1) {
+  const params = queryString({ page });
+  return request<{ items: any[]; total: number; page: number; pageSize: number; hasMore: boolean }>(`/api/mobile/reviews?${params}`, token);
+}
+
 export async function deleteMobileHistoryEvent(token: string, eventId: string) {
   return request<{ removed: boolean }>(`/api/mobile/history/${encodeURIComponent(eventId)}`, token, { method: "DELETE" });
 }

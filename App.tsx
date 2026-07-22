@@ -33,7 +33,7 @@ import {
 } from "react-native";
 
 import { AppHeader, BottomNav, DiscoverFiltersCard, Hero, PickerSheet, RecommendationFiltersCard, RemoteImage, resolveRemoteImageUri, SectionTitle, TitleCard, type PickerAnchor } from "./src/components";
-import { deleteMobileHistoryEvent, deleteMobileNotifications, disconnectTrakt, fetchDiscover, fetchEpisodeNotificationSchedule, fetchListFranchiseCollections, fetchMobileCompany, fetchMobileEpisode, fetchMobileHistory, fetchMobilePerson, fetchMobileProfile, fetchMobileSeason, fetchMobileTitle, fetchRecommendations, fetchSearch, fetchTonight, fetchTraktStatus, fetchUpNext, fetchWebsiteEntityMetadata, fetchWebsiteHome, fetchWebsiteTitleMetadata, fetchWrapped, fetchWrappedShare, sendTestNotification, refreshRecommendations, setNotInterested, startTraktConnect, syncTrakt, type MobileTraktStatus } from "./src/api";
+import { deleteMobileHistoryEvent, deleteMobileNotifications, disconnectTrakt, fetchDiscover, fetchEpisodeNotificationSchedule, fetchListFranchiseCollections, fetchMobileCompany, fetchMobileEpisode, fetchMobileHistory, fetchMobilePerson, fetchMobileProfile, fetchMobileReviews, fetchMobileSeason, fetchMobileTitle, fetchRecommendations, fetchSearch, fetchTonight, fetchTraktStatus, fetchUpNext, fetchWebsiteEntityMetadata, fetchWebsiteHome, fetchWebsiteTitleMetadata, fetchWrapped, fetchWrappedShare, sendTestNotification, refreshRecommendations, setNotInterested, startTraktConnect, syncTrakt, type MobileTraktStatus } from "./src/api";
 import { API_URL, communityRatingLabel, countries, excludeGenreOptions, genres, HAS_SUPABASE, titleYear, tmdbImage, userRatingLabel } from "./src/config";
 import { groupFranchises, listFranchiseName, NO_FRANCHISE_GROUP } from "./src/franchise-groups";
 import { compactProfileStatValue } from "./src/profile-stats";
@@ -167,7 +167,7 @@ const profileReviewMediaSelect = "id,tmdb_id,kind,title,overview,poster_path,bac
 const profileReviewSelect = `id,title,body,contains_spoilers,is_private,created_at,updated_at,media(${profileReviewMediaSelect}),seasons(id,season_number,name,overview,poster_path,air_date,episode_count,media(${profileReviewMediaSelect})),episodes(id,name,overview,episode_number,air_date,still_path,runtime,vote_average,seasons(season_number,name,media(${profileReviewMediaSelect}))),ratings(score)`;
 const profileCachePrefix = "movietracker-profile-v1";
 const profileDataCachePrefix = "movietracker-profile-data-v5";
-const libraryCachePrefix = "movietracker-library-v3";
+const libraryCachePrefix = "movietracker-library-v4";
 const titleDetailCachePrefix = "movietracker-title-detail-v2";
 const episodeNotificationIdsKey = "movietracker-episode-notification-ids-v1";
 const episodeNotificationReleaseKeysKey = "movietracker-episode-notification-release-keys-v2";
@@ -314,6 +314,8 @@ export default function App() {
   const [libraryFilter, setLibraryFilter] = useState<LibraryFilter>("all");
   const [listGroup, setListGroup] = useState<ListGroup>("none");
   const [libraryLists, setLibraryLists] = useState<UserList[]>([]);
+  const [librarySavedTitleCount, setLibrarySavedTitleCount] = useState<number | null>(null);
+  const [libraryListCount, setLibraryListCount] = useState<number | null>(null);
   const [calendarMode, setCalendarMode] = useState<CalendarMode>("upcoming");
   const [calendarView, setCalendarView] = useState<CalendarView>("month");
   const [calendarMonth, setCalendarMonth] = useState(() => monthKey(new Date()));
@@ -853,6 +855,8 @@ export default function App() {
     if (!usableSession?.user.id || !supabase) {
       setLibraryFeed(emptyFeed);
       setLibraryLists([]);
+      setLibrarySavedTitleCount(null);
+      setLibraryListCount(null);
       setProgressCounts(blankProgress);
       libraryLoadedKey.current = null;
       libraryLoadedAt.current = 0;
@@ -865,9 +869,11 @@ export default function App() {
       const cached = await AsyncStorage.getItem(storageKey).catch(() => null);
       if (cached) {
         try {
-          const value = JSON.parse(cached) as { feed: FeedResult; lists: UserList[]; savedAt: number };
+          const value = JSON.parse(cached) as { feed: FeedResult; lists: UserList[]; savedTitleCount?: number; listCount?: number; savedAt: number };
           setLibraryFeed(value.feed ?? emptyFeed);
           setLibraryLists(value.lists ?? []);
+          setLibrarySavedTitleCount(typeof value.savedTitleCount === "number" ? value.savedTitleCount : null);
+          setLibraryListCount(typeof value.listCount === "number" ? value.listCount : null);
           libraryLoadedKey.current = cacheKey;
           libraryLoadedAt.current = value.savedAt || Date.now();
           void loadLibrary(true).catch(() => undefined);
@@ -875,13 +881,17 @@ export default function App() {
         } catch { /* Ignore an old cache shape. */ }
       }
     }
+    const savedTitleCountPromise = loadTrackedLibraryTitleCount(usableSession.user.id);
     if (libraryFilter === "lists") {
-      const lists = await loadUserLists(usableSession.user.id);
+      const [lists, savedTitleCount] = await Promise.all([loadUserLists(usableSession.user.id), savedTitleCountPromise]);
       setLibraryLists(lists);
+      setLibrarySavedTitleCount(savedTitleCount);
+      setLibraryListCount(lists.length);
+      setProfileData(current => ({ ...current, trackedLibraryTitles: savedTitleCount, listCount: lists.length, lists }));
       setLibraryFeed(emptyFeed);
       libraryLoadedKey.current = cacheKey;
       libraryLoadedAt.current = Date.now();
-      await AsyncStorage.setItem(storageKey, JSON.stringify({ feed: emptyFeed, lists, savedAt: libraryLoadedAt.current })).catch(() => undefined);
+      await AsyncStorage.setItem(storageKey, JSON.stringify({ feed: emptyFeed, lists, savedTitleCount, listCount: lists.length, savedAt: libraryLoadedAt.current })).catch(() => undefined);
       return;
     }
     const mediaSelect = "id,tmdb_id,kind,title,overview,poster_path,backdrop_path,release_date,end_date,status,vote_average,vote_count,popularity,genres,original_language,origin_countries";
@@ -894,6 +904,7 @@ export default function App() {
         return query.order("updated_at", { ascending: false }).limit(120);
       })();
     if (sourceResult.error) throw sourceResult.error;
+    const savedTitleCount = await savedTitleCountPromise;
     const activeRewatchIds = libraryFilter === "watching" ? await loadMobileActiveRewatchIds(usableSession.user.id, sourceResult.data ?? []) : new Set<number>();
     const sourceRows = libraryFilter === "watching"
       ? (sourceResult.data ?? []).filter((row: any) => row.status === "watching" || activeRewatchIds.has(Number(firstRow(row.media)?.id)))
@@ -912,11 +923,13 @@ export default function App() {
       return [{ ...fromDbMedia(media, ratingByMedia), listMediaId: Number(media.id), activeRewatch, reason: libraryFilter === "favorites" ? "Favorite" : activeRewatch ? "Rewatching" : progressLabel(row.status) }];
     }));
     setLibraryLists([]);
+    setLibrarySavedTitleCount(savedTitleCount);
+    setProfileData(current => ({ ...current, trackedLibraryTitles: savedTitleCount }));
     const feed = { items };
     setLibraryFeed(feed);
     libraryLoadedKey.current = cacheKey;
     libraryLoadedAt.current = Date.now();
-    await AsyncStorage.setItem(storageKey, JSON.stringify({ feed, lists: [], savedAt: libraryLoadedAt.current })).catch(() => undefined);
+    await AsyncStorage.setItem(storageKey, JSON.stringify({ feed, lists: [], savedTitleCount, savedAt: libraryLoadedAt.current })).catch(() => undefined);
   }, [libraryFilter, usableSession?.access_token, usableSession?.user.id]);
 
   const loadCalendar = useCallback(async () => {
@@ -1676,8 +1689,8 @@ export default function App() {
             <SectionTitle kicker="Your screen life" title="My library" action="Up Next ->" onAction={() => setFeatureView("up-next")} />
             {usableSession ? (
               <>
-                {libraryFilter === "all" ? <ProfileDestinationTotal icon="bookmark-outline" value={profileData.trackedLibraryTitles} label="unique saved titles" detail="Across your watchlist, favorites, and custom lists" /> : null}
-                {libraryFilter === "lists" ? <ProfileDestinationTotal icon="list-outline" value={profileData.listCount} label="custom lists" detail="Every list you created" /> : null}
+                {libraryFilter === "all" ? <ProfileDestinationTotal icon="bookmark-outline" value={librarySavedTitleCount ?? (profileData.trackedLibraryTitles || "…")} label="unique saved titles" detail="Across your watchlist, favorites, and custom lists" /> : null}
+                {libraryFilter === "lists" ? <ProfileDestinationTotal icon="list-outline" value={libraryListCount ?? (profileData.listCount || "…")} label="custom lists" detail="Every list you created" /> : null}
                 <LibraryFilters value={libraryFilter} onChange={setLibraryFilter} />
                 {libraryFilter === "lists" ? <ListGrid lists={libraryLists} onOpen={openList} /> : null}
               </>
@@ -1712,7 +1725,7 @@ export default function App() {
             ) : usableSession && profileView === "history" ? (
               <FullHistoryPage data={profileData} token={usableSession.access_token} onOpen={openHistoryItem} onMenu={setActionItem} onBack={() => openProfileView("profile")} onRemove={removeHistoryEvent} onScrollTop={scrollToTop} />
             ) : usableSession && profileView === "reviews" ? (
-              <FullReviewsPage reviews={profileData.reviews} count={profileData.reviewCount} onBack={() => openProfileView("profile")} onOpen={openReviewItem} />
+              <FullReviewsPage reviews={profileData.reviews} count={profileData.reviewCount} token={usableSession.access_token} onBack={() => openProfileView("profile")} onOpen={openReviewItem} onScrollTop={scrollToTop} />
             ) : usableSession && profileView === "statistics" ? (
               <StatisticsPage data={profileData} onBack={() => openProfileView("profile")} onWrapped={() => openProfileView("wrapped")} onOpen={openItem} onGenreShelf={offset => setTimeout(() => listRef.current?.scrollToOffset({ offset, animated: true }), 80)} />
             ) : usableSession && profileView === "wrapped" ? (
@@ -2302,12 +2315,45 @@ function ReviewSection({ reviews, onAll, onOpen }: { reviews: ReviewItem[]; onAl
   return <View style={styles.profileSection}><SectionTitle kicker="Your opinions, collected" title="Your reviews" action={onAll ? "See all reviews ->" : undefined} onAction={onAll} /><View style={styles.reviewList}>{reviews.slice(0, onAll ? 6 : reviews.length).map(review => <ReviewRow key={review.id} review={review} onOpen={onOpen} />)}</View></View>;
 }
 
-function FullReviewsPage({ reviews, count, onBack, onOpen }: { reviews: ReviewItem[]; count: number; onBack: () => void; onOpen: (review: ReviewItem) => void }) {
+function FullReviewsPage({ reviews, count, token, onBack, onOpen, onScrollTop }: { reviews: ReviewItem[]; count: number; token: string; onBack: () => void; onOpen: (review: ReviewItem) => void; onScrollTop: () => void }) {
+  const [items, setItems] = useState<ReviewItem[]>(reviews);
+  const [total, setTotal] = useState(count);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(count > reviews.length);
+  const [loadingReviews, setLoadingReviews] = useState(true);
+  const [reviewsError, setReviewsError] = useState("");
+
+  useEffect(() => {
+    let alive = true;
+    setLoadingReviews(true);
+    setReviewsError("");
+    fetchMobileReviews(token, page).then(result => {
+      if (!alive) return;
+      setItems(result.items ?? []);
+      setTotal(result.total ?? 0);
+      setHasMore(Boolean(result.hasMore));
+    }).catch(reason => {
+      if (alive) setReviewsError(reason instanceof Error ? reason.message : "Could not load this reviews page.");
+    }).finally(() => { if (alive) setLoadingReviews(false); });
+    return () => { alive = false; };
+  }, [page, token]);
+
+  function changePage(nextPage: number) {
+    setPage(Math.max(1, nextPage));
+    onScrollTop();
+  }
+
   return (
     <View style={styles.profileSection}>
       <SectionTitle kicker="Every take in one place" title="Your reviews" action="Back to profile ->" onAction={onBack} />
-      <ProfileDestinationTotal icon="chatbox-outline" value={count} label="reviews written" detail="Your complete collection of film, series, season, and episode reviews" />
-      {reviews.length ? <View style={styles.reviewList}>{reviews.map(review => <ReviewRow key={review.id} review={review} onOpen={onOpen} />)}</View> : <EmptyPanel title="No reviews yet" body="Reviews you write on MovieTracker will appear here." />}
+      <ProfileDestinationTotal icon="chatbox-outline" value={total} label="reviews written" detail="Your complete collection of film, series, season, and episode reviews" />
+      {items.length ? <><View style={styles.reviewList}>{items.map(review => <ReviewRow key={review.id} review={review} onOpen={onOpen} />)}</View><View style={styles.historyPager}>
+        <Pressable disabled={page === 1 || loadingReviews} onPress={() => changePage(page - 1)} style={[styles.historyPageButton, (page === 1 || loadingReviews) && styles.historyPageButtonDisabled]}><Ionicons name="chevron-back" size={18} color={colors.text} /><Text style={styles.historyPageButtonText}>Newer</Text></Pressable>
+        <Text style={styles.historyPageLabel}>Page {page}</Text>
+        <Pressable disabled={!hasMore || loadingReviews} onPress={() => changePage(page + 1)} style={[styles.historyPageButton, (!hasMore || loadingReviews) && styles.historyPageButtonDisabled]}><Text style={styles.historyPageButtonText}>Older</Text><Ionicons name="chevron-forward" size={18} color={colors.text} /></Pressable>
+      </View></> : !loadingReviews ? <EmptyPanel title="No reviews yet" body="Reviews you write on MovieTracker will appear here." /> : null}
+      {loadingReviews ? <View style={styles.historyInlineLoading}><ActivityIndicator color={colors.accent} /><Text style={styles.historyInlineLoadingText}>Loading reviews...</Text></View> : null}
+      {reviewsError ? <Text style={styles.errorText}>{reviewsError}</Text> : null}
     </View>
   );
 }
