@@ -30,6 +30,12 @@ describe("mobile franchise grouping contracts", () => {
     expect(groupFranchises([item("Custom title", { franchiseGroup: NO_FRANCHISE_GROUP })]).get("Other titles")?.length).toBe(1);
   });
 
+  it("keeps an official singleton when TMDB confirms the automatic collection", () => {
+    const groups = groupFranchises([item("Happy Death Day", { collectionTmdbId: 526380, collectionName: "Happy Death Day Collection" })]);
+    expect(groups.get("Happy Death Day Collection")).toHaveLength(1);
+    expect(groups.has("Other titles")).toBe(false);
+  });
+
   it("uses TMDB collection fallback and retains canonical singleton franchises", () => {
     const fallback = item("Unmatched sequel", { collectionName: "Example Collection" });
     expect(listFranchiseName(fallback)).toEqual({ name: "Example Collection", explicit: false, source: "tmdb" });

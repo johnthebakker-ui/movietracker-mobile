@@ -3,6 +3,11 @@ import type { MediaSummary } from "./types";
 type FranchiseMatch = { name: string; explicit: boolean; source: "manual" | "universe" | "tmdb" };
 export const NO_FRANCHISE_GROUP = "__movietracker_no_franchise__";
 
+function sameCollectionName(left?: string | null, right?: string | null) {
+  const normalize = (value?: string | null) => String(value ?? "").trim().toLocaleLowerCase();
+  return Boolean(left && right && normalize(left) === normalize(right));
+}
+
 const universeRules: ReadonlyArray<readonly [RegExp, string]> = [
   [/\bharry potter\b/i, "Harry Potter Collection"], [/\bplanet of the apes\b/i, "Planet of the Apes Collection"],
   [/\bhunger games\b|\bballad of songbirds\b|\bsunrise on the reaping\b/i, "The Hunger Games Collection"],
@@ -45,7 +50,10 @@ export function listFranchiseName(item: MediaSummary): FranchiseMatch | null {
   if (manual) return { name: manual, explicit: true, source: "manual" };
   const title = item.title.toLowerCase().replace(/[-_]/g, " ");
   const match = universeRules.find(([pattern]) => pattern.test(title));
-  if (match) return { name: match[1], explicit: false, source: "universe" };
+  if (match) {
+    const officiallyConfirmed = item.kind === "movie" && sameCollectionName(item.collectionName, match[1]);
+    return { name: match[1], explicit: false, source: officiallyConfirmed ? "tmdb" : "universe" };
+  }
   return item.collectionName ? { name: item.collectionName, explicit: false, source: "tmdb" } : null;
 }
 
