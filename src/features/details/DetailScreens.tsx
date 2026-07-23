@@ -1796,7 +1796,7 @@ export function CompanySection({ companies, onOpen }: { companies: DetailCompany
 }
 
 export function DetailReviewsSection({ reviews, onOpen }: { reviews: ReviewItem[]; onOpen: (item: MediaSummary) => void }) {
-  return <View style={styles.detailSection}><SectionTitle kicker="From the community" title="Reviews" />{reviews.length ? <View style={styles.reviewList}>{reviews.map(review => <ReviewRow key={review.id} review={review} onOpen={target => target.item && onOpen(target.item)} />)}</View> : <EmptyPanel title="No reviews yet" body="The opening line could be yours." />}</View>;
+  return <View style={styles.detailSection}><SectionTitle kicker="From the community" title="Reviews" />{reviews.length ? <View style={styles.reviewList}>{reviews.map(review => <ReviewRow key={review.id} review={review} alwaysExpandable onOpen={target => target.item && onOpen(target.item)} />)}</View> : <EmptyPanel title="No reviews yet" body="The opening line could be yours." />}</View>;
 }
 
 export function DetailMediaSection({ kicker, title, items, onOpen }: { kicker: string; title: string; items: MediaSummary[]; onOpen: (item: MediaSummary) => void }) {

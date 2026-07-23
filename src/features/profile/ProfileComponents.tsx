@@ -13,12 +13,12 @@ import { titleYear, tmdbImage } from "../../config";
 import { colors } from "../../theme";
 import type { MediaSummary } from "../../types";
 
-export function ReviewRow({ review, onOpen }: { review: ReviewItem; onOpen: (review: ReviewItem) => void }) {
+export function ReviewRow({ review, onOpen, alwaysExpandable = false }: { review: ReviewItem; onOpen: (review: ReviewItem) => void; alwaysExpandable?: boolean }) {
   const [expanded, setExpanded] = useState(false);
   const [bodyLineCount, setBodyLineCount] = useState(0);
   const image = tmdbImage(review.artwork, "w342");
   const score = typeof review.score === "number" ? review.score : null;
-  const canExpand = bodyLineCount > 2;
+  const canExpand = alwaysExpandable ? review.body.trim().length > 0 : bodyLineCount > 2;
   useEffect(() => {
     setExpanded(false);
     setBodyLineCount(0);
@@ -41,10 +41,10 @@ export function ReviewRow({ review, onOpen }: { review: ReviewItem; onOpen: (rev
       </Pressable>
       <View style={styles.reviewCopy}>
         <Text style={styles.reviewTitle} numberOfLines={1}>{review.title}</Text>
-        <Text accessible={false} pointerEvents="none" style={[styles.reviewBody, styles.reviewBodyMeasure]} onTextLayout={event => {
+        {!alwaysExpandable ? <Text accessible={false} pointerEvents="none" style={[styles.reviewBody, styles.reviewBodyMeasure]} onTextLayout={event => {
           const nextLineCount = event.nativeEvent.lines.length;
           if (nextLineCount !== bodyLineCount) setBodyLineCount(nextLineCount);
-        }}>{review.body}</Text>
+        }}>{review.body}</Text> : null}
         <Pressable disabled={!canExpand} onPress={() => setExpanded(value => !value)} accessibilityRole={canExpand ? "button" : undefined} accessibilityLabel={canExpand ? expanded ? "Show less" : "Read full review" : undefined}>
           <Text style={styles.reviewBody} numberOfLines={expanded ? undefined : 2}>{review.body}</Text>
           {canExpand ? <Text style={styles.reviewExpand}>{expanded ? "Show less" : "Read full review"}</Text> : null}
