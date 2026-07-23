@@ -325,9 +325,9 @@ export async function syncPendingPushNotifications(token: string, registration?:
   );
 }
 
-export async function deleteMobileNotifications(token: string, filter?: { id?: string; releaseKey?: string }) {
+export async function dismissMobileNotifications(token: string, filter?: { id?: string; releaseKey?: string }) {
   const params = filter ? `?${queryString(filter)}` : "";
-  return request<{ removed: boolean }>(`/api/mobile/notifications${params}`, token, { method: "DELETE" });
+  return request<{ dismissed: boolean }>(`/api/mobile/notifications${params}`, token, { method: "DELETE" });
 }
 
 export async function fetchMobileProfile(token: string): Promise<any> {

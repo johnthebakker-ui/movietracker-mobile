@@ -31,7 +31,7 @@ import {
 } from "react-native";
 
 import { AppHeader, BottomNav, DiscoverFiltersCard, Hero, PickerSheet, RecommendationFiltersCard, RemoteImage, resolveRemoteImageUri, SectionTitle, TitleCard, type PickerAnchor } from "../components";
-import { deleteMobileHistoryEvent, deleteMobileNotifications, disconnectTrakt, fetchDiscover, fetchListFranchiseCollections, fetchMobileCompany, fetchMobileEpisode, fetchMobileHistory, fetchMobilePerson, fetchMobileProfile, fetchMobileReviews, fetchMobileSeason, fetchMobileTitle, fetchRecommendations, fetchSearch, fetchTonight, fetchTraktStatus, fetchUpNext, fetchWebsiteEntityMetadata, fetchWebsiteHome, fetchWebsiteTitleMetadata, fetchWrapped, fetchWrappedShare, sendTestNotification, refreshRecommendations, setNotInterested, startTraktConnect, syncTrakt, type MobileTraktStatus } from "../api";
+import { deleteMobileHistoryEvent, dismissMobileNotifications, disconnectTrakt, fetchDiscover, fetchListFranchiseCollections, fetchMobileCompany, fetchMobileEpisode, fetchMobileHistory, fetchMobilePerson, fetchMobileProfile, fetchMobileReviews, fetchMobileSeason, fetchMobileTitle, fetchRecommendations, fetchSearch, fetchTonight, fetchTraktStatus, fetchUpNext, fetchWebsiteEntityMetadata, fetchWebsiteHome, fetchWebsiteTitleMetadata, fetchWrapped, fetchWrappedShare, sendTestNotification, refreshRecommendations, setNotInterested, startTraktConnect, syncTrakt, type MobileTraktStatus } from "../api";
 import { API_URL, communityRatingLabel, countries, excludeGenreOptions, genres, HAS_SUPABASE, titleYear, tmdbImage, userRatingLabel } from "../config";
 import { groupFranchises, listFranchiseName, NO_FRANCHISE_GROUP } from "../franchise-groups";
 import { filterByMediaKind, type MediaKindFilter } from "../media-kind-filter";
@@ -464,7 +464,7 @@ export default function App() {
       await AsyncStorage.setItem(storageKey, responseKey).catch(() => undefined);
       const releaseKey = data?.releaseKey;
       if (usableSession?.access_token && typeof releaseKey === "string") {
-        void deleteMobileNotifications(usableSession.access_token, { releaseKey }).catch(() => undefined);
+        void dismissMobileNotifications(usableSession.access_token, { releaseKey }).catch(() => undefined);
       }
       try {
         await openNotificationHref(href);

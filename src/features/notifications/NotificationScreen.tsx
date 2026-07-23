@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Alert, Pressable, Text, View } from "react-native";
 
 import { styles } from "../../app/styles";
-import { deleteMobileNotifications } from "../../api";
+import { dismissMobileNotifications } from "../../api";
 import { EmptyPanel } from "../../components/EmptyPanel";
 import { RemoteImage, SectionTitle } from "../../components";
 import { supabase } from "../../supabase";
@@ -19,12 +19,12 @@ export function NotificationScreen({ session, onBack, onOpenHref }: { session: S
     if (!supabase) return;
     setLoadingItems(true);
     setLoadError("");
-    const { data, error } = await supabase.from("notifications").select("id,kind,payload,read_at,created_at").eq("user_id", session.user.id).order("created_at", { ascending: false }).limit(100);
+    const { data, error } = await supabase.from("notifications").select("id,kind,payload,read_at,created_at").eq("user_id", session.user.id).is("dismissed_at", null).order("created_at", { ascending: false }).limit(100);
     if (error) {
       setLoadError(error.message);
     } else {
       setItems(data ?? []);
-      await supabase.from("notifications").update({ read_at: new Date().toISOString() }).eq("user_id", session.user.id).is("read_at", null);
+      await supabase.from("notifications").update({ read_at: new Date().toISOString() }).eq("user_id", session.user.id).is("dismissed_at", null).is("read_at", null);
     }
     setLoadingItems(false);
   }, [session.user.id]);
@@ -33,7 +33,7 @@ export function NotificationScreen({ session, onBack, onOpenHref }: { session: S
 
   async function openNotification(item: any) {
     setItems(current => current.filter(value => value.id !== item.id));
-    void deleteMobileNotifications(session.access_token, { id: item.id }).catch(() => undefined);
+    void dismissMobileNotifications(session.access_token, { id: item.id }).catch(() => undefined);
     if (item.payload?.href) {
       try { await onOpenHref(String(item.payload.href)); }
       catch (reason) { Alert.alert("Could not open notification", reason instanceof Error ? reason.message : "Try again."); }
@@ -42,7 +42,7 @@ export function NotificationScreen({ session, onBack, onOpenHref }: { session: S
 
   async function clearAll() {
     if (!items.length) return;
-    try { await deleteMobileNotifications(session.access_token); setItems([]); }
+    try { await dismissMobileNotifications(session.access_token); setItems([]); }
     catch (reason) { Alert.alert("Could not clear notifications", reason instanceof Error ? reason.message : "Try again."); }
   }
 
