@@ -273,8 +273,20 @@ export async function sendTestNotification(token: string) {
   return request<{ created: boolean; pushed: number; href: string; mode: "upcoming" | "recent"; airDate: string; notification: { releaseKey: string; title: string; message: string; href: string; image: string | null } }>("/api/mobile/notifications/test", token, { method: "POST" });
 }
 
-export async function syncPendingPushNotifications(token: string) {
-  return request<{ checked: number; pushed: number }>("/api/mobile/notifications/push/sync", token, { method: "POST" });
+export async function syncPendingPushNotifications(token: string, registration?: {
+  expoPushToken: string;
+  platform: string;
+  deviceId: string;
+  acknowledgedReleaseKeys: string[];
+}) {
+  return request<{ checked: number; pushed: number; registered?: boolean; stableIdentity?: boolean }>(
+    "/api/mobile/notifications/push/sync",
+    token,
+    {
+      method: "POST",
+      ...(registration ? { body: JSON.stringify(registration) } : {})
+    }
+  );
 }
 
 export async function deleteMobileNotifications(token: string, filter?: { id?: string; releaseKey?: string }) {

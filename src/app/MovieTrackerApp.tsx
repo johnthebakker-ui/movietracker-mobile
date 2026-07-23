@@ -1,7 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import Constants from "expo-constants";
-import * as Device from "expo-device";
 import * as ImagePicker from "expo-image-picker";
 import * as Notifications from "expo-notifications";
 import { StatusBar } from "expo-status-bar";
@@ -33,13 +31,14 @@ import {
 } from "react-native";
 
 import { AppHeader, BottomNav, DiscoverFiltersCard, Hero, PickerSheet, RecommendationFiltersCard, RemoteImage, resolveRemoteImageUri, SectionTitle, TitleCard, type PickerAnchor } from "../components";
-import { deleteMobileHistoryEvent, deleteMobileNotifications, disconnectTrakt, fetchDiscover, fetchEpisodeNotificationSchedule, fetchListFranchiseCollections, fetchMobileCompany, fetchMobileEpisode, fetchMobileHistory, fetchMobilePerson, fetchMobileProfile, fetchMobileReviews, fetchMobileSeason, fetchMobileTitle, fetchRecommendations, fetchSearch, fetchTonight, fetchTraktStatus, fetchUpNext, fetchWebsiteEntityMetadata, fetchWebsiteHome, fetchWebsiteTitleMetadata, fetchWrapped, fetchWrappedShare, sendTestNotification, syncPendingPushNotifications, refreshRecommendations, setNotInterested, startTraktConnect, syncTrakt, type MobileTraktStatus } from "../api";
+import { deleteMobileHistoryEvent, deleteMobileNotifications, disconnectTrakt, fetchDiscover, fetchListFranchiseCollections, fetchMobileCompany, fetchMobileEpisode, fetchMobileHistory, fetchMobilePerson, fetchMobileProfile, fetchMobileReviews, fetchMobileSeason, fetchMobileTitle, fetchRecommendations, fetchSearch, fetchTonight, fetchTraktStatus, fetchUpNext, fetchWebsiteEntityMetadata, fetchWebsiteHome, fetchWebsiteTitleMetadata, fetchWrapped, fetchWrappedShare, sendTestNotification, refreshRecommendations, setNotInterested, startTraktConnect, syncTrakt, type MobileTraktStatus } from "../api";
 import { API_URL, communityRatingLabel, countries, excludeGenreOptions, genres, HAS_SUPABASE, titleYear, tmdbImage, userRatingLabel } from "../config";
 import { groupFranchises, listFranchiseName, NO_FRANCHISE_GROUP } from "../franchise-groups";
 import { filterByMediaKind, type MediaKindFilter } from "../media-kind-filter";
 import { compactProfileStatValue } from "../profile-stats";
 import { supabase } from "../supabase";
 import { reportError } from "../telemetry";
+import { scheduleEpisodeNotifications } from "../services/releasePushNotifications";
 import { styles } from "../app/styles";
 import { dedupeMedia, firstRow, fromDbMedia, fromTmdbRaw, mapProfileReview, progressLabel, trustedCommunityRating } from "../app/media-model";
 import { EmptyPanel } from "../components/EmptyPanel";
@@ -76,9 +75,6 @@ const profileReviewSelect = `id,title,body,contains_spoilers,is_private,created_
 const profileCachePrefix = "movietracker-profile-v1";
 const profileDataCachePrefix = "movietracker-profile-data-v5";
 const libraryCachePrefix = "movietracker-library-v4";
-const episodeNotificationIdsKey = "movietracker-episode-notification-ids-v1";
-const episodeNotificationReleaseKeysKey = "movietracker-episode-notification-release-keys-v2";
-let notificationScheduleInFlight: Promise<void> | null = null;
 const searchCache = new Map<string, { savedAt: number; feed: FeedResult }>();
 
 const listSortOptions: Array<{ value: ListSort; label: string }> = [
@@ -1865,148 +1861,6 @@ async function loadTrackedLibraryTitleCounts(userId: string): Promise<MediaKindC
 
 async function loadTrackedLibraryTitleCount(userId: string): Promise<number> {
   return (await loadTrackedLibraryTitleCounts(userId)).total;
-}
-
-async function scheduleEpisodeNotifications(userId: string, accessToken?: string) {
-  if (notificationScheduleInFlight) return notificationScheduleInFlight;
-  notificationScheduleInFlight = scheduleEpisodeNotificationsInternal(userId, accessToken).finally(() => { notificationScheduleInFlight = null; });
-  return notificationScheduleInFlight;
-}
-
-async function scheduleEpisodeNotificationsInternal(userId: string, accessToken?: string) {
-  const client = supabase;
-  if (!client || !Device.isDevice) return;
-  const preferenceResult = await client.from("notification_preferences").select("release_email").eq("user_id", userId).maybeSingle();
-  if (preferenceResult.error) throw preferenceResult.error;
-  if (preferenceResult.data?.release_email === false) {
-    const previousIds = JSON.parse(await AsyncStorage.getItem(episodeNotificationIdsKey).catch(() => null) || "[]") as string[];
-    await Promise.allSettled(previousIds.map(id => Notifications.cancelScheduledNotificationAsync(id)));
-    await AsyncStorage.setItem(episodeNotificationIdsKey, "[]");
-    await AsyncStorage.setItem(episodeNotificationReleaseKeysKey, "{}");
-    return;
-  }
-  const currentPermissions = await Notifications.getPermissionsAsync();
-  const permissions = currentPermissions.status === "granted" ? currentPermissions : await Notifications.requestPermissionsAsync();
-  if (permissions.status !== "granted") return;
-  if (Platform.OS === "android") {
-    await Notifications.setNotificationChannelAsync("episode-releases", {
-      name: "New episode releases",
-      description: "Alerts when a tracked show releases a new episode.",
-      importance: Notifications.AndroidImportance.HIGH,
-      sound: "default",
-      vibrationPattern: [0, 250, 150, 250],
-      lightColor: "#ff563d"
-    });
-  }
-
-  const projectId = Constants.easConfig?.projectId ?? Constants.expoConfig?.extra?.eas?.projectId;
-  let remotePushRegistered = false;
-  if (projectId) {
-    try {
-      const token = (await Notifications.getExpoPushTokenAsync({ projectId })).data;
-      if (token) {
-        const registration = await client.from("mobile_push_tokens").upsert({ user_id: userId, expo_push_token: token, platform: Platform.OS, updated_at: new Date().toISOString() }, { onConflict: "expo_push_token" });
-        if (registration.error) throw registration.error;
-        remotePushRegistered = true;
-        if (accessToken) {
-          await syncPendingPushNotifications(accessToken);
-        }
-      }
-    } catch (error) {
-      console.warn("Remote notification registration unavailable; local release alerts remain enabled.", error);
-    }
-  }
-
-  // A device must use one delivery path. Server push is authoritative; keeping
-  // local schedules as well produced duplicate and looping release alerts.
-  if (remotePushRegistered) {
-    const previousIds = JSON.parse(await AsyncStorage.getItem(episodeNotificationIdsKey).catch(() => null) || "[]") as string[];
-    await Promise.allSettled(previousIds.map(id => Notifications.cancelScheduledNotificationAsync(id)));
-    await AsyncStorage.setItem(episodeNotificationIdsKey, "[]");
-    await AsyncStorage.setItem(episodeNotificationReleaseKeysKey, "{}");
-    return;
-  }
-
-  const [progressResult, favoriteResult, listResult, remoteSchedule] = await Promise.all([
-    client.from("progress").select("media_id").eq("user_id", userId),
-    client.from("favorites").select("media_id").eq("user_id", userId),
-    client.from("list_items").select("media_id,lists!inner(user_id)").eq("lists.user_id", userId),
-    accessToken ? fetchEpisodeNotificationSchedule(accessToken).catch(() => ({ events: [] })) : Promise.resolve({ events: [] })
-  ]);
-  if (progressResult.error) throw progressResult.error;
-  if (favoriteResult.error) throw favoriteResult.error;
-  if (listResult.error) throw listResult.error;
-  const mediaIds = [...new Set([...(progressResult.data ?? []), ...(favoriteResult.data ?? []), ...(listResult.data ?? [])].map((row: any) => Number(row.media_id)).filter(Number.isFinite))];
-  let previousIds = JSON.parse(await AsyncStorage.getItem(episodeNotificationIdsKey).catch(() => null) || "[]") as string[];
-  const storedReleaseKeysRaw = await AsyncStorage.getItem(episodeNotificationReleaseKeysKey).catch(() => null);
-  const storedReleaseKeys = JSON.parse(storedReleaseKeysRaw || "{}") as Record<string, string>;
-  if (!storedReleaseKeysRaw) {
-    const legacyQueue = await Notifications.getAllScheduledNotificationsAsync().catch(() => []);
-    await Promise.allSettled(legacyQueue.map(item => Notifications.cancelScheduledNotificationAsync(item.identifier)));
-    previousIds = [];
-  }
-  if (!mediaIds.length && !remoteSchedule.events.length) {
-    await AsyncStorage.setItem(episodeNotificationIdsKey, "[]");
-    return;
-  }
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(start);
-  end.setDate(end.getDate() + 60);
-  const episodeResult = mediaIds.length ? await client
-    .from("episodes")
-    .select("id,name,episode_number,air_date,still_path,seasons!inner(season_number,poster_path,media_id,media(title,tmdb_id,poster_path,backdrop_path))")
-    .in("seasons.media_id", mediaIds)
-    .gte("air_date", localDateKey(start))
-    .lte("air_date", localDateKey(end))
-    .order("air_date", { ascending: true })
-    .limit(50) : { data: [], error: null };
-  const { data: episodes, error } = episodeResult;
-  if (error) throw error;
-
-  const scheduledIds: string[] = [...previousIds];
-  const scheduledKeys = new Set<string>(Object.keys(storedReleaseKeys));
-  const today = localDateKey();
-  async function scheduleRelease(release: { key: string; airDate: string; title: string; body: string; href: string; image: string | null; episodeId?: number | string }) {
-    if (scheduledKeys.has(release.key)) return;
-    let date = new Date(`${release.airDate}T09:00:00`);
-    if (date.getTime() <= Date.now() && release.airDate === today) date = new Date(Date.now() + 10_000);
-    if (date.getTime() <= Date.now()) return;
-    const identifier = await Notifications.scheduleNotificationAsync({
-      content: {
-        title: release.title,
-        body: release.body,
-        sound: "default",
-        color: "#ff563d",
-        data: { href: release.href, image: release.image, releaseKey: release.key, episodeId: release.episodeId },
-        ...(Platform.OS === "ios" && release.image ? { attachments: [{ identifier: `episode-${release.episodeId ?? release.key}`, url: release.image, type: "public.image" }] } : {})
-      },
-      trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date, channelId: "episode-releases" }
-    });
-    scheduledKeys.add(release.key);
-    storedReleaseKeys[release.key] = release.airDate;
-    scheduledIds.push(identifier);
-  }
-  for (const event of remoteSchedule.events) {
-    await scheduleRelease({ key: event.releaseKey, airDate: event.airDate, title: event.title, body: event.body, href: event.href, image: event.image });
-  }
-  const releaseGroups = new Map<string, any[]>();
-  for (const episode of episodes ?? []) {
-    const season = firstRow((episode as any).seasons); const media = firstRow(season?.media);
-    if (!episode.air_date || !media?.tmdb_id) continue;
-    const key = `${media.tmdb_id}:${season.season_number}:${episode.air_date}`;
-    releaseGroups.set(key, [...(releaseGroups.get(key) ?? []), episode]);
-  }
-  for (const [groupKey, group] of releaseGroups) {
-    const first = group[0]; const season = firstRow(first.seasons); const media = firstRow(season?.media);
-    if (group.length > 1) {
-      await scheduleRelease({ key: `season:${groupKey}`, airDate: first.air_date, title: `New season of ${media.title}`, body: `Season ${season.season_number} · ${group.length} episodes\nAvailable today.`, href: `/title/show/${media.tmdb_id}/season/${season.season_number}`, image: tmdbImage(season.poster_path ?? media.poster_path ?? media.backdrop_path, "w780") });
-      continue;
-    }
-    await scheduleRelease({ key: `${media.tmdb_id}:${season.season_number}:${first.episode_number}:${first.air_date}`, airDate: first.air_date, title: `New episode of ${media.title}`, body: `S${season.season_number} E${first.episode_number}${first.name ? ` · ${first.name}` : ""}\nAvailable today.`, href: `/title/show/${media.tmdb_id}/season/${season.season_number}/episode/${first.episode_number}`, image: tmdbImage(first.still_path ?? season.poster_path ?? media.poster_path ?? media.backdrop_path, "w780"), episodeId: first.id });
-  }
-  await AsyncStorage.setItem(episodeNotificationIdsKey, JSON.stringify(scheduledIds));
-  await AsyncStorage.setItem(episodeNotificationReleaseKeysKey, JSON.stringify(storedReleaseKeys));
 }
 
 async function hydrateListFranchiseCollections(listId: string, feed: FeedResult, accessToken: string): Promise<FeedResult> {
