@@ -43,7 +43,7 @@ import { reportError } from "../telemetry";
 import { styles } from "../app/styles";
 import { dedupeMedia, firstRow, fromDbMedia, fromTmdbRaw, mapProfileReview, progressLabel, trustedCommunityRating } from "../app/media-model";
 import { EmptyPanel } from "../components/EmptyPanel";
-import type { ActionRefreshReason, CalendarEvent, CalendarMode, CalendarView, DetailCompany, DetailData, DetailImage, DetailPerson, DetailSeason, DetailVideo, EntityTarget, EpisodeTarget, FeatureView, GenreStat, HistoryFilter, HistoryItem, HomeSection, LibraryFilter, ListGroup, ListMembership, ListSort, MfaState, PickerState, Profile, ProfileData, ProfileImageSelection, ProfilePanel, ProfileView, ProgressCounts, ReviewItem, SeasonTarget, SeriesEpisodesTarget, SettingsTab, TrackedStatus, UserList, WatchDateMode, WatchLogValues, WatchTimePoint } from "../app/types";
+import type { ActionRefreshReason, CalendarEvent, CalendarMode, CalendarView, DetailCompany, DetailData, DetailImage, DetailPerson, DetailSeason, DetailVideo, EntityTarget, EpisodeTarget, FeatureView, GenreStat, HistoryFilter, HistoryItem, HomeSection, LibraryFilter, ListGroup, ListMembership, ListSort, MediaKindCounts, MfaState, PickerState, Profile, ProfileData, ProfileImageSelection, ProfilePanel, ProfileView, ProgressCounts, ReviewItem, SeasonTarget, SeriesEpisodesTarget, SettingsTab, TrackedStatus, UserList, WatchDateMode, WatchLogValues, WatchTimePoint } from "../app/types";
 import { calendarCells, calendarWeekDays, calendarWeekLabel, emptyText, formatCalendarDate, formatDate, formatHistoryDay, formatHistoryMonth, formatHistoryTime, formatLastWatched, formatShortDate, isEditedReview, localDateKey, minutesToLabel, monthBounds, monthKey, normalizeHistoryItemTime, normalizeProfileDataTimes, shiftMonth, shiftWeek, streaksFromDays, viewingDateKey, weekBounds, weekStartKey } from "../app/date-utils";
 import { availableListFranchiseGroups, groupedListItems, sortListItems } from "../features/library/model";
 import { CardGrid, DiscoverHeading, PosterRail, SearchPanel } from "../features/library/LibraryComponents";
@@ -129,6 +129,8 @@ export default function App() {
   const [listGroup, setListGroup] = useState<ListGroup>("none");
   const [libraryLists, setLibraryLists] = useState<UserList[]>([]);
   const [librarySavedTitleCount, setLibrarySavedTitleCount] = useState<number | null>(null);
+  const [librarySavedKindCounts, setLibrarySavedKindCounts] = useState<MediaKindCounts | null>(null);
+  const [librarySectionKindCounts, setLibrarySectionKindCounts] = useState<{ filter: LibraryFilter; counts: MediaKindCounts } | null>(null);
   const [libraryListCount, setLibraryListCount] = useState<number | null>(null);
   const [calendarMode, setCalendarMode] = useState<CalendarMode>("upcoming");
   const [calendarView, setCalendarView] = useState<CalendarView>("month");
@@ -670,6 +672,8 @@ export default function App() {
       setLibraryFeed(emptyFeed);
       setLibraryLists([]);
       setLibrarySavedTitleCount(null);
+      setLibrarySavedKindCounts(null);
+      setLibrarySectionKindCounts(null);
       setLibraryListCount(null);
       setProgressCounts(blankProgress);
       libraryLoadedKey.current = null;
@@ -683,10 +687,12 @@ export default function App() {
       const cached = await AsyncStorage.getItem(storageKey).catch(() => null);
       if (cached) {
         try {
-          const value = JSON.parse(cached) as { feed: FeedResult; lists: UserList[]; savedTitleCount?: number; listCount?: number; savedAt: number };
+          const value = JSON.parse(cached) as { feed: FeedResult; lists: UserList[]; savedTitleCount?: number; savedKindCounts?: MediaKindCounts; sectionKindCounts?: MediaKindCounts; listCount?: number; savedAt: number };
           setLibraryFeed(value.feed ?? emptyFeed);
           setLibraryLists(value.lists ?? []);
           setLibrarySavedTitleCount(typeof value.savedTitleCount === "number" ? value.savedTitleCount : null);
+          setLibrarySavedKindCounts(value.savedKindCounts ?? null);
+          setLibrarySectionKindCounts(value.sectionKindCounts ? { filter: libraryFilter, counts: value.sectionKindCounts } : null);
           setLibraryListCount(typeof value.listCount === "number" ? value.listCount : null);
           libraryLoadedKey.current = cacheKey;
           libraryLoadedAt.current = value.savedAt || Date.now();
@@ -695,20 +701,24 @@ export default function App() {
         } catch { /* Ignore an old cache shape. */ }
       }
     }
-    const savedTitleCountPromise = loadTrackedLibraryTitleCount(usableSession.user.id);
+    const savedTitleCountsPromise = loadTrackedLibraryTitleCounts(usableSession.user.id);
     if (libraryFilter === "lists") {
-      const [lists, savedTitleCount] = await Promise.all([loadUserLists(usableSession.user.id), savedTitleCountPromise]);
+      const [lists, savedTitleCounts] = await Promise.all([loadUserLists(usableSession.user.id), savedTitleCountsPromise]);
+      const savedTitleCount = savedTitleCounts.total;
       setLibraryLists(lists);
       setLibrarySavedTitleCount(savedTitleCount);
+      setLibrarySavedKindCounts(savedTitleCounts);
+      setLibrarySectionKindCounts(null);
       setLibraryListCount(lists.length);
       setProfileData(current => ({ ...current, trackedLibraryTitles: savedTitleCount, listCount: lists.length, lists }));
       setLibraryFeed(emptyFeed);
       libraryLoadedKey.current = cacheKey;
       libraryLoadedAt.current = Date.now();
-      await AsyncStorage.setItem(storageKey, JSON.stringify({ feed: emptyFeed, lists, savedTitleCount, listCount: lists.length, savedAt: libraryLoadedAt.current })).catch(() => undefined);
+      await AsyncStorage.setItem(storageKey, JSON.stringify({ feed: emptyFeed, lists, savedTitleCount, savedKindCounts: savedTitleCounts, sectionKindCounts: null, listCount: lists.length, savedAt: libraryLoadedAt.current })).catch(() => undefined);
       return;
     }
     const mediaSelect = "id,tmdb_id,kind,title,overview,poster_path,backdrop_path,release_date,end_date,status,vote_average,vote_count,popularity,genres,original_language,origin_countries";
+    const sectionSummaryPromise = loadLibrarySectionSummary(usableSession.user.id, libraryFilter);
     const sourceResult = libraryFilter === "favorites"
       ? await supabase.from("favorites").select(`media(${mediaSelect})`).eq("user_id", usableSession.user.id).order("position").limit(120)
       : await (() => {
@@ -718,8 +728,9 @@ export default function App() {
         return query.order("updated_at", { ascending: false }).limit(120);
       })();
     if (sourceResult.error) throw sourceResult.error;
-    const savedTitleCount = await savedTitleCountPromise;
-    const activeRewatchIds = libraryFilter === "watching" ? await loadMobileActiveRewatchIds(usableSession.user.id, sourceResult.data ?? []) : new Set<number>();
+    const [savedTitleCounts, sectionSummary] = await Promise.all([savedTitleCountsPromise, sectionSummaryPromise]);
+    const savedTitleCount = savedTitleCounts.total;
+    const activeRewatchIds = sectionSummary.activeRewatchIds;
     const sourceRows = libraryFilter === "watching"
       ? (sourceResult.data ?? []).filter((row: any) => row.status === "watching" || activeRewatchIds.has(Number(firstRow(row.media)?.id)))
       : (sourceResult.data ?? []);
@@ -736,14 +747,17 @@ export default function App() {
       const activeRewatch = activeRewatchIds.has(Number(media.id));
       return [{ ...fromDbMedia(media, ratingByMedia), listMediaId: Number(media.id), activeRewatch, reason: libraryFilter === "favorites" ? "Favorite" : activeRewatch ? "Rewatching" : progressLabel(row.status) }];
     }));
+    const sectionKindCounts = sectionSummary.counts;
     setLibraryLists([]);
     setLibrarySavedTitleCount(savedTitleCount);
+    setLibrarySavedKindCounts(savedTitleCounts);
+    setLibrarySectionKindCounts({ filter: libraryFilter, counts: sectionKindCounts });
     setProfileData(current => ({ ...current, trackedLibraryTitles: savedTitleCount }));
     const feed = { items };
     setLibraryFeed(feed);
     libraryLoadedKey.current = cacheKey;
     libraryLoadedAt.current = Date.now();
-    await AsyncStorage.setItem(storageKey, JSON.stringify({ feed, lists: [], savedTitleCount, savedAt: libraryLoadedAt.current })).catch(() => undefined);
+    await AsyncStorage.setItem(storageKey, JSON.stringify({ feed, lists: [], savedTitleCount, savedKindCounts: savedTitleCounts, sectionKindCounts, savedAt: libraryLoadedAt.current })).catch(() => undefined);
   }, [libraryFilter, usableSession?.access_token, usableSession?.user.id]);
 
   const loadCalendar = useCallback(async () => {
@@ -1416,7 +1430,19 @@ export default function App() {
   const selectedListFranchiseGroups = useMemo(() => availableListFranchiseGroups(selectedListFeed.items), [selectedListFeed.items]);
   const visibleSelectedListItems = useMemo(() => filterByMediaKind(selectedListFeed.items, libraryKindFilter, item => item.kind), [libraryKindFilter, selectedListFeed.items]);
   const sortedSelectedListItems = useMemo(() => sortListItems(visibleSelectedListItems, listSort), [listSort, visibleSelectedListItems]);
-  const visibleActiveFeedItems = useMemo(() => tab === "library" && libraryFilter !== "favorites" && libraryFilter !== "lists" ? filterByMediaKind(activeFeed.items, libraryKindFilter, item => item.kind) : activeFeed.items, [activeFeed.items, libraryFilter, libraryKindFilter, tab]);
+  const visibleActiveFeedItems = useMemo(() => tab === "library" && libraryFilter !== "lists" ? filterByMediaKind(activeFeed.items, libraryKindFilter, item => item.kind) : activeFeed.items, [activeFeed.items, libraryFilter, libraryKindFilter, tab]);
+  const librarySummary = useMemo(() => {
+    if (libraryFilter === "lists") return null;
+    const counts = libraryFilter === "all"
+      ? librarySavedKindCounts
+      : librarySectionKindCounts?.filter === libraryFilter ? librarySectionKindCounts.counts : null;
+    const value = counts
+      ? libraryKindFilter === "movie" ? counts.movie : libraryKindFilter === "show" ? counts.show : counts.total
+      : libraryFilter === "all"
+        ? libraryKindFilter === "both" ? librarySavedTitleCount ?? profileData.trackedLibraryTitles : "…"
+        : "…";
+    return librarySummaryContent(libraryFilter, libraryKindFilter, value);
+  }, [libraryFilter, libraryKindFilter, librarySavedKindCounts, librarySavedTitleCount, librarySectionKindCounts, profileData.trackedLibraryTitles]);
 
   function renderHeader() {
     if (featureView === "tonight") {
@@ -1507,10 +1533,10 @@ export default function App() {
             <SectionTitle kicker="Your screen life" title="My library" action="Up Next ->" onAction={() => setFeatureView("up-next")} />
             {usableSession ? (
               <>
-                {libraryFilter === "all" ? <ProfileDestinationTotal icon="bookmark-outline" value={librarySavedTitleCount ?? (profileData.trackedLibraryTitles || "…")} label="unique saved titles" detail="Across your watchlist, favorites, and custom lists" /> : null}
+                {librarySummary ? <ProfileDestinationTotal icon={librarySummary.icon} value={librarySummary.value} label={librarySummary.label} detail={librarySummary.detail} /> : null}
                 {libraryFilter === "lists" ? <ProfileDestinationTotal icon="list-outline" value={libraryListCount ?? (profileData.listCount || "…")} label="custom lists" detail="Every list you created" /> : null}
                 <LibraryFilters value={libraryFilter} onChange={setLibraryFilter} />
-                {libraryFilter !== "favorites" && libraryFilter !== "lists" ? <MediaKindFilterControl value={libraryKindFilter} onChange={setLibraryKindFilter} /> : null}
+                {libraryFilter !== "lists" ? <MediaKindFilterControl value={libraryKindFilter} onChange={setLibraryKindFilter} /> : null}
                 {libraryFilter === "lists" ? <ListGrid lists={libraryLists} onOpen={openList} /> : null}
               </>
             ) : (
@@ -1639,7 +1665,7 @@ export default function App() {
             keyExtractor={(item, index) => `${item.kind}-${item.id}-${item.reason ?? index}`}
             numColumns={2}
             ListHeaderComponent={listHeader}
-            ListEmptyComponent={!loading && !featureView ? (selectedList && listGroup === "none" ? <EmptyPanel title={libraryKindFilter === "both" ? "No titles in this list yet" : `No ${libraryKindFilter === "movie" ? "movies" : "shows"} in this list`} body={libraryKindFilter === "both" ? "Add titles from search, discovery, or a title page." : "Choose Both to see every title without changing the list."} /> : !selectedList && tab !== "home" && tab !== "calendar" && !(tab === "library" && libraryFilter === "lists" && !selectedList) && !(tab === "profile" && (profileView !== "recommendations" || !usableSession || mfa.required)) ? <EmptyPanel title={tab === "library" && libraryKindFilter !== "both" && libraryFilter !== "favorites" ? `No ${libraryKindFilter === "movie" ? "movies" : "shows"} here` : "Nothing loaded yet"} body={tab === "library" && libraryKindFilter !== "both" && libraryFilter !== "favorites" ? "Choose Both to see every title in this section." : searchMode ? "Search for a title, person, or keyword." : emptyText(tab, Boolean(usableSession))} /> : null) : null}
+            ListEmptyComponent={!loading && !featureView ? (selectedList && listGroup === "none" ? <EmptyPanel title={libraryKindFilter === "both" ? "No titles in this list yet" : `No ${libraryKindFilter === "movie" ? "movies" : "shows"} in this list`} body={libraryKindFilter === "both" ? "Add titles from search, discovery, or a title page." : "Choose Both to see every title without changing the list."} /> : !selectedList && tab !== "home" && tab !== "calendar" && !(tab === "library" && libraryFilter === "lists" && !selectedList) && !(tab === "profile" && (profileView !== "recommendations" || !usableSession || mfa.required)) ? <EmptyPanel title={tab === "library" && libraryKindFilter !== "both" ? `No ${libraryKindFilter === "movie" ? "movies" : "shows"} here` : "Nothing loaded yet"} body={tab === "library" && libraryKindFilter !== "both" ? "Choose Both to see every title in this section." : searchMode ? "Search for a title, person, or keyword." : emptyText(tab, Boolean(usableSession))} /> : null) : null}
             contentContainerStyle={[styles.listContent, rootHeaderActive && styles.listContentWithHeader]}
             columnWrapperStyle={styles.columns}
             refreshControl={<RefreshControl tintColor={colors.accent} refreshing={refreshing} onRefresh={refresh} />}
@@ -1760,9 +1786,57 @@ async function loadPagedRows<T>(loadPage: (from: number, to: number) => Promise<
   }
 }
 
-async function loadTrackedLibraryTitleCount(userId: string): Promise<number> {
+async function loadLibrarySectionSummary(userId: string, filter: Exclude<LibraryFilter, "lists">): Promise<{ counts: MediaKindCounts; activeRewatchIds: Set<number> }> {
   const client = supabase;
-  if (!client) return 0;
+  if (!client) return { counts: { total: 0, movie: 0, show: 0 }, activeRewatchIds: new Set<number>() };
+  if (filter === "all") return { counts: { total: 0, movie: 0, show: 0 }, activeRewatchIds: new Set<number>() };
+  if (filter === "favorites") {
+    const rows = await loadPagedRows<any>(async (from, to) => client.from("favorites").select("media(id,kind)").eq("user_id", userId).order("position").range(from, to));
+    const items = rows.flatMap(row => {
+      const media = firstRow(row.media);
+      return media?.kind ? [{ kind: media.kind as MediaKind }] : [];
+    });
+    return { counts: countMediaKinds(items), activeRewatchIds: new Set<number>() };
+  }
+  const rows = await loadPagedRows<any>(async (from, to) => {
+    let query = client.from("progress").select("status,completed_at,started_at,media(id,kind)").eq("user_id", userId);
+    if (filter === "watching") query = query.in("status", ["watching", "completed"]);
+    else query = query.eq("status", filter);
+    return query.order("updated_at", { ascending: false }).range(from, to);
+  });
+  const activeRewatchIds = filter === "watching" ? await loadMobileActiveRewatchIds(userId, rows) : new Set<number>();
+  const visibleRows = filter === "watching"
+    ? rows.filter(row => row.status === "watching" || activeRewatchIds.has(Number(firstRow(row.media)?.id)))
+    : rows;
+  const items = visibleRows.flatMap(row => {
+    const media = firstRow(row.media);
+    return media?.kind ? [{ kind: media.kind as MediaKind }] : [];
+  });
+  return { counts: countMediaKinds(items), activeRewatchIds };
+}
+
+function countMediaKinds(items: Array<Pick<MediaSummary, "kind">>): MediaKindCounts {
+  return {
+    total: items.length,
+    movie: items.filter(item => item.kind === "movie").length,
+    show: items.filter(item => item.kind === "show").length
+  };
+}
+
+function librarySummaryContent(filter: Exclude<LibraryFilter, "lists">, kind: MediaKindFilter, value: number | string) {
+  const format = kind === "movie" ? "movies" : kind === "show" ? "shows" : "titles";
+  if (filter === "all") return { icon: "bookmark-outline" as const, value, label: `unique saved ${format}`, detail: "Across your watchlist, favorites, and custom lists" };
+  if (filter === "planned") return { icon: "bookmark-outline" as const, value, label: `${format} in watchlist`, detail: "Saved to watch later" };
+  if (filter === "watching") return { icon: "eye-outline" as const, value, label: `${format} currently watching`, detail: "Currently watching or rewatching" };
+  if (filter === "completed") return { icon: "checkmark-circle-outline" as const, value, label: `completed ${format}`, detail: "Finished titles" };
+  if (filter === "paused") return { icon: "pause-circle-outline" as const, value, label: `paused ${format}`, detail: "Titles waiting for you to return" };
+  if (filter === "dropped") return { icon: "close-circle-outline" as const, value, label: `dropped ${format}`, detail: "Titles you stopped watching" };
+  return { icon: "heart-outline" as const, value, label: `favorite ${format}`, detail: "Titles in your personal canon" };
+}
+
+async function loadTrackedLibraryTitleCounts(userId: string): Promise<MediaKindCounts> {
+  const client = supabase;
+  if (!client) return { total: 0, movie: 0, show: 0 };
   const [watchlistRows, favoriteRows, listRows] = await Promise.all([
     loadPagedRows<{ media_id: number | null }>(async (from, to) => client.from("progress").select("media_id").eq("user_id", userId).eq("status", "planned").range(from, to)),
     loadPagedRows<{ media_id: number | null }>(async (from, to) => client.from("favorites").select("media_id").eq("user_id", userId).range(from, to)),
@@ -1776,7 +1850,21 @@ async function loadTrackedLibraryTitleCount(userId: string): Promise<number> {
     const mediaId = Number(row.media_id);
     if (Number.isInteger(mediaId) && mediaId > 0) mediaIds.add(mediaId);
   });
-  return mediaIds.size;
+  const idGroups = Array.from({ length: Math.ceil(mediaIds.size / 200) }, (_, index) => [...mediaIds].slice(index * 200, index * 200 + 200));
+  const mediaRows = (await Promise.all(idGroups.map(async ids => {
+    const { data, error } = await client.from("media").select("id,kind").in("id", ids);
+    if (error) throw error;
+    return data ?? [];
+  }))).flat();
+  return {
+    total: mediaIds.size,
+    movie: mediaRows.filter(row => row.kind === "movie").length,
+    show: mediaRows.filter(row => row.kind === "show").length
+  };
+}
+
+async function loadTrackedLibraryTitleCount(userId: string): Promise<number> {
+  return (await loadTrackedLibraryTitleCounts(userId)).total;
 }
 
 async function scheduleEpisodeNotifications(userId: string, accessToken?: string) {

@@ -5,6 +5,7 @@ import type { SeriesViewingSummary } from "../viewing-passes";
 export type PickerState = { title: string; value: string; options: Array<{ value: string; label: string }>; multiValues?: string[]; anchor?: PickerAnchor; onPick: (value: string) => void; onApply?: (values: string[]) => void } | null;
 export type HomeSection = { title: string; kicker: string; items: MediaSummary[] };
 export type ProgressCounts = { planned: number; watching: number; completed: number; paused: number; dropped: number; favorites: number };
+export type MediaKindCounts = { total: number; movie: number; show: number };
 export type Profile = { id: string; username: string | null; display_name: string | null; avatar_url: string | null; banner_url: string | null; bio: string | null; region: string | null; created_at?: string | null };
 export type ProfileImageSelection = { uri: string; fileName?: string | null; mimeType?: string | null; changed: boolean };
 export type MfaState = { required: boolean; factorId?: string; challengeId?: string; code: string; error?: string };
