@@ -33,7 +33,7 @@ import {
 } from "react-native";
 
 import { AppHeader, BottomNav, DiscoverFiltersCard, Hero, PickerSheet, RecommendationFiltersCard, RemoteImage, resolveRemoteImageUri, SectionTitle, TitleCard, type PickerAnchor } from "../components";
-import { deleteMobileHistoryEvent, deleteMobileNotifications, disconnectTrakt, fetchDiscover, fetchEpisodeNotificationSchedule, fetchListFranchiseCollections, fetchMobileCompany, fetchMobileEpisode, fetchMobileHistory, fetchMobilePerson, fetchMobileProfile, fetchMobileReviews, fetchMobileSeason, fetchMobileTitle, fetchRecommendations, fetchSearch, fetchTonight, fetchTraktStatus, fetchUpNext, fetchWebsiteEntityMetadata, fetchWebsiteHome, fetchWebsiteTitleMetadata, fetchWrapped, fetchWrappedShare, sendTestNotification, refreshRecommendations, setNotInterested, startTraktConnect, syncTrakt, type MobileTraktStatus } from "../api";
+import { deleteMobileHistoryEvent, deleteMobileNotifications, disconnectTrakt, fetchDiscover, fetchEpisodeNotificationSchedule, fetchListFranchiseCollections, fetchMobileCompany, fetchMobileEpisode, fetchMobileHistory, fetchMobilePerson, fetchMobileProfile, fetchMobileReviews, fetchMobileSeason, fetchMobileTitle, fetchRecommendations, fetchSearch, fetchTonight, fetchTraktStatus, fetchUpNext, fetchWebsiteEntityMetadata, fetchWebsiteHome, fetchWebsiteTitleMetadata, fetchWrapped, fetchWrappedShare, sendTestNotification, syncPendingPushNotifications, refreshRecommendations, setNotInterested, startTraktConnect, syncTrakt, type MobileTraktStatus } from "../api";
 import { API_URL, communityRatingLabel, countries, excludeGenreOptions, genres, HAS_SUPABASE, titleYear, tmdbImage, userRatingLabel } from "../config";
 import { groupFranchises, listFranchiseName, NO_FRANCHISE_GROUP } from "../franchise-groups";
 import { filterByMediaKind, type MediaKindFilter } from "../media-kind-filter";
@@ -1820,6 +1820,9 @@ async function scheduleEpisodeNotificationsInternal(userId: string, accessToken?
         const registration = await client.from("mobile_push_tokens").upsert({ user_id: userId, expo_push_token: token, platform: Platform.OS, updated_at: new Date().toISOString() }, { onConflict: "expo_push_token" });
         if (registration.error) throw registration.error;
         remotePushRegistered = true;
+        if (accessToken) {
+          await syncPendingPushNotifications(accessToken);
+        }
       }
     } catch (error) {
       console.warn("Remote notification registration unavailable; local release alerts remain enabled.", error);
