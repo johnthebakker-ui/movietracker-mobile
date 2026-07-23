@@ -290,6 +290,13 @@ export type ScheduledNotificationDiagnostic = {
   migrationReady: boolean;
   stableIdentity: boolean;
   registeredDevices: number;
+  hourlySchedulerReady: boolean;
+  lastHourlyRun: {
+    scheduledFor: string;
+    claimedAt: string | null;
+    completedAt: string | null;
+    error: string | null;
+  } | null;
   mode?: "upcoming" | "recent";
   airDate?: string;
 };

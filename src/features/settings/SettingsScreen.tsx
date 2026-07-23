@@ -112,12 +112,14 @@ export function SettingsScreen({ session, profile, tab, onTab, onBack, onSignOut
 
   useEffect(() => {
     if (tab !== "notifications") return;
-    loadScheduledDiagnostic().catch(() => undefined);
+    onScheduleNotifications(session.user.id, session.access_token)
+      .catch(reason => reportError("scheduled-notification-registration", reason))
+      .finally(() => loadScheduledDiagnostic().catch(() => undefined));
     const interval = setInterval(() => {
       loadScheduledDiagnostic().catch(() => undefined);
     }, 30_000);
     return () => clearInterval(interval);
-  }, [loadScheduledDiagnostic, tab]);
+  }, [loadScheduledDiagnostic, onScheduleNotifications, session.access_token, session.user.id, tab]);
 
   async function runScheduledNotificationTest() {
     setScheduledDiagnosticBusy(true);
@@ -408,11 +410,12 @@ export function SettingsScreen({ session, profile, tab, onTab, onBack, onSignOut
           <Text style={styles.integrationLabel}>Hourly delivery diagnostic</Text>
           <Text style={styles.integrationValue}>{scheduledDiagnosticLabel(scheduledDiagnostic)}</Text>
           <Text style={styles.settingsBody}>{scheduledDiagnosticDetails(scheduledDiagnostic)}</Text>
+          {scheduledDiagnostic && !scheduledDiagnostic.hourlySchedulerReady ? <Text style={styles.settingsError}>Supabase migration 0025 is not active yet, so the hourly worker cannot run. Migration 0024 is already separate and may be active.</Text> : null}
           {scheduledDiagnostic && !scheduledDiagnostic.stableIdentity ? <Text style={styles.settingsError}>{scheduledDiagnostic.migrationReady ? "This phone has not completed stable-device registration yet." : "Supabase migration 0024 is not active, so cross-update duplicate protection is still using its legacy fallback."}</Text> : null}
           {scheduledDiagnostic?.stableIdentity ? <Text style={styles.settingsSuccess}>Stable-device duplicate protection is active.</Text> : null}
           <View style={styles.securityButtonRow}>
-            <Pressable disabled={scheduledDiagnosticBusy || scheduledDiagnosticActive(scheduledDiagnostic)} onPress={runScheduledNotificationTest} style={styles.securitySmallButton}>
-              {scheduledDiagnosticBusy ? <ActivityIndicator color={colors.text} /> : <Text style={styles.securitySmallButtonText}>{scheduledDiagnosticActive(scheduledDiagnostic) ? "Test already queued" : "Queue next-hour test"}</Text>}
+            <Pressable disabled={scheduledDiagnosticBusy || scheduledDiagnosticActive(scheduledDiagnostic) || scheduledDiagnostic?.hourlySchedulerReady === false} onPress={runScheduledNotificationTest} style={styles.securitySmallButton}>
+              {scheduledDiagnosticBusy ? <ActivityIndicator color={colors.text} /> : <Text style={styles.securitySmallButtonText}>{scheduledDiagnosticActive(scheduledDiagnostic) ? "Test already queued" : scheduledDiagnostic?.hourlySchedulerReady === false ? "Migration 0025 needed" : "Queue next-hour test"}</Text>}
             </Pressable>
             <Pressable disabled={scheduledDiagnosticBusy} onPress={() => void loadScheduledDiagnostic()} style={styles.securitySmallButtonGhost}>
               <Text style={styles.securitySmallButtonText}>Refresh status</Text>
@@ -486,7 +489,10 @@ function scheduledDiagnosticLabel(value: ScheduledNotificationDiagnostic | null)
 function scheduledDiagnosticDetails(value: ScheduledNotificationDiagnostic | null) {
   const diagnostic = value?.diagnostic;
   if (!diagnostic) {
-    return `Registered push devices: ${value?.registeredDevices ?? 0}. Queue a test to verify the real hourly path without waiting for an episode.`;
+    const lastRun = value?.lastHourlyRun?.completedAt
+      ? ` Last successful hourly run: ${new Date(value.lastHourlyRun.completedAt).toLocaleString()}.`
+      : "";
+    return `Registered push devices: ${value?.registeredDevices ?? 0}.${lastRun} Queue a test to verify the real hourly path without waiting for an episode.`;
   }
   const scheduled = diagnostic.scheduledFor
     ? new Date(diagnostic.scheduledFor).toLocaleString()
@@ -497,5 +503,8 @@ function scheduledDiagnosticDetails(value: ScheduledNotificationDiagnostic | nul
   const checked = diagnostic.receiptCheckedAt
     ? ` Receipt: ${new Date(diagnostic.receiptCheckedAt).toLocaleString()}.`
     : "";
-  return `Scheduled: ${scheduled}.${sent}${checked} Registered devices: ${value?.registeredDevices ?? 0}.`;
+  const lastRun = value?.lastHourlyRun?.completedAt
+    ? ` Last hourly run: ${new Date(value.lastHourlyRun.completedAt).toLocaleString()}.`
+    : "";
+  return `Scheduled: ${scheduled}.${sent}${checked} Registered devices: ${value?.registeredDevices ?? 0}.${lastRun}`;
 }
