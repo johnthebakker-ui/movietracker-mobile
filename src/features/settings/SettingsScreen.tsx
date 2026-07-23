@@ -8,7 +8,17 @@ import { ActivityIndicator, Alert, Pressable, ScrollView, Switch, Text, TextInpu
 
 import { styles } from "../../app/styles";
 import type { Profile, ProfileImageSelection, SettingsTab } from "../../app/types";
-import { fetchTraktStatus, disconnectTrakt, sendTestNotification, startTraktConnect, syncTrakt, type MobileTraktStatus } from "../../api";
+import {
+  disconnectTrakt,
+  fetchScheduledNotificationDiagnostic,
+  fetchTraktStatus,
+  queueScheduledNotificationDiagnostic,
+  sendTestNotification,
+  startTraktConnect,
+  syncTrakt,
+  type MobileTraktStatus,
+  type ScheduledNotificationDiagnostic
+} from "../../api";
 import { RemoteImage, SectionTitle, resolveRemoteImageUri } from "../../components";
 import { API_URL } from "../../config";
 import { supabase } from "../../supabase";
@@ -34,6 +44,8 @@ export function SettingsScreen({ session, profile, tab, onTab, onBack, onSignOut
   const [mfaCode, setMfaCode] = useState("");
   const [securityBusy, setSecurityBusy] = useState(false);
   const [securityMessage, setSecurityMessage] = useState("");
+  const [scheduledDiagnostic, setScheduledDiagnostic] = useState<ScheduledNotificationDiagnostic | null>(null);
+  const [scheduledDiagnosticBusy, setScheduledDiagnosticBusy] = useState(false);
   const identities = session.user.identities ?? [];
   const providers = identities.map(identity => identity.provider).filter(Boolean);
   const hasEmailPassword = providers.includes("email") || session.user.app_metadata?.provider === "email";
@@ -87,6 +99,47 @@ export function SettingsScreen({ session, profile, tab, onTab, onBack, onSignOut
     } catch (reason) {
       Alert.alert("Test notification failed", reason instanceof Error ? reason.message : "Try again.");
     } finally { setSaving(false); }
+  }
+
+  const loadScheduledDiagnostic = useCallback(async () => {
+    if (tab !== "notifications") return;
+    try {
+      setScheduledDiagnostic(await fetchScheduledNotificationDiagnostic(session.access_token));
+    } catch (reason) {
+      reportError("scheduled-notification-diagnostic-status", reason);
+    }
+  }, [session.access_token, tab]);
+
+  useEffect(() => {
+    if (tab !== "notifications") return;
+    loadScheduledDiagnostic().catch(() => undefined);
+    const interval = setInterval(() => {
+      loadScheduledDiagnostic().catch(() => undefined);
+    }, 30_000);
+    return () => clearInterval(interval);
+  }, [loadScheduledDiagnostic, tab]);
+
+  async function runScheduledNotificationTest() {
+    setScheduledDiagnosticBusy(true);
+    try {
+      await onScheduleNotifications(session.user.id, session.access_token);
+      const result = await queueScheduledNotificationDiagnostic(session.access_token);
+      setScheduledDiagnostic(result);
+      const scheduledFor = result.diagnostic?.scheduledFor
+        ? new Date(result.diagnostic.scheduledFor).toLocaleString()
+        : "the next hourly run";
+      Alert.alert(
+        "Hourly test queued",
+        `MovieTracker will not send this immediately. It is queued for ${scheduledFor} through the same hourly worker used by real releases.\n\nYou may turn the phone off before then and turn it on afterward.`
+      );
+    } catch (reason) {
+      Alert.alert(
+        "Could not queue scheduled test",
+        reason instanceof Error ? reason.message : "Try again."
+      );
+    } finally {
+      setScheduledDiagnosticBusy(false);
+    }
   }
 
   const loadTrakt = useCallback(async () => {
@@ -348,7 +401,26 @@ export function SettingsScreen({ session, profile, tab, onTab, onBack, onSignOut
       {tab === "notifications" ? <View style={styles.settingsPanel}><Text style={styles.settingsTitle}>Notifications</Text>{[
         ["follow_email", "Follow requests and approvals"], ["interaction_email", "Review and list interactions"],
         ["release_email", "Release reminders"], ["digest_email", "Recommendation digest"]
-      ].map(([key, label]) => <ToggleRow key={key} label={label} enabled={notificationPreferences[key] ?? false} onChange={enabled => void saveNotificationPreference(key, enabled)} />)}<Pressable disabled={saving} onPress={runNotificationTest} style={styles.settingsGhost}>{saving ? <ActivityIndicator color={colors.text} /> : <Text style={styles.settingsGhostText}>Test an actual release alert</Text>}</Pressable><Text style={styles.settingsBody}>Finds a real upcoming (or recent) episode from your own tracked shows, then runs its artwork, inbox entry, push delivery and episode redirect immediately. You do not need to wait for the air date.</Text></View> : null}
+      ].map(([key, label]) => <ToggleRow key={key} label={label} enabled={notificationPreferences[key] ?? false} onChange={enabled => void saveNotificationPreference(key, enabled)} />)}
+        <Pressable disabled={saving} onPress={runNotificationTest} style={styles.settingsGhost}>{saving ? <ActivityIndicator color={colors.text} /> : <Text style={styles.settingsGhostText}>Test an actual release alert now</Text>}</Pressable>
+        <Text style={styles.settingsBody}>Finds a real upcoming (or recent) episode from your own tracked shows, then runs its artwork, inbox entry, push delivery and episode redirect immediately.</Text>
+        <View style={styles.integrationBox}>
+          <Text style={styles.integrationLabel}>Hourly delivery diagnostic</Text>
+          <Text style={styles.integrationValue}>{scheduledDiagnosticLabel(scheduledDiagnostic)}</Text>
+          <Text style={styles.settingsBody}>{scheduledDiagnosticDetails(scheduledDiagnostic)}</Text>
+          {scheduledDiagnostic && !scheduledDiagnostic.stableIdentity ? <Text style={styles.settingsError}>{scheduledDiagnostic.migrationReady ? "This phone has not completed stable-device registration yet." : "Supabase migration 0024 is not active, so cross-update duplicate protection is still using its legacy fallback."}</Text> : null}
+          {scheduledDiagnostic?.stableIdentity ? <Text style={styles.settingsSuccess}>Stable-device duplicate protection is active.</Text> : null}
+          <View style={styles.securityButtonRow}>
+            <Pressable disabled={scheduledDiagnosticBusy || scheduledDiagnosticActive(scheduledDiagnostic)} onPress={runScheduledNotificationTest} style={styles.securitySmallButton}>
+              {scheduledDiagnosticBusy ? <ActivityIndicator color={colors.text} /> : <Text style={styles.securitySmallButtonText}>{scheduledDiagnosticActive(scheduledDiagnostic) ? "Test already queued" : "Queue next-hour test"}</Text>}
+            </Pressable>
+            <Pressable disabled={scheduledDiagnosticBusy} onPress={() => void loadScheduledDiagnostic()} style={styles.securitySmallButtonGhost}>
+              <Text style={styles.securitySmallButtonText}>Refresh status</Text>
+            </Pressable>
+          </View>
+          <Text style={styles.settingsBody}>This test is sent only by the hourly server worker. “Receipt checked” confirms Expo/FCM accepted the handoff; seeing it on your lock screen confirms the final Android delivery.</Text>
+        </View>
+      </View> : null}
       {tab === "integrations" ? <View style={styles.settingsPanel}><Text style={styles.settingsTitle}>Integrations</Text><Text style={styles.settingsBody}>Connect Trakt once and MovieTracker will keep your viewing diary synced across the app and website.</Text>
         {!traktStatus ? <ActivityIndicator color={colors.accent} style={{ marginTop: 18 }} /> : !traktStatus.databaseReady ? <Text style={styles.settingsError}>Trakt database migration is not ready yet.</Text> : !traktStatus.environmentReady ? <Text style={styles.settingsError}>Trakt server credentials are not configured yet.</Text> : traktStatus.connection ? (
           <View style={styles.integrationBox}>
@@ -394,4 +466,36 @@ function PrivacyRow({ label, value, onChange }: { label: string; value: string; 
 
 function ToggleRow({ label, enabled, onChange }: { label: string; enabled: boolean; onChange: (value: boolean) => void }) {
   return <View style={styles.toggleRow}><Text style={styles.privacyLabel}>{label}</Text><Switch accessibilityRole="switch" accessibilityLabel={label} value={enabled} onValueChange={onChange} thumbColor={enabled ? colors.accent : colors.muted} trackColor={{ false: colors.panel2, true: colors.accentSoft }} /></View>;
+}
+
+function scheduledDiagnosticActive(value: ScheduledNotificationDiagnostic | null) {
+  return Boolean(value?.diagnostic && ["queued", "awaiting_hourly_run", "sent"].includes(value.diagnostic.state));
+}
+
+function scheduledDiagnosticLabel(value: ScheduledNotificationDiagnostic | null) {
+  const state = value?.diagnostic?.state;
+  if (!state) return "Not tested yet";
+  if (state === "queued") return "Queued";
+  if (state === "awaiting_hourly_run") return "Waiting for hourly worker";
+  if (state === "sent") return "Sent to Expo/FCM";
+  if (state === "receipt_checked") return "Provider receipt checked";
+  if (state === "registration_missing") return "Phone registration missing";
+  return "Test expired";
+}
+
+function scheduledDiagnosticDetails(value: ScheduledNotificationDiagnostic | null) {
+  const diagnostic = value?.diagnostic;
+  if (!diagnostic) {
+    return `Registered push devices: ${value?.registeredDevices ?? 0}. Queue a test to verify the real hourly path without waiting for an episode.`;
+  }
+  const scheduled = diagnostic.scheduledFor
+    ? new Date(diagnostic.scheduledFor).toLocaleString()
+    : "Unknown";
+  const sent = diagnostic.sentAt
+    ? ` Sent: ${new Date(diagnostic.sentAt).toLocaleString()}.`
+    : "";
+  const checked = diagnostic.receiptCheckedAt
+    ? ` Receipt: ${new Date(diagnostic.receiptCheckedAt).toLocaleString()}.`
+    : "";
+  return `Scheduled: ${scheduled}.${sent}${checked} Registered devices: ${value?.registeredDevices ?? 0}.`;
 }

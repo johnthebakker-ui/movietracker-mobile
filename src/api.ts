@@ -273,6 +273,35 @@ export async function sendTestNotification(token: string) {
   return request<{ created: boolean; pushed: number; href: string; mode: "upcoming" | "recent"; airDate: string; notification: { releaseKey: string; title: string; message: string; href: string; image: string | null } }>("/api/mobile/notifications/test", token, { method: "POST" });
 }
 
+export type ScheduledNotificationDiagnostic = {
+  diagnostic: {
+    id: string;
+    state: "queued" | "awaiting_hourly_run" | "sent" | "receipt_checked" | "expired" | "registration_missing";
+    queuedAt: string;
+    scheduledFor: string | null;
+    expiresAt: string | null;
+    sentAt: string | null;
+    receiptCheckedAt: string | null;
+    title: string;
+    message: string;
+    href: string;
+    image: string | null;
+  } | null;
+  migrationReady: boolean;
+  stableIdentity: boolean;
+  registeredDevices: number;
+  mode?: "upcoming" | "recent";
+  airDate?: string;
+};
+
+export async function fetchScheduledNotificationDiagnostic(token: string) {
+  return request<ScheduledNotificationDiagnostic>("/api/mobile/notifications/test/scheduled", token);
+}
+
+export async function queueScheduledNotificationDiagnostic(token: string) {
+  return request<ScheduledNotificationDiagnostic>("/api/mobile/notifications/test/scheduled", token, { method: "POST" });
+}
+
 export async function syncPendingPushNotifications(token: string, registration?: {
   expoPushToken: string;
   platform: string;

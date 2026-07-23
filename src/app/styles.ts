@@ -694,6 +694,7 @@ export const styles = StyleSheet.create({
   settingsDanger: { minHeight: 52, borderRadius: 18, borderWidth: 1, borderColor: "rgba(255,77,77,0.36)", backgroundColor: "rgba(255,77,77,0.10)", alignItems: "center", justifyContent: "center", marginTop: 12 },
   settingsDangerText: { color: colors.danger, fontWeight: "900" },
   settingsError: { color: colors.danger, fontSize: 14, fontWeight: "800", lineHeight: 20, marginTop: 12 },
+  settingsSuccess: { color: "#6ee7a8", fontSize: 14, fontWeight: "800", lineHeight: 20, marginTop: 12 },
   integrationBox: { marginTop: 16, borderTopWidth: 1, borderTopColor: colors.line, paddingTop: 16 },
   integrationLabel: { color: colors.muted, fontSize: 12, fontWeight: "900", letterSpacing: 1.2, textTransform: "uppercase" },
   integrationValue: { color: colors.text, fontSize: 22, fontWeight: "900", marginTop: 4, marginBottom: 8 },
