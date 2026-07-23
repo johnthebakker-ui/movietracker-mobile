@@ -9,6 +9,7 @@ import { EmptyPanel } from "../../components/EmptyPanel";
 import { RemoteImage, SectionTitle } from "../../components";
 import { supabase } from "../../supabase";
 import { colors } from "../../theme";
+import { notificationIsVisible } from "./visibility";
 
 export function NotificationScreen({ session, onBack, onOpenHref }: { session: Session; onBack: () => void; onOpenHref: (href: string) => Promise<void> }) {
   const [items, setItems] = useState<any[]>([]);
@@ -23,8 +24,16 @@ export function NotificationScreen({ session, onBack, onOpenHref }: { session: S
     if (error) {
       setLoadError(error.message);
     } else {
-      setItems(data ?? []);
-      await supabase.from("notifications").update({ read_at: new Date().toISOString() }).eq("user_id", session.user.id).is("dismissed_at", null).is("read_at", null);
+      const visibleItems = (data ?? []).filter(item => notificationIsVisible(item));
+      setItems(visibleItems);
+      const unreadVisibleIds = visibleItems.filter(item => !item.read_at).map(item => item.id);
+      if (unreadVisibleIds.length) {
+        await supabase.from("notifications")
+          .update({ read_at: new Date().toISOString() })
+          .in("id", unreadVisibleIds)
+          .eq("user_id", session.user.id)
+          .is("dismissed_at", null);
+      }
     }
     setLoadingItems(false);
   }, [session.user.id]);

@@ -8,6 +8,7 @@ import { colors, shadow } from "./theme";
 import { communityRatingLabel, countries, excludeGenreOptions, genres, SUPABASE_URL, titleYear, tmdbImage, userRatingLabel } from "./config";
 import type { AppTab, DiscoverFilters, MediaSummary, RecommendationFilters } from "./types";
 import { supabase } from "./supabase";
+import { notificationIsVisible } from "./features/notifications/visibility";
 
 const logoIcon = require("../assets/logo.png");
 
@@ -68,7 +69,17 @@ export function AppHeader({ session, hasUnreadNotifications = false, listenForNo
     const client = supabase; const userId = session?.user.id;
     if (!listenForNotifications) return;
     if (!client || !userId) { setUnread(false); onUnreadChangeRef.current?.(false); return; }
-    const refresh = async () => { const { count } = await client.from("notifications").select("id", { count: "exact", head: true }).eq("user_id", userId).is("dismissed_at", null).is("read_at", null); const nextUnread = (count ?? 0) > 0; setUnread(nextUnread); onUnreadChangeRef.current?.(nextUnread); };
+    const refresh = async () => {
+      const { data } = await client.from("notifications")
+        .select("payload")
+        .eq("user_id", userId)
+        .is("dismissed_at", null)
+        .is("read_at", null)
+        .limit(100);
+      const nextUnread = (data ?? []).some(notification => notificationIsVisible(notification));
+      setUnread(nextUnread);
+      onUnreadChangeRef.current?.(nextUnread);
+    };
     void refresh();
     const timer = setInterval(() => void refresh(), 30_000);
     const channel = client.channel(`header-notifications-${userId}-${Date.now()}-${Math.random().toString(36).slice(2)}`).on("postgres_changes", { event: "*", schema: "public", table: "notifications", filter: `user_id=eq.${userId}` }, () => void refresh()).subscribe();

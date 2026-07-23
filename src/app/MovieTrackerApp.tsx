@@ -473,9 +473,15 @@ export default function App() {
         Alert.alert("Could not open notification", reason instanceof Error ? reason.message : "Try again.");
       }
     };
+    const receivedSubscription = Notifications.addNotificationReceivedListener(() => {
+      setHeaderUnread(true);
+    });
     const subscription = Notifications.addNotificationResponseReceivedListener(response => { void handleResponse(response); });
     void Notifications.getLastNotificationResponseAsync().then(response => { if (response) void handleResponse(response); });
-    return () => subscription.remove();
+    return () => {
+      receivedSubscription.remove();
+      subscription.remove();
+    };
   }, [openNotificationHref, usableSession?.access_token, usableSession?.user.id]);
 
   const loadHome = useCallback(async (force = false) => {
