@@ -134,6 +134,7 @@ export default function App() {
   const [calendarWeek, setCalendarWeek] = useState(() => weekStartKey(new Date()));
   const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
   const [profileView, setProfileView] = useState<ProfileView>("profile");
+  const [historyFocusDate, setHistoryFocusDate] = useState("");
   const [featureView, setFeatureView] = useState<FeatureView>(null);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("profile");
   const [selectedList, setSelectedList] = useState<UserList | null>(null);
@@ -341,6 +342,11 @@ export default function App() {
     setTab("profile");
     scrollToTop();
   }, [scrollToTop]);
+
+  const openHistoryView = useCallback((date = "") => {
+    setHistoryFocusDate(date);
+    openProfileView("history");
+  }, [openProfileView]);
 
   const acceptSession = useCallback(async (nextSession: Session | null) => {
     setSession(nextSession);
@@ -1570,9 +1576,9 @@ export default function App() {
             ) : usableSession && profileView === "notifications" ? (
               <NotificationScreen session={usableSession} onBack={() => openProfileView("profile")} onOpenHref={openNotificationHref} />
             ) : usableSession && profileView === "journal" ? (
-              <FullJournalPage userId={usableSession.user.id} onBack={() => openProfileView("profile")} onOpen={openItem} />
+              <FullJournalPage userId={usableSession.user.id} onBack={() => openProfileView("profile")} onOpenTitle={openItem} onOpenSeason={(show, season) => setSelectedSeason({ show, season })} onOpenEpisode={setSelectedEpisode} onOpenHistoryDate={openHistoryView} />
             ) : usableSession && profileView === "history" ? (
-              <FullHistoryPage data={profileData} token={usableSession.access_token} onOpen={openHistoryItem} onMenu={setActionItem} onBack={() => openProfileView("profile")} onRemove={removeHistoryEvent} onScrollTop={scrollToTop} />
+              <FullHistoryPage data={profileData} token={usableSession.access_token} focusDate={historyFocusDate} onClearFocus={() => setHistoryFocusDate("")} onOpen={openHistoryItem} onMenu={setActionItem} onBack={() => openProfileView("profile")} onRemove={removeHistoryEvent} onScrollTop={scrollToTop} />
             ) : usableSession && profileView === "reviews" ? (
               <FullReviewsPage reviews={profileData.reviews} count={profileData.reviewCount} token={usableSession.access_token} onBack={() => openProfileView("profile")} onOpen={openReviewItem} onScrollTop={scrollToTop} />
             ) : usableSession && profileView === "statistics" ? (
@@ -1584,22 +1590,22 @@ export default function App() {
                 <ProfileHero profile={profile} session={usableSession} data={profileData} fallbackName={profileTitle} onSettings={() => { setSettingsTab("profile"); openProfileView("settings"); }} />
                 <ProfileNav onChange={next => {
                   if (next === "journal") openProfileView("journal");
-                  else if (next === "history") openProfileView("history");
+                  else if (next === "history") openHistoryView();
                   else if (next === "reviews") openProfileView("reviews");
                   else if (next === "statistics") openProfileView("statistics");
                 }} />
                 <ProfileStatBand data={profileData} onNavigate={target => {
                   if (target === "library") { setLibraryFilter("all"); goTab("library"); }
-                  if (target === "history") openProfileView("history");
+                  if (target === "history") openHistoryView();
                   if (target === "reviews") openProfileView("reviews");
                   if (target === "statistics") openProfileView("statistics");
                   if (target === "lists") { setLibraryFilter("lists"); goTab("library"); }
                 }} />
-                <ProfileHistorySection items={profileData.history} onOpen={openHistoryItem} onMenu={setActionItem} onHistory={() => openProfileView("history")} />
+                <ProfileHistorySection items={profileData.history} onOpen={openHistoryItem} onMenu={setActionItem} onHistory={() => openHistoryView()} />
                 <ProfileProgressSection data={profileData} onLibrary={() => { setLibraryFilter("all"); goTab("library"); }} onStatus={status => { setLibraryFilter(status === "active" ? "watching" : status); goTab("library"); }} onWatching={() => { setLibraryFilter("watching"); goTab("library"); }} onOpen={openItem} onMenu={setActionItem} />
                 <ReviewSection reviews={profileData.reviews} onAll={() => openProfileView("reviews")} onOpen={openReviewItem} />
                 <ProfileMediaSection kicker="Personal canon" title="Favorites" action="See all favorites ->" items={profileData.favorites.slice(0, 6)} onAction={() => { setLibraryFilter("favorites"); goTab("library"); }} onOpen={openItem} onMenu={setActionItem} /><ProfileListsSection owner={profile?.display_name || profile?.username || "you"} lists={profileData.lists} onOpenLists={() => { setLibraryFilter("lists"); goTab("library"); }} onOpenList={openList} />
-                <ProfileShortcuts onCalendar={() => goTab("calendar")} onHistory={() => openProfileView("history")} onReviews={() => openProfileView("reviews")} onSettings={() => openProfileView("settings")} />
+                <ProfileShortcuts onCalendar={() => goTab("calendar")} onHistory={() => openHistoryView()} onReviews={() => openProfileView("reviews")} onSettings={() => openProfileView("settings")} />
               </>
             ) : (
               <>
@@ -1623,7 +1629,7 @@ export default function App() {
         {selectedEntity ? (
           <EntityScreen target={selectedEntity} session={usableSession} onBack={() => setSelectedEntity(null)} onOpen={openItem} onMenu={setActionItem} />
         ) : selectedEpisode ? (
-          <EpisodeDetailScreen target={selectedEpisode} session={usableSession} onBack={() => setSelectedEpisode(null)} onOpen={openItem} onOpenEntity={openEntity} onChanged={refreshAfterAction} onOpenSeason={(season, show, seasons) => {
+          <EpisodeDetailScreen target={selectedEpisode} session={usableSession} onBack={() => setSelectedEpisode(null)} onOpen={openItem} onOpenEntity={openEntity} onChanged={refreshAfterAction} onOpenHistoryDate={openHistoryView} onOpenSeason={(season, show, seasons) => {
             setSelectedEpisode(null);
             if (isLimitedSeries(show, seasons)) setSelectedSeriesEpisodes({ show, seasons });
             else setSelectedSeason({ show, season });
@@ -1646,7 +1652,7 @@ export default function App() {
             voteAverage: episode.vote_average ?? episode.voteAverage ?? null
           })} />
         ) : selectedSeason ? (
-          <SeasonDetailScreen target={selectedSeason} session={usableSession} onBack={() => setSelectedSeason(null)} onOpenEpisode={episode => setSelectedEpisode({
+          <SeasonDetailScreen target={selectedSeason} session={usableSession} onBack={() => setSelectedSeason(null)} onOpenHistoryDate={openHistoryView} onOpenEpisode={episode => setSelectedEpisode({
             episodeId: Number(episode.db_episode_id ?? episode.episodeDbId ?? episode.episode_id ?? 0) || undefined,
             show: selectedSeason.show,
             seasonNumber: selectedSeason.season.seasonNumber,
@@ -1659,7 +1665,7 @@ export default function App() {
             voteAverage: episode.vote_average ?? episode.voteAverage ?? null
           })} />
         ) : selected ? (
-          <DetailScreenV2 key={`${selected.kind}-${selected.id}`} item={selected} session={usableSession} onBack={closeSelected} onOpen={openItem} onOpenEntity={openEntity} onOpenSeason={season => setSelectedSeason({ show: selected, season })} onOpenAllSeasons={seasons => setSelectedSeriesEpisodes({ show: selected, seasons })} onHide={hideRecommendation} onChanged={refreshAfterAction} />
+          <DetailScreenV2 key={`${selected.kind}-${selected.id}`} item={selected} session={usableSession} onBack={closeSelected} onOpen={openItem} onOpenEntity={openEntity} onOpenSeason={season => setSelectedSeason({ show: selected, season })} onOpenAllSeasons={seasons => setSelectedSeriesEpisodes({ show: selected, seasons })} onHide={hideRecommendation} onChanged={refreshAfterAction} onOpenHistoryDate={openHistoryView} />
         ) : selectedList && listGroup === "collections" ? (
           <ScrollView contentContainerStyle={styles.listContent} onScroll={handleRootScroll} scrollEventThrottle={16} refreshControl={<RefreshControl tintColor={colors.accent} refreshing={refreshing} onRefresh={refresh} />}>{listHeader}</ScrollView>
         ) : (

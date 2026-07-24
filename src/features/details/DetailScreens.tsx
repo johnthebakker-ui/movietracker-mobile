@@ -11,7 +11,7 @@ import { API_URL, communityRatingLabel, HAS_SUPABASE, titleYear, tmdbImage, user
 import { AppHeader, RemoteImage, SectionTitle, TitleCard } from "../../components";
 import { styles } from "../../app/styles";
 import { dedupeMedia, firstRow, fromDbMedia, fromTmdbRaw, mapProfileReview, trustedCommunityRating } from "../../app/media-model";
-import { formatDate, formatLastWatched, isEditedReview, localDateKey, minutesToLabel } from "../../app/date-utils";
+import { formatDate, formatLastWatched, isEditedReview, localDateKey, minutesToLabel, viewingDateKey } from "../../app/date-utils";
 import type { ActionRefreshReason, DetailCompany, DetailData, DetailImage, DetailPerson, DetailSeason, DetailVideo, EntityTarget, EpisodeTarget, HistoryItem, ListMembership, ReviewItem, SeasonTarget, SeriesEpisodesTarget, UserList, WatchLogValues } from "../../app/types";
 import { RatingSheet, ReviewComposerPanel, WatchLogSheet, clampRating, resolveWatchLogDate } from "../reviews/ReviewSheets";
 import { CardGrid } from "../library/LibraryComponents";
@@ -25,6 +25,7 @@ import { colors } from "../../theme";
 import type { MediaKind, MediaSummary } from "../../types";
 import { EmptyPanel } from "../../components/EmptyPanel";
 import type { SeriesViewingSummary } from "../../viewing-passes";
+import { buildJournalViewingRuns } from "../../journal-viewing-runs";
 import { isLimitedSeries, loadMobileSeriesViewingSummary, reconcileMobileEpisodeProgress, titleDetailCacheKey } from "./service";
 
 export async function sharePublicTitle(path: string, title: string, text?: string | null) {
@@ -37,7 +38,7 @@ export async function sharePublicTitle(path: string, title: string, text?: strin
   }
 }
 
-export function SeasonDetailScreen({ target, session, onBack, onOpenEpisode }: { target: SeasonTarget; session: Session | null; onBack: () => void; onOpenEpisode: (episode: any) => void }) {
+export function SeasonDetailScreen({ target, session, onBack, onOpenEpisode, onOpenHistoryDate }: { target: SeasonTarget; session: Session | null; onBack: () => void; onOpenEpisode: (episode: any) => void; onOpenHistoryDate?: (date: string) => void }) {
   const [payload, setPayload] = useState<any | null>(null);
   const [loadingSeason, setLoadingSeason] = useState(false);
   const [source, setSource] = useState<"movietracker" | "tmdb" | "imdb">("tmdb");
@@ -195,7 +196,7 @@ export function SeasonDetailScreen({ target, session, onBack, onOpenEpisode }: {
           <Ionicons name="chevron-forward" size={18} color={colors.muted} />
         </Pressable>
         <RatingSheet visible={ratingSheetVisible} value={payload?.userRating ?? null} busy={busy} onClose={() => setRatingSheetVisible(false)} onSave={saveSeasonRating} />
-        {session?.user.id && payload?.mediaId && payload?.seasonId ? <JournalSheet visible={journalVisible} userId={session.user.id} mediaId={payload.mediaId} seasonId={payload.seasonId} title={`${target.show.title} · ${season.name ?? target.season.name}`} onClose={() => setJournalVisible(false)} /> : null}
+        {session?.user.id && payload?.mediaId && payload?.seasonId ? <JournalSheet visible={journalVisible} userId={session.user.id} mediaId={payload.mediaId} seasonId={payload.seasonId} title={`${target.show.title} · ${season.name ?? target.season.name}`} onClose={() => setJournalVisible(false)} onOpenHistoryDate={onOpenHistoryDate} /> : null}
         <WatchLogSheet visible={Boolean(quickWatchEpisode)} title={`${target.show.title} - ${quickWatchEpisode?.name ?? "Episode"}`} releaseDate={quickWatchEpisode?.air_date ?? null} runtime={quickWatchEpisode?.runtime ?? null} busy={busy} watched={Boolean(quickWatchEpisode?.watched)} onClose={() => setQuickWatchEpisode(null)} onSave={saveQuickEpisodeWatch} />
         {session?.user.id && payload?.seasonId ? <ReviewComposerPanel existingReview={payload.myReview} currentRating={payload.userRating} busy={busy} onSubmit={saveSeasonReview} /> : null}
         <View style={styles.sourceTabs}>
@@ -764,7 +765,7 @@ export function ActionRow({ icon, label, danger, onPress }: { icon: keyof typeof
   );
 }
 
-export function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity, onOpenSeason, onChanged }: { target: EpisodeTarget; session: Session | null; onBack: () => void; onOpen: (item: MediaSummary) => void; onOpenEntity: (entity: EntityTarget) => void; onOpenSeason: (season: DetailSeason, show: MediaSummary, seasons: DetailSeason[]) => void; onChanged?: (reason?: ActionRefreshReason) => Promise<void> }) {
+export function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEntity, onOpenSeason, onChanged, onOpenHistoryDate }: { target: EpisodeTarget; session: Session | null; onBack: () => void; onOpen: (item: MediaSummary) => void; onOpenEntity: (entity: EntityTarget) => void; onOpenSeason: (season: DetailSeason, show: MediaSummary, seasons: DetailSeason[]) => void; onChanged?: (reason?: ActionRefreshReason) => Promise<void>; onOpenHistoryDate?: (date: string) => void }) {
   const [episode, setEpisode] = useState<any | null>(() => ({
     id: target.episodeId,
     name: target.title ?? `Episode ${target.episodeNumber}`,
@@ -1051,7 +1052,7 @@ export function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEnt
       <View style={styles.detailBody}>
         <RatingSheet visible={ratingSheetVisible} value={userRating} busy={busy} onClose={() => setRatingSheetVisible(false)} onSave={saveEpisodeRating} />
         <WatchLogSheet visible={watchSheetVisible} title={`${show.title} - ${title}`} releaseDate={episode?.air_date ?? target.airDate ?? null} runtime={episode?.runtime ?? null} busy={busy} watched={watched} onClose={() => setWatchSheetVisible(false)} onSave={saveEpisodeWatchLog} />
-        {session?.user.id && episodeId && season?.media_id ? <JournalSheet visible={journalVisible} userId={session.user.id} mediaId={Number(season.media_id)} episodeId={Number(episodeId)} title={`${show.title} · S${target.seasonNumber} E${target.episodeNumber}`} onClose={() => setJournalVisible(false)} /> : null}
+        {session?.user.id && episodeId && season?.media_id ? <JournalSheet visible={journalVisible} userId={session.user.id} mediaId={Number(season.media_id)} episodeId={Number(episodeId)} title={`${show.title} · S${target.seasonNumber} E${target.episodeNumber}`} onClose={() => setJournalVisible(false)} onOpenHistoryDate={onOpenHistoryDate} /> : null}
         {images.length || trailer ? <TitleMediaPreview trailer={trailer} images={images} /> : null}
         {cast.length ? <CastSection cast={cast} onOpen={onOpenEntity} /> : null}
         {episodeCompanies.length ? <CompanySection companies={episodeCompanies} onOpen={onOpenEntity} /> : null}
@@ -1174,7 +1175,7 @@ export function EntityScreen({ target, session, onBack, onOpen, onMenu }: { targ
   );
 }
 
-export function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSeason, onOpenAllSeasons, onHide, onChanged }: { item: MediaSummary; session: Session | null; onBack: () => void; onOpen: (item: MediaSummary) => void; onOpenEntity: (entity: EntityTarget) => void; onOpenSeason: (season: DetailSeason) => void; onOpenAllSeasons: (seasons: DetailSeason[]) => void; onHide: (item: MediaSummary) => void; onChanged: (reason?: ActionRefreshReason) => Promise<void> }) {
+export function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, onOpenSeason, onOpenAllSeasons, onHide, onChanged, onOpenHistoryDate }: { item: MediaSummary; session: Session | null; onBack: () => void; onOpen: (item: MediaSummary) => void; onOpenEntity: (entity: EntityTarget) => void; onOpenSeason: (season: DetailSeason) => void; onOpenAllSeasons: (seasons: DetailSeason[]) => void; onHide: (item: MediaSummary) => void; onChanged: (reason?: ActionRefreshReason) => Promise<void>; onOpenHistoryDate?: (date: string) => void }) {
   const [detail, setDetail] = useState<DetailData | null>(null);
   const [detailLoading, setDetailLoading] = useState(true);
   const [detailLoadError, setDetailLoadError] = useState<string | null>(null);
@@ -1596,7 +1597,7 @@ export function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, on
         <RatingSheet visible={ratingSheetVisible} value={detail?.userRating ?? null} busy={busy} onClose={() => setRatingSheetVisible(false)} onSave={saveUserRating} />
         <WatchLogSheet visible={watchSheetVisible} title={item.title} releaseDate={detail?.releaseDate || item.releaseDate} runtime={detail?.runtime ?? null} busy={busy} watched={Boolean(detail?.watched)} onClose={() => setWatchSheetVisible(false)} onSave={saveWatchLog} />
         <DetailListSheet visible={listSheetVisible} lists={detail?.lists ?? []} busy={busy} onClose={() => setListSheetVisible(false)} onToggle={toggleDetailList} />
-        {session?.user.id && detail?.dbId ? <JournalSheet visible={journalVisible} userId={session.user.id} mediaId={detail.dbId} title={item.title} onClose={() => setJournalVisible(false)} /> : null}
+        {session?.user.id && detail?.dbId ? <JournalSheet visible={journalVisible} userId={session.user.id} mediaId={detail.dbId} title={item.title} onClose={() => setJournalVisible(false)} onOpenHistoryDate={onOpenHistoryDate} /> : null}
         <View style={styles.factGrid}><Fact label="Released" value={detail?.releaseDate || item.releaseDate || "TBA"} /><Fact label={director?.job ?? "Director"} value={director?.name ?? "TBA"} /><Fact label="Original language" value={(detail?.originalLanguage || item.originalLanguage || "Unknown").toUpperCase()} /><Fact label="Genres" value={detailGenres.map(genre => genre.name).join(", ") || "Unknown"} /></View>
         {item.kind === "show" && detail?.seasons.length ? <SeasonsSection seasons={detail.seasons} limited={isLimitedSeries({ status: detail.status ?? item.status }, detail.seasons)} onOpenSeason={onOpenSeason} onOpenAllSeasons={onOpenAllSeasons} /> : null}
         {detail?.images.length || trailer ? <TitleMediaPreview trailer={trailer} images={detail?.images ?? []} /> : null}
@@ -1620,6 +1621,10 @@ type MobileJournalEntry = {
   created_at: string;
   image_paths: string[];
   image_urls?: string[];
+  watch_event_id?: string | null;
+  watch_event_end_id?: string | null;
+  watch_events?: { id: string; watched_at: string } | null;
+  watch_event_end?: { id: string; watched_at: string } | null;
   journal_entry_blocks?: Array<{ id: string; position: number; body: string; target_labels: string[] }>;
 };
 
@@ -1637,6 +1642,14 @@ type MobileJournalSection = {
   episodeIds: number[];
 };
 
+type MobileJournalWatch = {
+  id: string;
+  watchedAt: string;
+  label: string;
+  episodeId: number | null;
+  seasonId: number | null;
+};
+
 function createJournalSection(seasonId?: number, episodeId?: number): MobileJournalSection {
   return {
     key: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -1646,27 +1659,59 @@ function createJournalSection(seasonId?: number, episodeId?: number): MobileJour
   };
 }
 
-export function JournalSheet({ visible, userId, mediaId, seasonId, episodeId, title, onClose }: { visible: boolean; userId: string; mediaId: number; seasonId?: number; episodeId?: number; title: string; onClose: () => void }) {
+export function JournalSheet({ visible, userId, mediaId, seasonId, episodeId, title, onClose, onOpenHistoryDate }: { visible: boolean; userId: string; mediaId: number; seasonId?: number; episodeId?: number; title: string; onClose: () => void; onOpenHistoryDate?: (date: string) => void }) {
   const [entries, setEntries] = useState<MobileJournalEntry[]>([]);
   const [entryTitle, setEntryTitle] = useState("");
   const [sections, setSections] = useState<MobileJournalSection[]>(() => [createJournalSection(seasonId, episodeId)]);
   const [targetSeasons, setTargetSeasons] = useState<MobileJournalSeason[]>([]);
   const [openTargetSection, setOpenTargetSection] = useState<string | null>(null);
   const [expandedSeasonKeys, setExpandedSeasonKeys] = useState<Set<string>>(() => new Set());
+  const [watchOptions, setWatchOptions] = useState<MobileJournalWatch[]>([]);
+  const [watchEventId, setWatchEventId] = useState("");
+  const [watchEventEndId, setWatchEventEndId] = useState("");
+  const [watchSelectionLabel, setWatchSelectionLabel] = useState("");
+  const [watchSelectionMode, setWatchSelectionMode] = useState<"run" | "event" | null>(null);
+  const [openWatchPicker, setOpenWatchPicker] = useState(false);
+  const [expandedWatchRunId, setExpandedWatchRunId] = useState<string | null>(null);
   const [mood, setMood] = useState("");
   const [assets, setAssets] = useState<ImagePicker.ImagePickerAsset[]>([]);
   const [busy, setBusy] = useState(false);
+  const taggedSeasonIds = [...new Set(sections.flatMap(section => section.seasonIds))];
+  const taggedEpisodeIds = [...new Set(sections.flatMap(section => section.episodeIds))];
+  const relevantWatchOptions = taggedEpisodeIds.length
+    ? watchOptions.filter(option => option.episodeId != null && taggedEpisodeIds.includes(option.episodeId))
+    : taggedSeasonIds.length
+      ? watchOptions.filter(option => option.seasonId != null && taggedSeasonIds.includes(option.seasonId))
+      : watchOptions;
+  const relevantEpisodeCatalog = targetSeasons.flatMap(targetSeason => targetSeason.episodes
+    .filter(targetEpisode => taggedEpisodeIds.length
+      ? taggedEpisodeIds.includes(targetEpisode.id)
+      : taggedSeasonIds.length
+        ? taggedSeasonIds.includes(targetSeason.id)
+        : true)
+    .map(targetEpisode => ({
+      id: targetEpisode.id,
+      seasonNumber: targetSeason.seasonNumber,
+      episodeNumber: targetEpisode.episodeNumber
+    })));
+  const viewingRuns = buildJournalViewingRuns(relevantWatchOptions, relevantEpisodeCatalog);
+  const usesWatchRange = targetSeasons.length > 0 && !(taggedSeasonIds.length === 0 && taggedEpisodeIds.length === 1);
+  const relevantWatchIds = new Set(relevantWatchOptions.map(option => option.id));
+  const selectedWatchEvent = relevantWatchIds.has(watchEventId) ? relevantWatchOptions.find(option => option.id === watchEventId) ?? null : null;
+  const selectedWatchEventEnd = usesWatchRange && relevantWatchIds.has(watchEventEndId) ? relevantWatchOptions.find(option => option.id === watchEventEndId) ?? null : null;
 
   const load = useCallback(async () => {
     if (!supabase) return;
     const client = supabase;
-    const [entryResult, seasonResult] = await Promise.all([
-      client.from("journal_entries").select("id,title,body,mood,entry_date,created_at,image_paths,journal_entry_blocks(id,position,body,target_labels)").eq("user_id", userId).eq("media_id", mediaId).order("entry_date", { ascending: false }).order("created_at", { ascending: false }),
-      client.from("seasons").select("id,season_number,name,episodes(id,episode_number,name)").eq("media_id", mediaId).order("season_number", { ascending: true })
+    const [entryResult, seasonResult, watchResult] = await Promise.all([
+      client.from("journal_entries").select("id,title,body,mood,entry_date,created_at,image_paths,watch_event_id,watch_event_end_id,journal_entry_blocks(id,position,body,target_labels)").eq("user_id", userId).eq("media_id", mediaId).order("entry_date", { ascending: false }).order("created_at", { ascending: false }),
+      client.from("seasons").select("id,season_number,name,episodes(id,episode_number,name)").eq("media_id", mediaId).order("season_number", { ascending: true }),
+      client.from("watch_events").select("id,watched_at,episode_id,episodes(episode_number,seasons(id,season_number))").eq("user_id", userId).eq("media_id", mediaId).order("watched_at", { ascending: false, nullsFirst: false }).limit(500)
     ]);
     const { data, error } = entryResult;
     if (error) throw error;
     if (seasonResult.error) throw seasonResult.error;
+    if (watchResult.error) throw watchResult.error;
     setTargetSeasons((seasonResult.data ?? []).map((season: any) => ({
       id: Number(season.id),
       seasonNumber: Number(season.season_number),
@@ -1677,10 +1722,31 @@ export function JournalSheet({ visible, userId, mediaId, seasonId, episodeId, ti
         name: episode.name || `Episode ${episode.episode_number}`
       })).sort((a, b) => a.episodeNumber - b.episodeNumber)
     })).filter(season => season.seasonNumber > 0));
+    const normalizedWatches: MobileJournalWatch[] = (watchResult.data ?? []).flatMap((event: any) => {
+      if (!event.watched_at) return [];
+      const targetEpisode = firstRow(event.episodes);
+      const targetSeason = firstRow(targetEpisode?.seasons);
+      const watchedAt = String(event.watched_at);
+      return [{
+        id: String(event.id),
+        watchedAt,
+        episodeId: event.episode_id == null ? null : Number(event.episode_id),
+        seasonId: targetSeason?.id == null ? null : Number(targetSeason.id),
+        label: targetEpisode ? `S${targetSeason?.season_number ?? "?"} E${targetEpisode.episode_number} · ${new Date(watchedAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}` : new Date(watchedAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })
+      }];
+    });
+    setWatchOptions(normalizedWatches);
+    const watchById = new Map(normalizedWatches.map(option => [option.id, { id: option.id, watched_at: option.watchedAt }]));
     const hydrated = await Promise.all(((data ?? []) as MobileJournalEntry[]).map(async entry => {
-      if (!entry.image_paths?.length) return { ...entry, image_paths: [] };
+      const linkedEntry = {
+        ...entry,
+        image_paths: entry.image_paths ?? [],
+        watch_events: entry.watch_event_id ? watchById.get(entry.watch_event_id) ?? null : null,
+        watch_event_end: entry.watch_event_end_id ? watchById.get(entry.watch_event_end_id) ?? null : null
+      };
+      if (!entry.image_paths?.length) return linkedEntry;
       const { data: signed } = await client.storage.from("journal-media").createSignedUrls(entry.image_paths, 3600);
-      return { ...entry, image_urls: (signed ?? []).flatMap(image => image.signedUrl ? [image.signedUrl] : []) };
+      return { ...linkedEntry, image_urls: (signed ?? []).flatMap(image => image.signedUrl ? [image.signedUrl] : []) };
     }));
     setEntries(hydrated);
   }, [mediaId, userId]);
@@ -1691,6 +1757,12 @@ export function JournalSheet({ visible, userId, mediaId, seasonId, episodeId, ti
     setSections([createJournalSection(seasonId, episodeId)]);
     setOpenTargetSection(null);
     setExpandedSeasonKeys(new Set());
+    setWatchEventId("");
+    setWatchEventEndId("");
+    setWatchSelectionLabel("");
+    setWatchSelectionMode(null);
+    setOpenWatchPicker(false);
+    setExpandedWatchRunId(null);
     setMood("");
     setAssets([]);
     void load().catch(reason => Alert.alert("Journal unavailable", reason instanceof Error ? reason.message : "Try again."));
@@ -1711,6 +1783,12 @@ export function JournalSheet({ visible, userId, mediaId, seasonId, episodeId, ti
     const paths: string[] = [];
     let createdEntryId: string | null = null;
     try {
+      let linkedWatchEventId = selectedWatchEvent?.id ?? null;
+      let linkedWatchEventEndId = selectedWatchEventEnd?.id ?? null;
+      if (linkedWatchEventId && linkedWatchEventEndId && new Date(selectedWatchEvent!.watchedAt).getTime() > new Date(selectedWatchEventEnd!.watchedAt).getTime()) {
+        [linkedWatchEventId, linkedWatchEventEndId] = [linkedWatchEventEndId, linkedWatchEventId];
+      }
+      if (linkedWatchEventId === linkedWatchEventEndId) linkedWatchEventEndId = null;
       for (const asset of assets) {
         const extension = (asset.fileName?.split(".").pop() || "jpg").replace(/[^a-z0-9]/gi, "").toLowerCase();
         const path = `${userId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${extension}`;
@@ -1724,6 +1802,8 @@ export function JournalSheet({ visible, userId, mediaId, seasonId, episodeId, ti
         media_id: mediaId,
         season_id: seasonId ?? null,
         episode_id: episodeId ?? null,
+        watch_event_id: linkedWatchEventId,
+        watch_event_end_id: linkedWatchEventEndId,
         title: entryTitle.trim() || null,
         body: filledSections.map(section => section.body.trim()).join("\n\n"),
         mood: mood || null,
@@ -1742,7 +1822,7 @@ export function JournalSheet({ visible, userId, mediaId, seasonId, episodeId, ti
       }));
       const { error: blockError } = await supabase.from("journal_entry_blocks").insert(blockRows);
       if (blockError) throw blockError;
-      setEntryTitle(""); setSections([createJournalSection(seasonId, episodeId)]); setOpenTargetSection(null); setExpandedSeasonKeys(new Set()); setMood(""); setAssets([]);
+      setEntryTitle(""); setSections([createJournalSection(seasonId, episodeId)]); setOpenTargetSection(null); setExpandedSeasonKeys(new Set()); setWatchEventId(""); setWatchEventEndId(""); setWatchSelectionLabel(""); setWatchSelectionMode(null); setOpenWatchPicker(false); setExpandedWatchRunId(null); setMood(""); setAssets([]);
       await load();
     } catch (reason) {
       if (createdEntryId) await supabase.from("journal_entries").delete().eq("id", createdEntryId).eq("user_id", userId);
@@ -1797,6 +1877,38 @@ export function JournalSheet({ visible, userId, mediaId, seasonId, episodeId, ti
       else next.add(compositeKey);
       return next;
     });
+  }
+
+  function journalRunDate(value: string, withTime = false) {
+    return new Date(value).toLocaleString(undefined, withTime
+      ? { dateStyle: "medium", timeStyle: "short" }
+      : { dateStyle: "medium" });
+  }
+
+  function selectJournalRun(run: (typeof viewingRuns)[number]) {
+    const last = run.events[run.events.length - 1];
+    const status = run.status === "finished" ? "Finished" : run.status === "partial" ? "Partial watch" : "Ongoing";
+    setWatchEventId(run.events[0].id);
+    setWatchEventEndId(run.endAt && usesWatchRange ? last.id : "");
+    setWatchSelectionMode("run");
+    setWatchSelectionLabel(`${run.label} · ${journalRunDate(run.startAt)} → ${run.endAt ? journalRunDate(run.endAt) : "Ongoing"} · ${status}`);
+    setOpenWatchPicker(false);
+  }
+
+  function selectJournalWatch(runLabel: string, option: MobileJournalWatch) {
+    setWatchEventId(option.id);
+    setWatchEventEndId("");
+    setWatchSelectionMode("event");
+    setWatchSelectionLabel(`${runLabel} · ${option.label}`);
+    setOpenWatchPicker(false);
+  }
+
+  function clearJournalWatch() {
+    setWatchEventId("");
+    setWatchEventEndId("");
+    setWatchSelectionLabel("");
+    setWatchSelectionMode(null);
+    setOpenWatchPicker(false);
   }
 
   async function remove(entry: MobileJournalEntry) {
@@ -1855,11 +1967,45 @@ export function JournalSheet({ visible, userId, mediaId, seasonId, episodeId, ti
             </View>;
           })}
           <Pressable onPress={() => setSections(current => [...current, createJournalSection()])} style={styles.journalAddSection}><Ionicons name="add" size={17} color={colors.accent} /><Text style={styles.journalAddSectionText}>Add another section</Text></Pressable>
+          {viewingRuns.length ? <View style={styles.journalWatchLinker}>
+            <View style={styles.journalWatchLinkerHeading}><Ionicons name="time-outline" size={16} color={colors.accent} /><View><Text style={styles.journalWatchLinkerTitle}>Link this to a viewing</Text><Text style={styles.journalWatchLinkerText}>Choose a complete watch, rewatch, or one exact episode date.</Text></View></View>
+            <Pressable onPress={() => setOpenWatchPicker(true)} style={styles.journalWatchSelect}>
+              <View style={styles.journalWatchSelectCopy}><Text style={styles.journalWatchSelectLabel}>LINKED VIEWING</Text><Text style={styles.journalWatchSelectValue} numberOfLines={2}>{selectedWatchEvent ? watchSelectionLabel || selectedWatchEvent.label : "Not linked"}</Text></View><Ionicons name="chevron-forward" size={16} color={colors.muted} />
+            </Pressable>
+            <Modal visible={openWatchPicker} transparent animationType="fade" onRequestClose={() => setOpenWatchPicker(false)}>
+              <Pressable style={styles.modalScrim} onPress={() => setOpenWatchPicker(false)} />
+              <View style={styles.journalWatchPickerSheet}>
+                <View style={styles.journalWatchPickerHeader}>
+                  <View style={styles.journalWatchPickerHeaderCopy}><Text style={styles.journalWatchPickerTitle}>Choose a viewing</Text><Text style={styles.journalWatchPickerSubtitle}>Link the whole run, or open one for its episode dates.</Text></View>
+                  <Pressable onPress={() => setOpenWatchPicker(false)} style={styles.sheetCloseButton}><Ionicons name="close" size={22} color={colors.text} /></Pressable>
+                </View>
+                <ScrollView style={styles.journalWatchRunList} contentContainerStyle={styles.journalWatchRunListContent}>
+                  {selectedWatchEvent ? <Pressable onPress={clearJournalWatch} style={styles.journalWatchClear}><Text style={styles.journalWatchClearText}>Remove linked viewing</Text></Pressable> : null}
+                  {viewingRuns.map(run => {
+                    const expanded = expandedWatchRunId === run.id;
+                    const expectedEndId = run.endAt && usesWatchRange ? run.events[run.events.length - 1].id : "";
+                    const selectedRun = (selectedWatchEvent?.id ?? "") === run.events[0].id && (selectedWatchEventEnd?.id ?? "") === expectedEndId && watchSelectionMode === "run";
+                    const status = run.status === "finished" ? "FINISHED" : run.status === "partial" ? "PARTIAL WATCH" : "ONGOING";
+                    return <View key={run.id} style={[styles.journalWatchRun, selectedRun && styles.journalWatchRunActive]}>
+                      <View style={styles.journalWatchRunRow}>
+                        <Pressable onPress={() => selectJournalRun(run)} style={styles.journalWatchRunSelect}>
+                          <View style={[styles.journalWatchRunRadio, selectedRun && styles.journalWatchRunRadioActive]}>{selectedRun ? <Ionicons name="checkmark" size={12} color="#101010" /> : null}</View>
+                          <View style={styles.journalWatchRunCopy}><View style={styles.journalWatchRunTitleRow}><Text style={styles.journalWatchRunTitle}>{run.label}</Text><Text style={[styles.journalWatchRunStatus, run.status === "ongoing" && styles.journalWatchRunStatusActive]}>{status}</Text></View><Text style={styles.journalWatchRunDates}>{journalRunDate(run.startAt)}  →  {run.endAt ? journalRunDate(run.endAt) : "Ongoing"}</Text></View>
+                        </Pressable>
+                        {run.events.length > 1 ? <Pressable onPress={() => setExpandedWatchRunId(current => current === run.id ? null : run.id)} style={styles.journalWatchRunExpand}><Text style={styles.journalWatchRunExpandText}>{run.events.length} EPS</Text><Ionicons name={expanded ? "chevron-up" : "chevron-down"} size={14} color={colors.muted} /></Pressable> : null}
+                      </View>
+                      {expanded ? <View style={styles.journalWatchEpisodeList}>{run.events.map(option => <Pressable key={option.id} onPress={() => selectJournalWatch(run.label, option)} style={styles.journalWatchEpisodeRow}><Text style={styles.journalWatchEpisodeName}>{option.label.split(" · ")[0]}</Text><Text style={styles.journalWatchEpisodeDate}>{journalRunDate(option.watchedAt, true)}</Text></Pressable>)}</View> : null}
+                    </View>;
+                  })}
+                </ScrollView>
+              </View>
+            </Modal>
+          </View> : null}
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.journalMoodRow}>{["Moved","Delighted","Shocked","Thoughtful","Heartbroken","Confused","Obsessed"].map(value => <Pressable key={value} onPress={() => setMood(current => current === value ? "" : value)} style={[styles.journalMoodChip, mood === value && styles.journalMoodChipActive]}><Text style={[styles.journalMoodChipText, mood === value && styles.journalMoodChipTextActive]}>{value}</Text></Pressable>)}</ScrollView>
           <View style={styles.journalComposerActions}><Pressable onPress={pickImages} style={styles.journalPhotoButton}><Ionicons name="images-outline" size={18} color={colors.text} /><Text style={styles.journalPhotoButtonText}>{assets.length ? `${assets.length} selected` : "Add images"}</Text></Pressable><Pressable disabled={busy || !sections.some(section => section.body.trim())} onPress={save} style={[styles.journalSaveButton, (!sections.some(section => section.body.trim()) || busy) && { opacity: .45 }]}>{busy ? <ActivityIndicator color="#101010" /> : <Text style={styles.journalSaveButtonText}>Keep memory</Text>}</Pressable></View>
         </View>
         <Text style={styles.journalTimelineTitle}>{entries.length ? "Your memories" : "The first page is yours"}</Text>
-        {entries.map(entry => <View key={entry.id} style={styles.journalEntryMobile}><View style={styles.journalEntryMobileHeader}><Text style={styles.journalEntryDate}>{new Date(`${entry.entry_date}T12:00:00`).toLocaleDateString(undefined, { dateStyle: "long" })}</Text>{entry.mood ? <Text style={styles.journalEntryMood}>{entry.mood}</Text> : null}</View>{entry.title ? <Text style={styles.journalEntryTitle}>{entry.title}</Text> : null}{entry.journal_entry_blocks?.length ? [...entry.journal_entry_blocks].sort((a, b) => a.position - b.position).map(block => <View key={block.id} style={styles.journalEntryBlockMobile}>{block.target_labels.length ? <View style={styles.journalEntryBlockTags}>{block.target_labels.map(label => <Text key={label} style={styles.journalEntryBlockTag}>{label}</Text>)}</View> : null}<Text style={styles.journalEntryBody}>{block.body}</Text></View>) : <Text style={styles.journalEntryBody}>{entry.body}</Text>}{entry.image_urls?.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.journalEntryImages}>{entry.image_urls.map(url => <RemoteImage key={url} uri={url} style={styles.journalEntryImage} resizeMode="cover" />)}</ScrollView> : null}<Pressable onPress={() => Alert.alert("Delete this memory?", "This cannot be undone.", [{ text: "Cancel", style: "cancel" }, { text: "Delete", style: "destructive", onPress: () => void remove(entry) }])} style={styles.journalDeleteButton}><Ionicons name="trash-outline" size={15} color={colors.muted} /><Text style={styles.journalDeleteText}>Delete</Text></Pressable></View>)}
+        {entries.map(entry => <View key={entry.id} style={styles.journalEntryMobile}><View style={styles.journalEntryMobileHeader}><Text style={styles.journalEntryDate}>{new Date(`${entry.entry_date}T12:00:00`).toLocaleDateString(undefined, { dateStyle: "long" })}</Text>{entry.mood ? <Text style={styles.journalEntryMood}>{entry.mood}</Text> : null}</View>{entry.title ? <Text style={styles.journalEntryTitle}>{entry.title}</Text> : null}{entry.watch_events?.watched_at ? <Pressable disabled={!onOpenHistoryDate} onPress={() => { const date = viewingDateKey(entry.watch_events!.watched_at); onClose(); setTimeout(() => onOpenHistoryDate?.(date), 180); }} style={styles.journalEntryWatchLink}><Ionicons name="time-outline" size={14} color={colors.accent} /><Text style={styles.journalEntryWatchLinkText}>{entry.watch_event_end?.watched_at && viewingDateKey(entry.watch_event_end.watched_at) !== viewingDateKey(entry.watch_events.watched_at) ? `${new Date(entry.watch_events.watched_at).toLocaleDateString()} → ${new Date(entry.watch_event_end.watched_at).toLocaleDateString()}` : `Watched ${new Date(entry.watch_events.watched_at).toLocaleDateString()}`}</Text>{onOpenHistoryDate ? <Ionicons name="arrow-forward" size={13} color={colors.muted} /> : null}</Pressable> : null}{entry.journal_entry_blocks?.length ? [...entry.journal_entry_blocks].sort((a, b) => a.position - b.position).map(block => <View key={block.id} style={styles.journalEntryBlockMobile}>{block.target_labels.length ? <View style={styles.journalEntryBlockTags}>{block.target_labels.map(label => <Text key={label} style={styles.journalEntryBlockTag}>{label}</Text>)}</View> : null}<Text style={styles.journalEntryBody}>{block.body}</Text></View>) : <Text style={styles.journalEntryBody}>{entry.body}</Text>}{entry.image_urls?.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.journalEntryImages}>{entry.image_urls.map(url => <RemoteImage key={url} uri={url} style={styles.journalEntryImage} resizeMode="cover" />)}</ScrollView> : null}<Pressable onPress={() => Alert.alert("Delete this memory?", "This cannot be undone.", [{ text: "Cancel", style: "cancel" }, { text: "Delete", style: "destructive", onPress: () => void remove(entry) }])} style={styles.journalDeleteButton}><Ionicons name="trash-outline" size={15} color={colors.muted} /><Text style={styles.journalDeleteText}>Delete</Text></Pressable></View>)}
       </ScrollView>
     </SafeAreaView>
   </Modal>;

@@ -2,10 +2,10 @@ import { Ionicons } from "@expo/vector-icons";
 import React, { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Image, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 
-import { formatHistoryTime, formatLastWatched, formatShortDate, normalizeHistoryItemTime } from "../../app/date-utils";
+import { formatHistoryTime, formatLastWatched, formatShortDate, normalizeHistoryItemTime, viewingDateKey } from "../../app/date-utils";
 import { firstRow, fromDbMedia } from "../../app/media-model";
 import { styles } from "../../app/styles";
-import type { HistoryFilter, HistoryItem, ProfileData, ProfilePanel, ReviewItem } from "../../app/types";
+import type { DetailSeason, EpisodeTarget, HistoryFilter, HistoryItem, ProfileData, ProfilePanel, ReviewItem } from "../../app/types";
 import { fetchMobileHistory, fetchMobileReviews } from "../../api";
 import { EmptyPanel } from "../../components/EmptyPanel";
 import { RemoteImage, SectionTitle } from "../../components";
@@ -15,6 +15,7 @@ import { supabase } from "../../supabase";
 import { colors } from "../../theme";
 import type { MediaSummary } from "../../types";
 import { CardGrid } from "../library/LibraryComponents";
+import { JournalSheet } from "../details/DetailScreens";
 import { ProfileMediaSection, ReviewRow } from "./ProfileComponents";
 
 export function ProfileStatBand({ data, onNavigate }: { data: ProfileData; onNavigate?: (target: "library" | "history" | "reviews" | "statistics" | "lists") => void }) {
@@ -69,14 +70,26 @@ type ProfileJournalEntry = {
   entry_date: string;
   created_at: string;
   media: unknown;
-  journal_entry_blocks?: Array<{ id: string; position: number; body: string; target_labels: string[] }>;
+  watch_event_id?: string | null;
+  watch_event_end_id?: string | null;
+  watch_events?: { id: string; watched_at: string } | null;
+  watch_event_end?: { id: string; watched_at: string } | null;
+  journal_entry_blocks?: Array<{ id: string; position: number; body: string; season_ids: number[]; episode_ids: number[]; target_labels: string[] }>;
 };
 
-export function FullJournalPage({ userId, onBack, onOpen }: { userId: string; onBack: () => void; onOpen: (item: MediaSummary) => void }) {
+export function FullJournalPage({ userId, onBack, onOpenTitle, onOpenSeason, onOpenEpisode, onOpenHistoryDate }: {
+  userId: string;
+  onBack: () => void;
+  onOpenTitle: (item: MediaSummary) => void;
+  onOpenSeason: (show: MediaSummary, season: DetailSeason) => void;
+  onOpenEpisode: (target: EpisodeTarget) => void;
+  onOpenHistoryDate: (date: string) => void;
+}) {
   const [entries, setEntries] = useState<ProfileJournalEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
+  const [journalTarget, setJournalTarget] = useState<{ mediaId: number; title: string } | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -92,13 +105,23 @@ export function FullJournalPage({ userId, onBack, onOpen }: { userId: string; on
       try {
         const { data, error: loadError } = await client
           .from("journal_entries")
-          .select("id,title,body,mood,entry_date,created_at,media(*),journal_entry_blocks(id,position,body,target_labels)")
+          .select("id,title,body,mood,entry_date,created_at,watch_event_id,watch_event_end_id,media(*),journal_entry_blocks(id,position,body,season_ids,episode_ids,target_labels)")
           .eq("user_id", userId)
           .order("entry_date", { ascending: false })
           .order("created_at", { ascending: false });
         if (!alive) return;
         if (loadError) setError(loadError.message);
-        else setEntries((data ?? []) as ProfileJournalEntry[]);
+        else {
+          const rows = (data ?? []) as ProfileJournalEntry[];
+          const watchIds = [...new Set(rows.flatMap(entry => [entry.watch_event_id, entry.watch_event_end_id]).filter((id): id is string => Boolean(id)))];
+          const { data: watchRows } = watchIds.length ? await client.from("watch_events").select("id,watched_at").eq("user_id", userId).in("id", watchIds) : { data: [] };
+          const watchById = new Map((watchRows ?? []).map(watch => [String(watch.id), { id: String(watch.id), watched_at: String(watch.watched_at) }]));
+          if (alive) setEntries(rows.map(entry => ({
+            ...entry,
+            watch_events: entry.watch_event_id ? watchById.get(entry.watch_event_id) ?? null : null,
+            watch_event_end: entry.watch_event_end_id ? watchById.get(entry.watch_event_end_id) ?? null : null
+          })));
+        }
       } finally {
         if (alive) setLoading(false);
       }
@@ -116,6 +139,20 @@ export function FullJournalPage({ userId, onBack, onOpen }: { userId: string; on
         .some(value => String(value ?? "").toLocaleLowerCase().includes(needle));
     });
   }, [entries, query]);
+
+  async function openTarget(item: MediaSummary, seasonId?: number, targetEpisodeId?: number) {
+    if (!supabase) return;
+    if (targetEpisodeId) {
+      const { data } = await supabase.from("episodes").select("id,name,overview,episode_number,air_date,still_path,runtime,vote_average,seasons(season_number)").eq("id", targetEpisodeId).maybeSingle();
+      const season = firstRow(data?.seasons) as any;
+      if (data && season) onOpenEpisode({ episodeId: Number(data.id), show: item, seasonNumber: Number(season.season_number), episodeNumber: Number(data.episode_number), title: data.name, overview: data.overview, airDate: data.air_date, artwork: data.still_path ?? item.backdropPath ?? item.posterPath, runtime: data.runtime, voteAverage: data.vote_average });
+      return;
+    }
+    if (seasonId) {
+      const { data } = await supabase.from("seasons").select("id,season_number,name,overview,poster_path,air_date,episode_count").eq("id", seasonId).maybeSingle();
+      if (data) onOpenSeason(item, { id: Number(data.id), seasonNumber: Number(data.season_number), name: data.name || `Season ${data.season_number}`, overview: data.overview, posterPath: data.poster_path, airDate: data.air_date, episodeCount: data.episode_count });
+    }
+  }
 
   return (
     <View style={styles.profileSection}>
@@ -138,16 +175,21 @@ export function FullJournalPage({ userId, onBack, onOpen }: { userId: string; on
         const artwork = item ? tmdbImage(item.posterPath || item.backdropPath, "w342") : null;
         const blocks = [...(entry.journal_entry_blocks ?? [])].sort((a, b) => a.position - b.position);
         return (
-          <Pressable key={entry.id} disabled={!item} onPress={() => item && onOpen(item)} style={styles.profileJournalEntry}>
-            {artwork ? <RemoteImage uri={artwork} style={styles.profileJournalPoster} resizeMode="cover" /> : <View style={styles.profileJournalPosterFallback}><Ionicons name="book-outline" size={22} color={colors.muted} /></View>}
+          <Pressable key={entry.id} disabled={!item || !mediaRow?.id} onPress={() => item && mediaRow?.id && setJournalTarget({ mediaId: Number(mediaRow.id), title: item.title })} style={styles.profileJournalEntry}>
+            <Pressable disabled={!item} onPress={event => { event.stopPropagation(); if (item) onOpenTitle(item); }}>{artwork ? <RemoteImage uri={artwork} style={styles.profileJournalPoster} resizeMode="cover" /> : <View style={styles.profileJournalPosterFallback}><Ionicons name="book-outline" size={22} color={colors.muted} /></View>}</Pressable>
             <View style={styles.profileJournalEntryCopy}>
               <View style={styles.profileJournalMetaRow}>
                 <Text style={styles.profileJournalDate}>{new Date(`${entry.entry_date}T12:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}</Text>
                 {entry.mood ? <Text style={styles.profileJournalMood}>{entry.mood}</Text> : null}
               </View>
               <Text style={styles.profileJournalEntryTitle} numberOfLines={1}>{entry.title || mediaRow?.title || "Untitled memory"}</Text>
-              {entry.title && mediaRow?.title ? <Text style={styles.profileJournalMedia} numberOfLines={1}>{mediaRow.title}</Text> : null}
-              {blocks.flatMap(block => block.target_labels).length ? <View style={styles.profileJournalTags}>{blocks.flatMap(block => block.target_labels).slice(0, 3).map((label, index) => <Text key={`${label}-${index}`} style={styles.profileJournalTag}>{label}</Text>)}</View> : null}
+              {entry.title && mediaRow?.title ? <Pressable onPress={event => { event.stopPropagation(); if (item) onOpenTitle(item); }}><Text style={styles.profileJournalMedia} numberOfLines={1}>{mediaRow.title}</Text></Pressable> : null}
+              {blocks.flatMap(block => block.target_labels).length ? <View style={styles.profileJournalTags}>{blocks.flatMap(block => {
+                const seasonLinks = (block.season_ids ?? []).map((id, index) => ({ label: block.target_labels[index], seasonId: Number(id) }));
+                const episodeLinks = (block.episode_ids ?? []).map((id, index) => ({ label: block.target_labels[seasonLinks.length + index], episodeId: Number(id) }));
+                return [...seasonLinks, ...episodeLinks];
+              }).slice(0, 3).map((target, index) => <Pressable key={`${target.label}-${index}`} onPress={event => { event.stopPropagation(); if (item) void openTarget(item, "seasonId" in target ? target.seasonId : undefined, "episodeId" in target ? target.episodeId : undefined); }}><Text style={styles.profileJournalTag}>{target.label}</Text></Pressable>)}</View> : null}
+              {entry.watch_events?.watched_at ? <Pressable onPress={event => { event.stopPropagation(); onOpenHistoryDate(viewingDateKey(entry.watch_events!.watched_at)); }} style={styles.profileJournalWatch}><Ionicons name="time-outline" size={12} color={colors.accent} /><Text style={styles.profileJournalWatchText} numberOfLines={1}>{entry.watch_event_end?.watched_at && viewingDateKey(entry.watch_event_end.watched_at) !== viewingDateKey(entry.watch_events.watched_at) ? `${new Date(entry.watch_events.watched_at).toLocaleDateString()} → ${new Date(entry.watch_event_end.watched_at).toLocaleDateString()}` : `Watched ${new Date(entry.watch_events.watched_at).toLocaleDateString()}`}</Text></Pressable> : null}
               <Text style={styles.profileJournalExcerpt} numberOfLines={3}>{blocks[0]?.body || entry.body}</Text>
             </View>
             {item ? <Ionicons name="chevron-forward" size={17} color={colors.muted} /> : null}
@@ -157,6 +199,7 @@ export function FullJournalPage({ userId, onBack, onOpen }: { userId: string; on
       {!loading && !filtered.length ? <EmptyPanel title={query ? "No matching memories" : "Your first page is waiting"} body={query ? "Try another title, thought, season or episode." : "Open a movie or series and tap My journal to keep a private thought."} /> : null}
       {loading ? <View style={styles.historyInlineLoading}><ActivityIndicator color={colors.accent} /><Text style={styles.historyInlineLoadingText}>Opening your journal...</Text></View> : null}
       {error ? <Text style={styles.errorText}>{error}</Text> : null}
+      {journalTarget ? <JournalSheet visible userId={userId} mediaId={journalTarget.mediaId} title={journalTarget.title} onClose={() => setJournalTarget(null)} onOpenHistoryDate={date => { setJournalTarget(null); onOpenHistoryDate(date); }} /> : null}
     </View>
   );
 }
@@ -166,7 +209,7 @@ export function ProfileHistorySection({ items, onOpen, onMenu, onHistory }: { it
   return <View style={[styles.profileSection, styles.profileHistorySection]}><SectionTitle kicker="A dated viewing diary" title="Recent history" action="See complete history ->" onAction={onHistory} /><View style={styles.historyGrid}>{items.slice(0, 6).map(item => <HistoryCard key={item.id} item={item} onOpen={onOpen} onMenu={onMenu} />)}</View></View>;
 }
 
-export function FullHistoryPage({ data, token, onOpen, onMenu, onBack, onRemove, onScrollTop }: { data: ProfileData; token: string; onOpen: (item: HistoryItem) => void; onMenu: (item: MediaSummary) => void; onBack: () => void; onRemove: (id: string, title: string, onResult?: (success: boolean) => void) => void; onScrollTop: () => void }) {
+export function FullHistoryPage({ data, token, focusDate = "", onClearFocus, onOpen, onMenu, onBack, onRemove, onScrollTop }: { data: ProfileData; token: string; focusDate?: string; onClearFocus?: () => void; onOpen: (item: HistoryItem) => void; onMenu: (item: MediaSummary) => void; onBack: () => void; onRemove: (id: string, title: string, onResult?: (success: boolean) => void) => void; onScrollTop: () => void }) {
   const [items, setItems] = useState(() => data.history.map(normalizeHistoryItemTime));
   const [filter, setFilter] = useState<HistoryFilter>("all");
   const [queryDraft, setQueryDraft] = useState("");
@@ -189,7 +232,7 @@ export function FullHistoryPage({ data, token, onOpen, onMenu, onBack, onRemove,
     let alive = true;
     setLoadingHistory(true);
     setHistoryError("");
-    fetchMobileHistory(token, page, filter, query).then(result => {
+    fetchMobileHistory(token, page, filter, query, focusDate).then(result => {
       if (!alive) return;
       setItems((result.items ?? []).map(normalizeHistoryItemTime));
       setHasMore(result.hasMore);
@@ -197,7 +240,7 @@ export function FullHistoryPage({ data, token, onOpen, onMenu, onBack, onRemove,
       if (alive) setHistoryError(reason instanceof Error ? reason.message : "Could not load this history page.");
     }).finally(() => { if (alive) setLoadingHistory(false); });
     return () => { alive = false; };
-  }, [filter, page, query, token]);
+  }, [filter, focusDate, page, query, token]);
 
   function changeFilter(next: HistoryFilter) {
     setLoadingHistory(true);
@@ -230,6 +273,7 @@ export function FullHistoryPage({ data, token, onOpen, onMenu, onBack, onRemove,
   return (
     <View style={styles.profileSection}>
       <SectionTitle kicker="Every play, kept in order" title="Watch history" action="Back to profile ->" onAction={onBack} />
+      {focusDate ? <View style={styles.historyFocusDate}><Ionicons name="calendar-outline" size={17} color={colors.accent} /><View style={styles.historyFocusDateCopy}><Text style={styles.historyFocusDateLabel}>SHOWING WATCHES FROM</Text><Text style={styles.historyFocusDateValue}>{new Date(`${focusDate}T12:00:00`).toLocaleDateString(undefined, { dateStyle: "long" })}</Text></View><Pressable onPress={onClearFocus} style={styles.historyFocusDateClear}><Text style={styles.historyFocusDateClearText}>Show all</Text><Ionicons name="close" size={15} color={colors.muted} /></Pressable></View> : null}
       <View style={styles.historySummary}>
         <HistorySummary icon="time-outline" value={data.watchEvents} label="watch events" />
         <HistorySummary icon="time-outline" value={`${data.screenTimeHours}h`} label="screen time" />
