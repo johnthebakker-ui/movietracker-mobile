@@ -1,6 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as WebBrowser from "expo-web-browser";
+import * as ImagePicker from "expo-image-picker";
 import type { Session } from "@supabase/supabase-js";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Animated, BackHandler, FlatList, Image, KeyboardAvoidingView, Modal, Platform, Pressable, SafeAreaView, ScrollView, Share, StyleSheet, Switch, Text, TextInput, useWindowDimensions, View } from "react-native";
@@ -43,6 +44,7 @@ export function SeasonDetailScreen({ target, session, onBack, onOpenEpisode }: {
   const [colorized, setColorized] = useState(false);
   const [busy, setBusy] = useState(false);
   const [ratingSheetVisible, setRatingSheetVisible] = useState(false);
+  const [journalVisible, setJournalVisible] = useState(false);
   const [quickWatchEpisode, setQuickWatchEpisode] = useState<any | null>(null);
   const heldEpisode = useRef<number | null>(null);
   const season = payload?.season ?? target.season;
@@ -177,6 +179,7 @@ export function SeasonDetailScreen({ target, session, onBack, onOpenEpisode }: {
           {payload ? <View style={styles.ratingSourceRow}>{seasonRatingSources.map(rating => <RatingSource key={rating.label} label={rating.label} value={rating.value} />)}</View> : null}
           <Text style={styles.detailOverview}>{season.overview || target.season.overview || "No season overview has been published yet."}</Text>
           <View style={styles.detailQuickActions}>
+            <Pressable disabled={!session?.user.id || !payload?.mediaId || !payload?.seasonId} onPress={() => setJournalVisible(true)} style={styles.quickAction}><Ionicons name="book-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>My journal</Text></Pressable>
             <Pressable onPress={() => sharePublicTitle(`/title/show/${target.show.id}/season/${target.season.seasonNumber}`, `${target.show.title} - ${season.name ?? target.season.name}`, season.overview || target.season.overview || target.show.overview)} style={styles.quickAction}><Ionicons name="share-social-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>Share</Text></Pressable>
           </View>
         </View>
@@ -192,6 +195,7 @@ export function SeasonDetailScreen({ target, session, onBack, onOpenEpisode }: {
           <Ionicons name="chevron-forward" size={18} color={colors.muted} />
         </Pressable>
         <RatingSheet visible={ratingSheetVisible} value={payload?.userRating ?? null} busy={busy} onClose={() => setRatingSheetVisible(false)} onSave={saveSeasonRating} />
+        {session?.user.id && payload?.mediaId && payload?.seasonId ? <JournalSheet visible={journalVisible} userId={session.user.id} mediaId={payload.mediaId} seasonId={payload.seasonId} title={`${target.show.title} · ${season.name ?? target.season.name}`} onClose={() => setJournalVisible(false)} /> : null}
         <WatchLogSheet visible={Boolean(quickWatchEpisode)} title={`${target.show.title} - ${quickWatchEpisode?.name ?? "Episode"}`} releaseDate={quickWatchEpisode?.air_date ?? null} runtime={quickWatchEpisode?.runtime ?? null} busy={busy} watched={Boolean(quickWatchEpisode?.watched)} onClose={() => setQuickWatchEpisode(null)} onSave={saveQuickEpisodeWatch} />
         {session?.user.id && payload?.seasonId ? <ReviewComposerPanel existingReview={payload.myReview} currentRating={payload.userRating} busy={busy} onSubmit={saveSeasonReview} /> : null}
         <View style={styles.sourceTabs}>
@@ -790,6 +794,7 @@ export function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEnt
   const [busy, setBusy] = useState(false);
   const [ratingSheetVisible, setRatingSheetVisible] = useState(false);
   const [watchSheetVisible, setWatchSheetVisible] = useState(false);
+  const [journalVisible, setJournalVisible] = useState(false);
   const art = tmdbImage(episode?.still_path ?? target.artwork ?? target.show.backdropPath ?? target.show.posterPath, "w780");
 
   const loadEpisode = useCallback(async () => {
@@ -1034,6 +1039,7 @@ export function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEnt
           <View style={styles.detailQuickActions}>
             <Pressable onPress={() => onOpen(show)} style={styles.quickAction}><Ionicons name="albums-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>Open show</Text></Pressable>
             <Pressable onPress={() => onOpenSeason(seasonTarget, show, showSeasons.length ? showSeasons : [seasonTarget])} style={styles.quickAction}><Ionicons name="layers-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>{isLimitedSeries(show, showSeasons.length ? showSeasons : [seasonTarget]) ? "All episodes" : "Open season"}</Text></Pressable>
+            <Pressable disabled={!session?.user.id || !episodeId} onPress={() => setJournalVisible(true)} style={styles.quickAction}><Ionicons name="book-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>My journal</Text></Pressable>
             <Pressable onPress={() => setWatchSheetVisible(true)} style={styles.quickAction}><Ionicons name="ellipsis-horizontal-circle-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>Actions</Text></Pressable>
             <Pressable disabled={busy} onPress={() => setWatchSheetVisible(true)} style={styles.quickAction}><Ionicons name={watched ? "repeat-outline" : "calendar-outline"} size={19} color={colors.text} /><Text style={styles.quickActionText}>{watched ? "Add another watch" : "Mark watched"}</Text></Pressable>
             <Pressable disabled={busy || !episodeId} onPress={() => setRatingSheetVisible(true)} style={styles.quickAction}><Ionicons name="speedometer-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>{userRating != null ? `${userRating.toFixed(1)}/10` : "Rate"}</Text></Pressable>
@@ -1045,6 +1051,7 @@ export function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEnt
       <View style={styles.detailBody}>
         <RatingSheet visible={ratingSheetVisible} value={userRating} busy={busy} onClose={() => setRatingSheetVisible(false)} onSave={saveEpisodeRating} />
         <WatchLogSheet visible={watchSheetVisible} title={`${show.title} - ${title}`} releaseDate={episode?.air_date ?? target.airDate ?? null} runtime={episode?.runtime ?? null} busy={busy} watched={watched} onClose={() => setWatchSheetVisible(false)} onSave={saveEpisodeWatchLog} />
+        {session?.user.id && episodeId && season?.media_id ? <JournalSheet visible={journalVisible} userId={session.user.id} mediaId={Number(season.media_id)} episodeId={Number(episodeId)} title={`${show.title} · S${target.seasonNumber} E${target.episodeNumber}`} onClose={() => setJournalVisible(false)} /> : null}
         {images.length || trailer ? <TitleMediaPreview trailer={trailer} images={images} /> : null}
         {cast.length ? <CastSection cast={cast} onOpen={onOpenEntity} /> : null}
         {episodeCompanies.length ? <CompanySection companies={episodeCompanies} onOpen={onOpenEntity} /> : null}
@@ -1175,6 +1182,7 @@ export function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, on
   const [listSheetVisible, setListSheetVisible] = useState(false);
   const [ratingSheetVisible, setRatingSheetVisible] = useState(false);
   const [watchSheetVisible, setWatchSheetVisible] = useState(false);
+  const [journalVisible, setJournalVisible] = useState(false);
   const detailCacheKey = titleDetailCacheKey(item, session?.user.id);
   const backdrop = tmdbImage(item.backdropPath || item.posterPath, "w780");
   const poster = tmdbImage(item.posterPath, "w500");
@@ -1582,12 +1590,13 @@ export function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, on
             </View>
             <Ionicons name="chevron-forward" size={18} color={colors.muted} />
           </Pressable>
-          <View style={styles.detailQuickActions}><Pressable disabled={busy} onPress={toggleFavorite} style={styles.quickAction}><Ionicons name={detail?.favorite ? "heart" : "heart-outline"} size={19} color={colors.text} /><Text style={styles.quickActionText}>{detail?.favorite ? "Favorited" : "Favorite"}</Text></Pressable><Pressable disabled={busy} onPress={() => session?.access_token ? onHide(item) : Alert.alert("Sign in needed", "Sign in before changing recommendations.")} style={styles.quickAction}><Ionicons name="ban-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>Not interested</Text></Pressable><Pressable disabled={busy} onPress={() => setWatchSheetVisible(true)} style={styles.quickAction}><Ionicons name="calendar-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>{detail?.watched || detail?.seriesProgress ? "Add another watch" : "First watch"}</Text></Pressable><Pressable onPress={() => sharePublicTitle(`/title/${item.kind}/${item.id}`, item.title, detailOverview)} style={styles.quickAction}><Ionicons name="share-social-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>Share</Text></Pressable></View>
+          <View style={styles.detailQuickActions}><Pressable disabled={busy} onPress={toggleFavorite} style={styles.quickAction}><Ionicons name={detail?.favorite ? "heart" : "heart-outline"} size={19} color={colors.text} /><Text style={styles.quickActionText}>{detail?.favorite ? "Favorited" : "Favorite"}</Text></Pressable><Pressable disabled={!session?.user.id || !detail?.dbId} onPress={() => setJournalVisible(true)} style={styles.quickAction}><Ionicons name="book-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>My journal</Text></Pressable><Pressable disabled={busy} onPress={() => session?.access_token ? onHide(item) : Alert.alert("Sign in needed", "Sign in before changing recommendations.")} style={styles.quickAction}><Ionicons name="ban-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>Not interested</Text></Pressable><Pressable disabled={busy} onPress={() => setWatchSheetVisible(true)} style={styles.quickAction}><Ionicons name="calendar-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>{detail?.watched || detail?.seriesProgress ? "Add another watch" : "First watch"}</Text></Pressable><Pressable onPress={() => sharePublicTitle(`/title/${item.kind}/${item.id}`, item.title, detailOverview)} style={styles.quickAction}><Ionicons name="share-social-outline" size={19} color={colors.text} /><Text style={styles.quickActionText}>Share</Text></Pressable></View>
           {detail?.lists.length ? <View style={styles.detailLists}><Pressable disabled={busy} onPress={() => setListSheetVisible(true)} style={styles.addToListButton}><Ionicons name="list-outline" size={21} color={colors.text} /><Text style={styles.addToListText}>Add to list</Text><Ionicons name="chevron-up" size={18} color={colors.muted} /></Pressable></View> : null}
         </View>
         <RatingSheet visible={ratingSheetVisible} value={detail?.userRating ?? null} busy={busy} onClose={() => setRatingSheetVisible(false)} onSave={saveUserRating} />
         <WatchLogSheet visible={watchSheetVisible} title={item.title} releaseDate={detail?.releaseDate || item.releaseDate} runtime={detail?.runtime ?? null} busy={busy} watched={Boolean(detail?.watched)} onClose={() => setWatchSheetVisible(false)} onSave={saveWatchLog} />
         <DetailListSheet visible={listSheetVisible} lists={detail?.lists ?? []} busy={busy} onClose={() => setListSheetVisible(false)} onToggle={toggleDetailList} />
+        {session?.user.id && detail?.dbId ? <JournalSheet visible={journalVisible} userId={session.user.id} mediaId={detail.dbId} title={item.title} onClose={() => setJournalVisible(false)} /> : null}
         <View style={styles.factGrid}><Fact label="Released" value={detail?.releaseDate || item.releaseDate || "TBA"} /><Fact label={director?.job ?? "Director"} value={director?.name ?? "TBA"} /><Fact label="Original language" value={(detail?.originalLanguage || item.originalLanguage || "Unknown").toUpperCase()} /><Fact label="Genres" value={detailGenres.map(genre => genre.name).join(", ") || "Unknown"} /></View>
         {item.kind === "show" && detail?.seasons.length ? <SeasonsSection seasons={detail.seasons} limited={isLimitedSeries({ status: detail.status ?? item.status }, detail.seasons)} onOpenSeason={onOpenSeason} onOpenAllSeasons={onOpenAllSeasons} /> : null}
         {detail?.images.length || trailer ? <TitleMediaPreview trailer={trailer} images={detail?.images ?? []} /> : null}
@@ -1600,6 +1609,102 @@ export function DetailScreenV2({ item, session, onBack, onOpen, onOpenEntity, on
       </View>
     </ScrollView>
   );
+}
+
+type MobileJournalEntry = {
+  id: string;
+  title: string | null;
+  body: string;
+  mood: string | null;
+  entry_date: string;
+  created_at: string;
+  image_paths: string[];
+  image_urls?: string[];
+  journal_entry_blocks?: Array<{ id: string; position: number; body: string; target_labels: string[] }>;
+};
+
+export function JournalSheet({ visible, userId, mediaId, seasonId, episodeId, title, onClose }: { visible: boolean; userId: string; mediaId: number; seasonId?: number; episodeId?: number; title: string; onClose: () => void }) {
+  const [entries, setEntries] = useState<MobileJournalEntry[]>([]);
+  const [entryTitle, setEntryTitle] = useState("");
+  const [body, setBody] = useState("");
+  const [mood, setMood] = useState("");
+  const [assets, setAssets] = useState<ImagePicker.ImagePickerAsset[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    if (!supabase) return;
+    const client = supabase;
+    let query = client.from("journal_entries").select("id,title,body,mood,entry_date,created_at,image_paths,journal_entry_blocks(id,position,body,target_labels)").eq("user_id", userId).eq("media_id", mediaId);
+    if (episodeId) query = query.eq("episode_id", episodeId);
+    else if (seasonId) query = query.eq("season_id", seasonId);
+    const { data, error } = await query.order("entry_date", { ascending: false }).order("created_at", { ascending: false });
+    if (error) throw error;
+    const hydrated = await Promise.all(((data ?? []) as MobileJournalEntry[]).map(async entry => {
+      if (!entry.image_paths.length) return entry;
+      const { data: signed } = await client.storage.from("journal-media").createSignedUrls(entry.image_paths, 3600);
+      return { ...entry, image_urls: (signed ?? []).flatMap(image => image.signedUrl ? [image.signedUrl] : []) };
+    }));
+    setEntries(hydrated);
+  }, [episodeId, mediaId, seasonId, userId]);
+
+  useEffect(() => {
+    if (visible) void load().catch(reason => Alert.alert("Journal unavailable", reason instanceof Error ? reason.message : "Try again."));
+  }, [load, visible]);
+
+  async function pickImages() {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) return Alert.alert("Photo access needed", "Allow photo access to attach images to this private entry.");
+    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"], allowsMultipleSelection: true, selectionLimit: 4, quality: .88 });
+    if (!result.canceled) setAssets(result.assets.slice(0, 4));
+  }
+
+  async function save() {
+    if (!supabase || !body.trim()) return;
+    setBusy(true);
+    const paths: string[] = [];
+    try {
+      for (const asset of assets) {
+        const extension = (asset.fileName?.split(".").pop() || "jpg").replace(/[^a-z0-9]/gi, "").toLowerCase();
+        const path = `${userId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${extension}`;
+        const blob = await (await fetch(asset.uri)).blob();
+        const { error } = await supabase.storage.from("journal-media").upload(path, blob, { contentType: asset.mimeType || "image/jpeg" });
+        if (error) throw error;
+        paths.push(path);
+      }
+      const { error } = await supabase.from("journal_entries").insert({ user_id: userId, media_id: mediaId, season_id: seasonId ?? null, episode_id: episodeId ?? null, title: entryTitle.trim() || null, body: body.trim(), mood: mood || null, image_paths: paths, entry_date: new Date().toISOString().slice(0, 10) });
+      if (error) throw error;
+      setEntryTitle(""); setBody(""); setMood(""); setAssets([]);
+      await load();
+    } catch (reason) {
+      if (paths.length) await supabase.storage.from("journal-media").remove(paths);
+      Alert.alert("Could not save entry", reason instanceof Error ? reason.message : "Try again.");
+    } finally { setBusy(false); }
+  }
+
+  async function remove(entry: MobileJournalEntry) {
+    if (!supabase) return;
+    const { error } = await supabase.from("journal_entries").delete().eq("id", entry.id).eq("user_id", userId);
+    if (error) return Alert.alert("Could not delete entry", error.message);
+    if (entry.image_paths.length) await supabase.storage.from("journal-media").remove(entry.image_paths);
+    setEntries(current => current.filter(candidate => candidate.id !== entry.id));
+  }
+
+  return <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+    <SafeAreaView style={styles.journalSheet}>
+      <View style={styles.journalSheetHeader}><View><Text style={styles.journalSheetKicker}>PRIVATE JOURNAL</Text><Text style={styles.journalSheetTitle} numberOfLines={1}>{title}</Text></View><Pressable onPress={onClose} style={styles.sheetCloseButton}><Ionicons name="close" size={24} color={colors.text} /></Pressable></View>
+      <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.journalSheetContent}>
+        <View style={styles.journalPrivacyCard}><Ionicons name="lock-closed" size={17} color={colors.accent} /><Text style={styles.journalPrivacyText}><Text style={styles.journalPrivacyStrong}>Only you can see this.</Text> Keep the thoughts you will want to rediscover years from now.</Text></View>
+        <View style={styles.journalComposerMobile}>
+          <TextInput value={entryTitle} onChangeText={setEntryTitle} maxLength={120} placeholder="Give this memory a title (optional)" placeholderTextColor={colors.muted} style={styles.journalTitleInputMobile} />
+          <TextInput value={body} onChangeText={setBody} maxLength={20000} multiline placeholder="What stayed with you? A scene, a feeling, a theory..." placeholderTextColor={colors.muted} style={styles.journalBodyInputMobile} />
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.journalMoodRow}>{["Moved","Delighted","Shocked","Thoughtful","Heartbroken","Confused","Obsessed"].map(value => <Pressable key={value} onPress={() => setMood(current => current === value ? "" : value)} style={[styles.journalMoodChip, mood === value && styles.journalMoodChipActive]}><Text style={[styles.journalMoodChipText, mood === value && styles.journalMoodChipTextActive]}>{value}</Text></Pressable>)}</ScrollView>
+          <View style={styles.journalComposerActions}><Pressable onPress={pickImages} style={styles.journalPhotoButton}><Ionicons name="images-outline" size={18} color={colors.text} /><Text style={styles.journalPhotoButtonText}>{assets.length ? `${assets.length} selected` : "Add images"}</Text></Pressable><Pressable disabled={busy || !body.trim()} onPress={save} style={[styles.journalSaveButton, (!body.trim() || busy) && { opacity: .45 }]}>{busy ? <ActivityIndicator color="#101010" /> : <Text style={styles.journalSaveButtonText}>Keep memory</Text>}</Pressable></View>
+        </View>
+        <Text style={styles.journalTimelineTitle}>{entries.length ? "Your memories" : "The first page is yours"}</Text>
+        {entries.map(entry => <View key={entry.id} style={styles.journalEntryMobile}><View style={styles.journalEntryMobileHeader}><Text style={styles.journalEntryDate}>{new Date(`${entry.entry_date}T12:00:00`).toLocaleDateString(undefined, { dateStyle: "long" })}</Text>{entry.mood ? <Text style={styles.journalEntryMood}>{entry.mood}</Text> : null}</View>{entry.title ? <Text style={styles.journalEntryTitle}>{entry.title}</Text> : null}{entry.journal_entry_blocks?.length ? [...entry.journal_entry_blocks].sort((a, b) => a.position - b.position).map(block => <View key={block.id} style={styles.journalEntryBlockMobile}>{block.target_labels.length ? <View style={styles.journalEntryBlockTags}>{block.target_labels.map(label => <Text key={label} style={styles.journalEntryBlockTag}>{label}</Text>)}</View> : null}<Text style={styles.journalEntryBody}>{block.body}</Text></View>) : <Text style={styles.journalEntryBody}>{entry.body}</Text>}{entry.image_urls?.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.journalEntryImages}>{entry.image_urls.map(url => <RemoteImage key={url} uri={url} style={styles.journalEntryImage} resizeMode="cover" />)}</ScrollView> : null}<Pressable onPress={() => Alert.alert("Delete this memory?", "This cannot be undone.", [{ text: "Cancel", style: "cancel" }, { text: "Delete", style: "destructive", onPress: () => void remove(entry) }])} style={styles.journalDeleteButton}><Ionicons name="trash-outline" size={15} color={colors.muted} /><Text style={styles.journalDeleteText}>Delete</Text></Pressable></View>)}
+      </ScrollView>
+    </SafeAreaView>
+  </Modal>;
 }
 
 export function DetailListSheet({ visible, lists, busy, onClose, onToggle }: { visible: boolean; lists: ListMembership[]; busy: boolean; onClose: () => void; onToggle: (list: ListMembership) => Promise<void> }) {

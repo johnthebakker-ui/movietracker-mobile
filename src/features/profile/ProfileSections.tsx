@@ -41,7 +41,6 @@ export function ProfileStatBand({ data, onNavigate }: { data: ProfileData; onNav
 
 export function ProfileNav({ onChange }: { onChange: (value: ProfilePanel) => void }) {
   const tabs: Array<{ value: ProfilePanel; label: string }> = [
-    { value: "lists", label: "Lists" },
     { value: "reviews", label: "Reviews" },
     { value: "history", label: "Full history" },
     { value: "statistics", label: "Statistics" }
