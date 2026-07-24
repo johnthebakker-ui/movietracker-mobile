@@ -337,6 +337,12 @@ export async function answerMobileViewingPassRestart(token: string, candidateId:
   });
 }
 
+export async function syncViewingPassPushNotifications(token: string) {
+  return request<{ checked: number; pushed: number }>("/api/mobile/notifications/viewing-pass/push", token, {
+    method: "POST"
+  });
+}
+
 export async function fetchMobileProfile(token: string): Promise<any> {
   return request<any>("/api/mobile/profile", token);
 }

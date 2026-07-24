@@ -6,7 +6,7 @@ import type { Session } from "@supabase/supabase-js";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Animated, BackHandler, FlatList, Image, KeyboardAvoidingView, Modal, Platform, Pressable, SafeAreaView, ScrollView, Share, StyleSheet, Switch, Text, TextInput, useWindowDimensions, View } from "react-native";
 
-import { deleteMobileHistoryEvent, fetchListFranchiseCollections, fetchMobileCompany, fetchMobileEpisode, fetchMobileHistory, fetchMobilePerson, fetchMobileReviews, fetchMobileSeason, fetchMobileTitle, fetchWebsiteEntityMetadata, fetchWebsiteTitleMetadata, setNotInterested } from "../../api";
+import { deleteMobileHistoryEvent, fetchListFranchiseCollections, fetchMobileCompany, fetchMobileEpisode, fetchMobileHistory, fetchMobilePerson, fetchMobileReviews, fetchMobileSeason, fetchMobileTitle, fetchWebsiteEntityMetadata, fetchWebsiteTitleMetadata, setNotInterested, syncViewingPassPushNotifications } from "../../api";
 import { API_URL, communityRatingLabel, HAS_SUPABASE, titleYear, tmdbImage, userRatingLabel } from "../../config";
 import { AppHeader, RemoteImage, SectionTitle, TitleCard } from "../../components";
 import { styles } from "../../app/styles";
@@ -160,6 +160,7 @@ export function SeasonDetailScreen({ target, session, onBack, onOpenEpisode, onO
       const { error } = await supabase.from("watch_events").insert({ user_id: session.user.id, media_id: payload.mediaId, episode_id: quickWatchEpisode.db_episode_id, duration_minutes: quickWatchEpisode.runtime ?? null, watched_at: watchedAt });
       if (error) throw error;
       await reconcileMobileEpisodeProgress(session.user.id, payload.mediaId);
+      await syncViewingPassPushNotifications(session.access_token).catch(() => undefined);
       const watchedNumber = episodeNumberOf(quickWatchEpisode);
       setPayload((current: any) => current ? { ...current, episodes: current.episodes.map((episode: any) => episodeNumberOf(episode) === watchedNumber ? { ...episode, watched: true } : episode) } : current);
       setQuickWatchEpisode(null);
@@ -225,7 +226,7 @@ export function SeasonDetailScreen({ target, session, onBack, onOpenEpisode, onO
         </ScrollView>
         <View style={styles.seasonList}>
           {episodes.map(episode => {
-            const still = tmdbImage(episode.still_path ?? episode.stillPath, "w342");
+            const still = tmdbImage(episode.still_path ?? episode.stillPath ?? target.show.backdropPath ?? target.show.posterPath, "w342");
             const episodeNumber = Number(episode.episode_number ?? episode.episodeNumber ?? 0);
             const userScore = (payload?.userEpisodeRatings ?? []).find((rating: any) => Number(rating.episode) === episodeNumber)?.score;
             return (
@@ -342,6 +343,7 @@ export function SeriesEpisodesScreen({ target, session, onBack, onOpenSeason, on
     const { error } = await supabase.from("watch_events").insert({ user_id: session.user.id, media_id: quickWatch.payload.mediaId, episode_id: quickWatch.episode.db_episode_id, duration_minutes: quickWatch.episode.runtime ?? null, watched_at: watchedAt });
     if (error) throw error;
     await reconcileMobileEpisodeProgress(session.user.id, quickWatch.payload.mediaId);
+    await syncViewingPassPushNotifications(session.access_token).catch(() => undefined);
     setPayloads(current => current.map(payload => Number(payload?.season?.season_number ?? payload?.season?.seasonNumber) === seasonNumber ? { ...payload, episodes: payload.episodes.map((episode: any) => Number(episode.episode_number ?? episode.episodeNumber) === episodeNumber ? { ...episode, watched: true } : episode) } : payload));
     setQuickWatch(null);
     } finally { setQuickWatchBusy(false); }
@@ -415,7 +417,7 @@ export function SeriesEpisodesScreen({ target, session, onBack, onOpenSeason, on
             <SectionTitle kicker={`Season ${season.seasonNumber}`} title={isLimitedSeries(target.show, seasons) ? "Limited Series" : season.name || `Season ${season.seasonNumber}`} action={isLimitedSeries(target.show, seasons) ? undefined : "Open season ->"} onAction={isLimitedSeries(target.show, seasons) ? undefined : () => onOpenSeason(season)} />
             <View style={styles.seasonList}>
               {episodes.map(episode => {
-                const still = tmdbImage(episode.still_path ?? episode.stillPath, "w342");
+                const still = tmdbImage(episode.still_path ?? episode.stillPath ?? target.show.backdropPath ?? season.posterPath ?? target.show.posterPath, "w342");
                 const episodeNumber = Number(episode.episode_number ?? episode.episodeNumber ?? 0);
                 const dimmed = dimUnwatched && !isEpisodeWatched(season.seasonNumber, episode);
                 const userScore = (payload?.userEpisodeRatings ?? []).find((rating: any) => Number(rating.episode) === episodeNumber)?.score;
@@ -903,6 +905,7 @@ export function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEnt
       const { error } = await supabase!.from("watch_events").insert({ user_id: session.user.id, media_id: mediaId, episode_id: episodeId, watched_at: new Date().toISOString() });
       if (error) throw error;
       await reconcileMobileEpisodeProgress(session.user.id, mediaId);
+      await syncViewingPassPushNotifications(session.access_token).catch(() => undefined);
       setWatched(true);
       setLastWatchedAt(new Date().toISOString());
     }, "watch", false);
@@ -919,6 +922,7 @@ export function EpisodeDetailScreen({ target, session, onBack, onOpen, onOpenEnt
       const watchResult = await supabase!.from("watch_events").insert({ user_id: session.user.id, media_id: mediaId, episode_id: episodeId, duration_minutes: episode?.runtime ?? null, watched_at: watchedAt });
       if (watchResult.error) throw watchResult.error;
       await reconcileMobileEpisodeProgress(session.user.id, mediaId);
+      await syncViewingPassPushNotifications(session.access_token).catch(() => undefined);
       setWatched(true);
       setLastWatchedAt(watchedAt);
     }, "watch", false);
@@ -1619,6 +1623,7 @@ type MobileJournalEntry = {
   mood: string | null;
   entry_date: string;
   created_at: string;
+  updated_at?: string | null;
   image_paths: string[];
   image_urls?: string[];
   watch_event_id?: string | null;
@@ -1657,6 +1662,81 @@ function createJournalSection(seasonId?: number, episodeId?: number): MobileJour
     seasonIds: seasonId && !episodeId ? [seasonId] : [],
     episodeIds: episodeId ? [episodeId] : []
   };
+}
+
+function MobileJournalEntryCard({ entry, userId, onCloseJournal, onOpenHistoryDate, onRemove, onUpdated }: {
+  entry: MobileJournalEntry;
+  userId: string;
+  onCloseJournal: () => void;
+  onOpenHistoryDate?: (date: string) => void;
+  onRemove: (entry: MobileJournalEntry) => void;
+  onUpdated: () => Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [editTitle, setEditTitle] = useState(entry.title ?? "");
+  const [editBody, setEditBody] = useState(entry.body);
+  const [editBlocks, setEditBlocks] = useState(() => (entry.journal_entry_blocks ?? []).map(block => ({ id: block.id, body: block.body })));
+  const [saving, setSaving] = useState(false);
+  const [openImage, setOpenImage] = useState<string | null>(null);
+  const edited = entry.updated_at && new Date(entry.updated_at).getTime() - new Date(entry.created_at).getTime() > 1000;
+
+  async function saveEdit() {
+    if (!supabase || saving) return;
+    const body = editBlocks.length ? editBlocks.map(block => block.body.trim()).filter(Boolean).join("\n\n") : editBody.trim();
+    if (!body) return Alert.alert("A thought is required", "Keep at least one section of text in this entry.");
+    setSaving(true);
+    try {
+      if (editBlocks.length) {
+        const results = await Promise.all(editBlocks.map(block =>
+          supabase!.from("journal_entry_blocks").update({ body: block.body.trim() }).eq("id", block.id).eq("entry_id", entry.id)
+        ));
+        const blockError = results.find(result => result.error)?.error;
+        if (blockError) throw blockError;
+      }
+      const { error } = await supabase.from("journal_entries").update({ title: editTitle.trim() || null, body }).eq("id", entry.id).eq("user_id", userId);
+      if (error) throw error;
+      setEditing(false);
+      await onUpdated();
+    } catch (reason) {
+      Alert.alert("Could not update entry", reason instanceof Error ? reason.message : "Try again.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return <>
+    <View style={styles.journalEntryMobile}>
+      <View style={styles.journalEntryMobileHeader}>
+        <Text style={styles.journalEntryDate}>{new Date(`${entry.entry_date}T12:00:00`).toLocaleDateString(undefined, { dateStyle: "long" })}{edited ? " · Edited" : ""}</Text>
+        {entry.mood ? <Text style={styles.journalEntryMood}>{entry.mood}</Text> : null}
+      </View>
+      {editing ? <View style={styles.journalEntryEditMobile}>
+        <TextInput value={editTitle} onChangeText={setEditTitle} maxLength={120} placeholder="Entry title (optional)" placeholderTextColor={colors.muted} style={styles.journalEntryEditTitleMobile} />
+        {editBlocks.length ? editBlocks.map((block, index) => <TextInput key={block.id} value={block.body} onChangeText={value => setEditBlocks(current => current.map((candidate, candidateIndex) => candidateIndex === index ? { ...candidate, body: value } : candidate))} maxLength={20000} multiline placeholderTextColor={colors.muted} style={styles.journalEntryEditBodyMobile} />)
+          : <TextInput value={editBody} onChangeText={setEditBody} maxLength={20000} multiline placeholderTextColor={colors.muted} style={styles.journalEntryEditBodyMobile} />}
+        <View style={styles.journalEntryEditActionsMobile}><Pressable disabled={saving} onPress={() => setEditing(false)} style={styles.journalEntryEditCancelMobile}><Text style={styles.journalEntryEditCancelTextMobile}>Cancel</Text></Pressable><Pressable disabled={saving} onPress={() => void saveEdit()} style={styles.journalEntryEditSaveMobile}>{saving ? <ActivityIndicator color="#101010" /> : <Text style={styles.journalEntryEditSaveTextMobile}>Save changes</Text>}</Pressable></View>
+      </View> : <>
+        {entry.title ? <Text style={styles.journalEntryTitle}>{entry.title}</Text> : null}
+        {entry.watch_events?.watched_at ? <Pressable disabled={!onOpenHistoryDate} onPress={() => {
+          const date = viewingDateKey(entry.watch_events!.watched_at);
+          onCloseJournal();
+          setTimeout(() => onOpenHistoryDate?.(date), 180);
+        }} style={styles.journalEntryWatchLink}><Ionicons name="time-outline" size={14} color={colors.accent} /><Text style={styles.journalEntryWatchLinkText}>{entry.watch_event_end?.watched_at && viewingDateKey(entry.watch_event_end.watched_at) !== viewingDateKey(entry.watch_events.watched_at) ? `${new Date(entry.watch_events.watched_at).toLocaleDateString()} → ${new Date(entry.watch_event_end.watched_at).toLocaleDateString()}` : `Watched ${new Date(entry.watch_events.watched_at).toLocaleDateString()}`}</Text>{onOpenHistoryDate ? <Ionicons name="arrow-forward" size={13} color={colors.muted} /> : null}</Pressable> : null}
+        {entry.journal_entry_blocks?.length ? [...entry.journal_entry_blocks].sort((a, b) => a.position - b.position).map(block => <View key={block.id} style={styles.journalEntryBlockMobile}>{block.target_labels.length ? <View style={styles.journalEntryBlockTags}>{block.target_labels.map(label => <Text key={label} style={styles.journalEntryBlockTag}>{label}</Text>)}</View> : null}<Text style={styles.journalEntryBody}>{block.body}</Text></View>) : <Text style={styles.journalEntryBody}>{entry.body}</Text>}
+      </>}
+      {entry.image_urls?.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.journalEntryImages}>{entry.image_urls.map(url => <Pressable key={url} onPress={() => setOpenImage(url)}><RemoteImage uri={url} style={styles.journalEntryImage} resizeMode="cover" /></Pressable>)}</ScrollView> : null}
+      <View style={styles.journalEntryActionsMobile}>
+        <Pressable onPress={() => setEditing(current => !current)} style={styles.journalEntryActionMobile}><Ionicons name="create-outline" size={15} color={colors.muted} /><Text style={styles.journalDeleteText}>{editing ? "Cancel edit" : "Edit"}</Text></Pressable>
+        <Pressable onPress={() => Alert.alert("Delete this memory?", "This cannot be undone.", [{ text: "Cancel", style: "cancel" }, { text: "Delete", style: "destructive", onPress: () => onRemove(entry) }])} style={styles.journalEntryActionMobile}><Ionicons name="trash-outline" size={15} color={colors.muted} /><Text style={styles.journalDeleteText}>Delete</Text></Pressable>
+      </View>
+    </View>
+    <Modal visible={Boolean(openImage)} transparent animationType="fade" onRequestClose={() => setOpenImage(null)}>
+      <Pressable style={styles.journalImageLightbox} onPress={() => setOpenImage(null)}>
+        <Pressable style={styles.journalImageLightboxClose} onPress={() => setOpenImage(null)}><Ionicons name="close" size={24} color="#fff" /></Pressable>
+        {openImage ? <Pressable onPress={event => event.stopPropagation()} style={styles.journalImageLightboxFrame}><RemoteImage uri={openImage} style={styles.journalImageLightboxImage} resizeMode="contain" /></Pressable> : null}
+      </Pressable>
+    </Modal>
+  </>;
 }
 
 export function JournalSheet({ visible, userId, mediaId, seasonId, episodeId, title, onClose, onOpenHistoryDate }: { visible: boolean; userId: string; mediaId: number; seasonId?: number; episodeId?: number; title: string; onClose: () => void; onOpenHistoryDate?: (date: string) => void }) {
@@ -1704,7 +1784,7 @@ export function JournalSheet({ visible, userId, mediaId, seasonId, episodeId, ti
     if (!supabase) return;
     const client = supabase;
     const [entryResult, seasonResult, watchResult] = await Promise.all([
-      client.from("journal_entries").select("id,title,body,mood,entry_date,created_at,image_paths,watch_event_id,watch_event_end_id,journal_entry_blocks(id,position,body,target_labels)").eq("user_id", userId).eq("media_id", mediaId).order("entry_date", { ascending: false }).order("created_at", { ascending: false }),
+      client.from("journal_entries").select("id,title,body,mood,entry_date,created_at,updated_at,image_paths,watch_event_id,watch_event_end_id,journal_entry_blocks(id,position,body,target_labels)").eq("user_id", userId).eq("media_id", mediaId).order("entry_date", { ascending: false }).order("created_at", { ascending: false }),
       client.from("seasons").select("id,season_number,name,episodes(id,episode_number,name)").eq("media_id", mediaId).order("season_number", { ascending: true }),
       client.from("watch_events").select("id,watched_at,episode_id,episodes(episode_number,seasons(id,season_number))").eq("user_id", userId).eq("media_id", mediaId).order("watched_at", { ascending: false, nullsFirst: false }).limit(500)
     ]);
@@ -2002,10 +2082,16 @@ export function JournalSheet({ visible, userId, mediaId, seasonId, episodeId, ti
             </Modal>
           </View> : null}
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.journalMoodRow}>{["Moved","Delighted","Shocked","Thoughtful","Heartbroken","Confused","Obsessed"].map(value => <Pressable key={value} onPress={() => setMood(current => current === value ? "" : value)} style={[styles.journalMoodChip, mood === value && styles.journalMoodChipActive]}><Text style={[styles.journalMoodChipText, mood === value && styles.journalMoodChipTextActive]}>{value}</Text></Pressable>)}</ScrollView>
+          {assets.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.journalSelectedImages}>
+            {assets.map((asset, index) => <View key={`${asset.assetId ?? asset.uri}-${index}`} style={styles.journalSelectedImageWrap}>
+              <Image source={{ uri: asset.uri }} style={styles.journalSelectedImage} resizeMode="cover" />
+              <Pressable onPress={() => setAssets(current => current.filter((_, candidateIndex) => candidateIndex !== index))} style={styles.journalSelectedImageRemove} hitSlop={7}><Ionicons name="close" size={14} color="#fff" /></Pressable>
+            </View>)}
+          </ScrollView> : null}
           <View style={styles.journalComposerActions}><Pressable onPress={pickImages} style={styles.journalPhotoButton}><Ionicons name="images-outline" size={18} color={colors.text} /><Text style={styles.journalPhotoButtonText}>{assets.length ? `${assets.length} selected` : "Add images"}</Text></Pressable><Pressable disabled={busy || !sections.some(section => section.body.trim())} onPress={save} style={[styles.journalSaveButton, (!sections.some(section => section.body.trim()) || busy) && { opacity: .45 }]}>{busy ? <ActivityIndicator color="#101010" /> : <Text style={styles.journalSaveButtonText}>Keep memory</Text>}</Pressable></View>
         </View>
         <Text style={styles.journalTimelineTitle}>{entries.length ? "Your memories" : "The first page is yours"}</Text>
-        {entries.map(entry => <View key={entry.id} style={styles.journalEntryMobile}><View style={styles.journalEntryMobileHeader}><Text style={styles.journalEntryDate}>{new Date(`${entry.entry_date}T12:00:00`).toLocaleDateString(undefined, { dateStyle: "long" })}</Text>{entry.mood ? <Text style={styles.journalEntryMood}>{entry.mood}</Text> : null}</View>{entry.title ? <Text style={styles.journalEntryTitle}>{entry.title}</Text> : null}{entry.watch_events?.watched_at ? <Pressable disabled={!onOpenHistoryDate} onPress={() => { const date = viewingDateKey(entry.watch_events!.watched_at); onClose(); setTimeout(() => onOpenHistoryDate?.(date), 180); }} style={styles.journalEntryWatchLink}><Ionicons name="time-outline" size={14} color={colors.accent} /><Text style={styles.journalEntryWatchLinkText}>{entry.watch_event_end?.watched_at && viewingDateKey(entry.watch_event_end.watched_at) !== viewingDateKey(entry.watch_events.watched_at) ? `${new Date(entry.watch_events.watched_at).toLocaleDateString()} → ${new Date(entry.watch_event_end.watched_at).toLocaleDateString()}` : `Watched ${new Date(entry.watch_events.watched_at).toLocaleDateString()}`}</Text>{onOpenHistoryDate ? <Ionicons name="arrow-forward" size={13} color={colors.muted} /> : null}</Pressable> : null}{entry.journal_entry_blocks?.length ? [...entry.journal_entry_blocks].sort((a, b) => a.position - b.position).map(block => <View key={block.id} style={styles.journalEntryBlockMobile}>{block.target_labels.length ? <View style={styles.journalEntryBlockTags}>{block.target_labels.map(label => <Text key={label} style={styles.journalEntryBlockTag}>{label}</Text>)}</View> : null}<Text style={styles.journalEntryBody}>{block.body}</Text></View>) : <Text style={styles.journalEntryBody}>{entry.body}</Text>}{entry.image_urls?.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.journalEntryImages}>{entry.image_urls.map(url => <RemoteImage key={url} uri={url} style={styles.journalEntryImage} resizeMode="cover" />)}</ScrollView> : null}<Pressable onPress={() => Alert.alert("Delete this memory?", "This cannot be undone.", [{ text: "Cancel", style: "cancel" }, { text: "Delete", style: "destructive", onPress: () => void remove(entry) }])} style={styles.journalDeleteButton}><Ionicons name="trash-outline" size={15} color={colors.muted} /><Text style={styles.journalDeleteText}>Delete</Text></Pressable></View>)}
+        {entries.map(entry => <MobileJournalEntryCard key={entry.id} entry={entry} userId={userId} onCloseJournal={onClose} onOpenHistoryDate={onOpenHistoryDate} onRemove={entryToRemove => void remove(entryToRemove)} onUpdated={load} />)}
       </ScrollView>
     </SafeAreaView>
   </Modal>;

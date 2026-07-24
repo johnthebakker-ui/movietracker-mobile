@@ -100,14 +100,24 @@ async function refreshReleasePushRegistrationInternal(accessToken: string) {
   if (permissions.status !== "granted") return;
 
   if (Platform.OS === "android") {
-    await Notifications.setNotificationChannelAsync("episode-releases", {
-      name: "New episode releases",
-      description: "Alerts when a tracked show releases a new episode.",
-      importance: Notifications.AndroidImportance.HIGH,
-      sound: "default",
-      vibrationPattern: [0, 250, 150, 250],
-      lightColor: "#ff563d"
-    });
+    await Promise.all([
+      Notifications.setNotificationChannelAsync("episode-releases", {
+        name: "New episode releases",
+        description: "Alerts when a tracked show releases a new episode.",
+        importance: Notifications.AndroidImportance.HIGH,
+        sound: "default",
+        vibrationPattern: [0, 250, 150, 250],
+        lightColor: "#ff563d"
+      }),
+      Notifications.setNotificationChannelAsync("progress-prompts", {
+        name: "Viewing progress questions",
+        description: "Asks before an unfinished show's progress moves to a new viewing pass.",
+        importance: Notifications.AndroidImportance.HIGH,
+        sound: "default",
+        vibrationPattern: [0, 250, 150, 250],
+        lightColor: "#ff563d"
+      })
+    ]);
   }
 
   const legacy = await legacyDeliveryState();
