@@ -330,6 +330,13 @@ export async function dismissMobileNotifications(token: string, filter?: { id?: 
   return request<{ dismissed: boolean }>(`/api/mobile/notifications${params}`, token, { method: "DELETE" });
 }
 
+export async function answerMobileViewingPassRestart(token: string, candidateId: string, decision: "accept" | "decline") {
+  return request<{ resolved: boolean; accepted: boolean }>("/api/mobile/notifications/viewing-pass", token, {
+    method: "POST",
+    body: JSON.stringify({ candidateId, decision })
+  });
+}
+
 export async function fetchMobileProfile(token: string): Promise<any> {
   return request<any>("/api/mobile/profile", token);
 }

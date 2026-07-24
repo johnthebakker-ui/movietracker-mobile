@@ -37,4 +37,46 @@ describe("mobile viewing passes", () => {
       rewatching: true
     });
   });
+
+  it("starts a confirmed unfinished-show pass at any earlier season", () => {
+    const multiSeason = Array.from({ length: 9 }, (_, index) => ({
+      id: index + 1,
+      seasonNumber: Math.floor(index / 3) + 1,
+      episodeNumber: index % 3 + 1
+    }));
+    const events = [
+      ...multiSeason.slice(0, 8).map((episode, index) => ({ id: `old-${episode.id}`, episodeId: episode.id, watchedAt: `2025-01-${String(index + 1).padStart(2, "0")}T20:00:00Z` })),
+      { id: "new-4", episodeId: 4, watchedAt: "2026-07-20T20:00:00Z" },
+      { id: "new-5", episodeId: 5, watchedAt: "2026-07-21T20:00:00Z" }
+    ];
+    expect(seriesViewingSummary(multiSeason, events, {
+      status: "watching",
+      viewingPassStartedAt: "2026-07-20T20:00:00Z",
+      viewingPassStartEventId: "new-4"
+    }, false)).toEqual({
+      label: "Rewatching",
+      watched: 2,
+      total: 9,
+      nextSeasonNumber: 2,
+      nextEpisodeNumber: 3,
+      rewatching: true
+    });
+  });
+
+  it("keeps a completed title completed while a confirmed partial rewatch starts over", () => {
+    const firstRun = episodes.map((episode, index) => ({ id: `first-${episode.id}`, ...watch(episode.id, index + 1) }));
+    const events = [
+      ...firstRun,
+      { id: "partial-1", ...watch(1, 10) },
+      { id: "partial-2", ...watch(2, 11) },
+      { id: "restart-1", ...watch(1, 20) },
+      { id: "restart-2", ...watch(2, 21) }
+    ];
+    expect(seriesViewingSummary(episodes, events, {
+      status: "completed",
+      completedAt: "2026-07-04T20:00:00Z",
+      viewingPassStartedAt: "2026-07-20T20:00:00Z",
+      viewingPassStartEventId: "restart-1"
+    }, true)).toMatchObject({ label: "Rewatching", watched: 2, nextEpisodeNumber: 3, rewatching: true });
+  });
 });

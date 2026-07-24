@@ -1,5 +1,5 @@
 export type ViewingPassEpisode = { id: number; seasonNumber: number; episodeNumber: number };
-export type ViewingPassEvent = { episodeId: number | null; watchedAt?: string | null; createdAt?: string | null };
+export type ViewingPassEvent = { id?: string | null; episodeId: number | null; watchedAt?: string | null; createdAt?: string | null };
 export type SeriesViewingSummary = {
   label: "Rewatching" | "Completed" | "Paused" | "Dropped" | "Watching";
   watched: number;
@@ -9,10 +9,9 @@ export type SeriesViewingSummary = {
   rewatching: boolean;
 };
 
-export function viewingPassProgress(episodes: ViewingPassEpisode[], events: ViewingPassEvent[], seriesComplete = true) {
-  if (!episodes.length) return { nextIndex: null as number | null, completedPasses: 0, activeEpisodeIds: [] as number[] };
+function orderedViewingEvents(episodes: ViewingPassEpisode[], events: ViewingPassEvent[]) {
   const episodeIndex = new Map(episodes.map((episode, index) => [Number(episode.id), index]));
-  const ordered = events.map((event, inputIndex) => ({ ...event, inputIndex, episodeIndex: event.episodeId == null ? null : episodeIndex.get(Number(event.episodeId)) }))
+  return events.map((event, inputIndex) => ({ ...event, inputIndex, episodeIndex: event.episodeId == null ? null : episodeIndex.get(Number(event.episodeId)) }))
     .filter((event): event is typeof event & { episodeIndex: number } => event.episodeIndex != null)
     .sort((left, right) => {
       const leftTime = Date.parse(left.watchedAt ?? left.createdAt ?? "");
@@ -26,6 +25,24 @@ export function viewingPassProgress(episodes: ViewingPassEpisode[], events: View
       if (left.episodeIndex !== right.episodeIndex) return left.episodeIndex - right.episodeIndex;
       return left.inputIndex - right.inputIndex;
     });
+}
+
+export function scopeViewingPassEvents(episodes: ViewingPassEpisode[], events: ViewingPassEvent[], startEventId?: string | null, startedAt?: string | null) {
+  if (!startEventId && !startedAt) return events;
+  const ordered = orderedViewingEvents(episodes, events);
+  const boundaryIndex = startEventId ? ordered.findIndex(event => event.id === startEventId) : -1;
+  if (boundaryIndex >= 0) return ordered.slice(boundaryIndex);
+  const boundaryTime = Date.parse(startedAt ?? "");
+  if (!Number.isFinite(boundaryTime)) return events;
+  return ordered.filter(event => {
+    const eventTime = Date.parse(event.watchedAt ?? event.createdAt ?? "");
+    return Number.isFinite(eventTime) && eventTime >= boundaryTime;
+  });
+}
+
+export function viewingPassProgress(episodes: ViewingPassEpisode[], events: ViewingPassEvent[], seriesComplete = true) {
+  if (!episodes.length) return { nextIndex: null as number | null, completedPasses: 0, activeEpisodeIds: [] as number[] };
+  const ordered = orderedViewingEvents(episodes, events);
   let cursor = -1;
   let completedPasses = 0;
   let active = false;
@@ -55,19 +72,27 @@ export function completedRewatchProgress(episodes: ViewingPassEpisode[], events:
 export function seriesViewingSummary(
   episodes: ViewingPassEpisode[],
   events: ViewingPassEvent[],
-  progress: { status?: string | null; completedAt?: string | null; startedAt?: string | null } | null,
+  progress: {
+    status?: string | null;
+    completedAt?: string | null;
+    startedAt?: string | null;
+    viewingPassStartedAt?: string | null;
+    viewingPassStartEventId?: string | null;
+  } | null,
   seriesEnded: boolean
 ): SeriesViewingSummary | null {
   const status = progress?.status ?? null;
   const completed = status === "completed";
-  const rewatch = completed ? completedRewatchProgress(episodes, events, progress?.completedAt, progress?.startedAt) : null;
-  const pass = rewatch ?? viewingPassProgress(episodes, events, seriesEnded);
-  const rewatching = Boolean(rewatch?.active);
+  const hasExplicitPass = Boolean(progress?.viewingPassStartEventId || progress?.viewingPassStartedAt);
+  const rewatch = completed && !hasExplicitPass ? completedRewatchProgress(episodes, events, progress?.completedAt, progress?.startedAt) : null;
+  const explicitPassEvents = hasExplicitPass ? scopeViewingPassEvents(episodes, events, progress?.viewingPassStartEventId, progress?.viewingPassStartedAt) : events;
+  const pass = rewatch ?? viewingPassProgress(episodes, explicitPassEvents, seriesEnded);
+  const rewatching = Boolean(rewatch?.active) || (hasExplicitPass && explicitPassEvents.length > 0 && pass.nextIndex != null);
   const watched = rewatching
-    ? new Set(rewatch!.activeEpisodeIds).size
+    ? new Set(pass.activeEpisodeIds).size
     : completed
       ? episodes.length
-      : new Set(events.flatMap(event => event.episodeId == null ? [] : [Number(event.episodeId)])).size;
+      : new Set(explicitPassEvents.flatMap(event => event.episodeId == null ? [] : [Number(event.episodeId)])).size;
   const next = pass.nextIndex == null ? null : episodes[pass.nextIndex] ?? null;
   const label = rewatching
     ? "Rewatching"
@@ -77,7 +102,7 @@ export function seriesViewingSummary(
         ? "Paused"
         : status === "dropped"
           ? "Dropped"
-          : events.length || status === "watching"
+          : explicitPassEvents.length || status === "watching"
             ? "Watching"
             : null;
   if (!label) return null;

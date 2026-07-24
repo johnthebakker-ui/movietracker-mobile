@@ -3,7 +3,7 @@
     "name": "MovieTracker",
     "slug": "movietracker-mobile",
     "scheme": "movietracker",
-    "version": "1.0.44",
+    "version": "1.0.45",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -44,7 +44,7 @@
     },
     "android": {
       "package": "com.johnthebakker.movietracker",
-      "versionCode": 45,
+      "versionCode": 46,
       "googleServicesFile": "./google-services.json",
       "blockedPermissions": [
         "android.permission.RECORD_AUDIO",

@@ -2,7 +2,7 @@ import type { DetailSeason } from "../../app/types";
 import { firstRow } from "../../app/media-model";
 import { supabase } from "../../supabase";
 import type { MediaSummary } from "../../types";
-import { completedRewatchProgress, seriesViewingSummary, viewingPassProgress } from "../../viewing-passes";
+import { completedRewatchProgress, scopeViewingPassEvents, seriesViewingSummary, viewingPassProgress } from "../../viewing-passes";
 
 const endedSeriesStatuses = new Set(["Ended", "Canceled", "Cancelled"]);
 export function isLimitedSeries(show: Pick<MediaSummary, "status">, seasons: DetailSeason[]) {
@@ -18,9 +18,9 @@ export function titleDetailCacheKey(item: MediaSummary, userId?: string | null) 
 export async function reconcileMobileEpisodeProgress(userId: string, mediaId: number) {
   if (!supabase) return;
   const [currentResult, mediaResult, watchesResult, seasonsResult] = await Promise.all([
-    supabase.from("progress").select("status,completed_at,started_at").eq("user_id", userId).eq("media_id", mediaId).maybeSingle(),
+    supabase.from("progress").select("status,completed_at,started_at,viewing_pass_started_at,viewing_pass_start_event_id").eq("user_id", userId).eq("media_id", mediaId).maybeSingle(),
     supabase.from("media").select("status,number_of_episodes").eq("id", mediaId).maybeSingle(),
-    supabase.from("watch_events").select("episode_id,watched_at,created_at").eq("user_id", userId).eq("media_id", mediaId).not("episode_id", "is", null),
+    supabase.from("watch_events").select("id,episode_id,watched_at,created_at").eq("user_id", userId).eq("media_id", mediaId).not("episode_id", "is", null),
     supabase.from("seasons").select("season_number,episodes(id,episode_number)").eq("media_id", mediaId).gt("season_number", 0)
   ]);
   if (currentResult.error) throw currentResult.error;
@@ -29,7 +29,11 @@ export async function reconcileMobileEpisodeProgress(userId: string, mediaId: nu
   if (seasonsResult.error) throw seasonsResult.error;
   const episodes = (seasonsResult.data ?? []).flatMap((season: any) => (season.episodes ?? []).map((episode: any) => ({ id: Number(episode.id), seasonNumber: Number(season.season_number), episodeNumber: Number(episode.episode_number) }))).sort((left: any, right: any) => left.seasonNumber - right.seasonNumber || left.episodeNumber - right.episodeNumber);
   const ended = endedSeriesStatuses.has(String(mediaResult.data?.status ?? ""));
-  const pass = viewingPassProgress(episodes, (watchesResult.data ?? []).map((watch: any) => ({ episodeId: Number(watch.episode_id), watchedAt: watch.watched_at, createdAt: watch.created_at })), ended);
+  const events = (watchesResult.data ?? []).map((watch: any) => ({ id: watch.id, episodeId: Number(watch.episode_id), watchedAt: watch.watched_at, createdAt: watch.created_at }));
+  const passEvents = currentResult.data?.status === "completed"
+    ? events
+    : scopeViewingPassEvents(episodes, events, currentResult.data?.viewing_pass_start_event_id, currentResult.data?.viewing_pass_started_at);
+  const pass = viewingPassProgress(episodes, passEvents, ended);
   if (!(watchesResult.data ?? []).length) {
     if (currentResult.data?.status === "completed" || currentResult.data?.status === "watching") {
       const { error } = await supabase.from("progress").delete().eq("user_id", userId).eq("media_id", mediaId).in("status", ["completed", "watching"]);
@@ -58,20 +62,22 @@ export async function reconcileMobileEpisodeProgress(userId: string, mediaId: nu
 export async function loadMobileSeriesViewingSummary(userId: string, mediaId: number, status?: string | null) {
   if (!supabase) return null;
   const [progressResult, seasonsResult, watchesResult] = await Promise.all([
-    supabase.from("progress").select("status,completed_at,started_at").eq("user_id", userId).eq("media_id", mediaId).maybeSingle(),
+    supabase.from("progress").select("status,completed_at,started_at,viewing_pass_started_at,viewing_pass_start_event_id").eq("user_id", userId).eq("media_id", mediaId).maybeSingle(),
     supabase.from("seasons").select("season_number,episodes(id,episode_number)").eq("media_id", mediaId).gt("season_number", 0),
-    supabase.from("watch_events").select("episode_id,watched_at,created_at").eq("user_id", userId).eq("media_id", mediaId).not("episode_id", "is", null)
+    supabase.from("watch_events").select("id,episode_id,watched_at,created_at").eq("user_id", userId).eq("media_id", mediaId).not("episode_id", "is", null)
   ]);
   if (progressResult.error || seasonsResult.error || watchesResult.error) return null;
   const episodes = (seasonsResult.data ?? [])
     .flatMap((season: any) => (season.episodes ?? []).map((episode: any) => ({ id: Number(episode.id), seasonNumber: Number(season.season_number), episodeNumber: Number(episode.episode_number) })))
     .sort((left: any, right: any) => left.seasonNumber - right.seasonNumber || left.episodeNumber - right.episodeNumber);
-  const events = (watchesResult.data ?? []).map((watch: any) => ({ episodeId: Number(watch.episode_id), watchedAt: watch.watched_at, createdAt: watch.created_at }));
+  const events = (watchesResult.data ?? []).map((watch: any) => ({ id: watch.id, episodeId: Number(watch.episode_id), watchedAt: watch.watched_at, createdAt: watch.created_at }));
   const progress = progressResult.data;
   return seriesViewingSummary(episodes, events, progress ? {
     status: progress.status,
     completedAt: progress.completed_at,
-    startedAt: progress.started_at
+    startedAt: progress.started_at,
+    viewingPassStartedAt: progress.viewing_pass_started_at,
+    viewingPassStartEventId: progress.viewing_pass_start_event_id
   } : null, endedSeriesStatuses.has(status ?? ""));
 }
 

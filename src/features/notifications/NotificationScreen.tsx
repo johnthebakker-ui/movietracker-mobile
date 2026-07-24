@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Alert, Pressable, Text, View } from "react-native";
 
 import { styles } from "../../app/styles";
-import { dismissMobileNotifications } from "../../api";
+import { answerMobileViewingPassRestart, dismissMobileNotifications } from "../../api";
 import { EmptyPanel } from "../../components/EmptyPanel";
 import { RemoteImage, SectionTitle } from "../../components";
 import { supabase } from "../../supabase";
@@ -15,6 +15,7 @@ export function NotificationScreen({ session, onBack, onOpenHref }: { session: S
   const [items, setItems] = useState<any[]>([]);
   const [loadingItems, setLoadingItems] = useState(true);
   const [loadError, setLoadError] = useState("");
+  const [resolvingId, setResolvingId] = useState<string | null>(null);
 
   const loadItems = useCallback(async () => {
     if (!supabase) return;
@@ -55,11 +56,39 @@ export function NotificationScreen({ session, onBack, onOpenHref }: { session: S
     catch (reason) { Alert.alert("Could not clear notifications", reason instanceof Error ? reason.message : "Try again."); }
   }
 
+  async function answerViewingPass(item: any, decision: "accept" | "decline") {
+    const candidateId = String(item.payload?.candidateId ?? "");
+    if (!candidateId || resolvingId) return;
+    setResolvingId(item.id);
+    setItems(current => current.filter(value => value.id !== item.id));
+    try {
+      await answerMobileViewingPassRestart(session.access_token, candidateId, decision);
+    } catch (reason) {
+      await loadItems();
+      Alert.alert("Could not update progress", reason instanceof Error ? reason.message : "Try again.");
+    } finally {
+      setResolvingId(null);
+    }
+  }
+
   return <View style={styles.profileSection}>
     <SectionTitle kicker="Signals, not noise" title="Notifications" action="Back to profile" onAction={onBack} />
     {items.length ? <Pressable onPress={() => Alert.alert("Clear all notifications?", "This removes every notification from your inbox.", [{ text: "Cancel", style: "cancel" }, { text: "Clear all", style: "destructive", onPress: () => void clearAll() }])} style={styles.notificationClearButton}><Ionicons name="trash-outline" size={15} color={colors.muted} /><Text style={styles.notificationClearText}>Clear all</Text></Pressable> : null}
     {loadingItems ? <ActivityIndicator color={colors.accent} /> : loadError ? <EmptyPanel title="Notifications did not load" body={loadError} action="Try again" onAction={() => void loadItems()} /> : items.length ? <View style={styles.notificationList}>{items.map(item => {
       const image = item.payload?.image;
+      if (item.kind === "viewing_pass_confirmation" && item.payload?.candidateId) {
+        return <View key={item.id} style={[styles.notificationCard, styles.notificationDecisionCard, !item.read_at && styles.notificationCardUnread]}>
+          <View style={styles.notificationDecisionMain}>
+            {image ? <RemoteImage uri={image} style={styles.notificationImage} /> : <View style={styles.notificationIcon}><Ionicons name="repeat-outline" size={22} color={colors.accent} /></View>}
+            <View style={styles.notificationCopy}><Text style={styles.notificationTitle}>{item.payload?.title ?? "Use new progress?"}</Text><Text style={styles.notificationBody}>{item.payload?.message}</Text><Text style={styles.notificationDate}>{new Date(item.created_at).toLocaleString()}</Text></View>
+          </View>
+          <View style={styles.notificationDecisionActions}>
+            <Pressable disabled={resolvingId === item.id} onPress={() => void answerViewingPass(item, "accept")} style={[styles.notificationDecisionPrimary, resolvingId === item.id && styles.notificationDecisionDisabled]}><Text style={styles.notificationDecisionPrimaryText}>Use new progress</Text></Pressable>
+            <Pressable disabled={resolvingId === item.id} onPress={() => void answerViewingPass(item, "decline")} style={[styles.notificationDecisionSecondary, resolvingId === item.id && styles.notificationDecisionDisabled]}><Text style={styles.notificationDecisionSecondaryText}>Keep current</Text></Pressable>
+          </View>
+          {item.payload?.href ? <Pressable onPress={() => void onOpenHref(String(item.payload.href))} style={styles.notificationDecisionLink}><Text style={styles.notificationDecisionLinkText}>View show</Text><Ionicons name="chevron-forward" size={14} color={colors.muted} /></Pressable> : null}
+        </View>;
+      }
       return <Pressable key={item.id} disabled={!item.payload?.href} onPress={() => void openNotification(item)} style={[styles.notificationCard, !item.read_at && styles.notificationCardUnread]}>
         {image ? <RemoteImage uri={image} style={styles.notificationImage} /> : <View style={styles.notificationIcon}><Ionicons name={item.kind === "episode_release" ? "film-outline" : "notifications-outline"} size={22} color={colors.accent} /></View>}
         <View style={styles.notificationCopy}><Text style={styles.notificationTitle}>{item.payload?.title ?? "MovieTracker"}</Text><Text style={styles.notificationBody}>{item.payload?.message ?? String(item.kind).replaceAll("_", " ")}</Text><Text style={styles.notificationDate}>{new Date(item.created_at).toLocaleString()}</Text></View>
