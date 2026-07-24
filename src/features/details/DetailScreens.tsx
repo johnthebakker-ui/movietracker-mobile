@@ -1623,10 +1623,36 @@ type MobileJournalEntry = {
   journal_entry_blocks?: Array<{ id: string; position: number; body: string; target_labels: string[] }>;
 };
 
+type MobileJournalSeason = {
+  id: number;
+  seasonNumber: number;
+  name: string;
+  episodes: Array<{ id: number; episodeNumber: number; name: string }>;
+};
+
+type MobileJournalSection = {
+  key: string;
+  body: string;
+  seasonIds: number[];
+  episodeIds: number[];
+};
+
+function createJournalSection(seasonId?: number, episodeId?: number): MobileJournalSection {
+  return {
+    key: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    body: "",
+    seasonIds: seasonId && !episodeId ? [seasonId] : [],
+    episodeIds: episodeId ? [episodeId] : []
+  };
+}
+
 export function JournalSheet({ visible, userId, mediaId, seasonId, episodeId, title, onClose }: { visible: boolean; userId: string; mediaId: number; seasonId?: number; episodeId?: number; title: string; onClose: () => void }) {
   const [entries, setEntries] = useState<MobileJournalEntry[]>([]);
   const [entryTitle, setEntryTitle] = useState("");
-  const [body, setBody] = useState("");
+  const [sections, setSections] = useState<MobileJournalSection[]>(() => [createJournalSection(seasonId, episodeId)]);
+  const [targetSeasons, setTargetSeasons] = useState<MobileJournalSeason[]>([]);
+  const [openTargetSection, setOpenTargetSection] = useState<string | null>(null);
+  const [expandedSeasonKeys, setExpandedSeasonKeys] = useState<Set<string>>(() => new Set());
   const [mood, setMood] = useState("");
   const [assets, setAssets] = useState<ImagePicker.ImagePickerAsset[]>([]);
   const [busy, setBusy] = useState(false);
@@ -1634,22 +1660,41 @@ export function JournalSheet({ visible, userId, mediaId, seasonId, episodeId, ti
   const load = useCallback(async () => {
     if (!supabase) return;
     const client = supabase;
-    let query = client.from("journal_entries").select("id,title,body,mood,entry_date,created_at,image_paths,journal_entry_blocks(id,position,body,target_labels)").eq("user_id", userId).eq("media_id", mediaId);
-    if (episodeId) query = query.eq("episode_id", episodeId);
-    else if (seasonId) query = query.eq("season_id", seasonId);
-    const { data, error } = await query.order("entry_date", { ascending: false }).order("created_at", { ascending: false });
+    const [entryResult, seasonResult] = await Promise.all([
+      client.from("journal_entries").select("id,title,body,mood,entry_date,created_at,image_paths,journal_entry_blocks(id,position,body,target_labels)").eq("user_id", userId).eq("media_id", mediaId).order("entry_date", { ascending: false }).order("created_at", { ascending: false }),
+      client.from("seasons").select("id,season_number,name,episodes(id,episode_number,name)").eq("media_id", mediaId).order("season_number", { ascending: true })
+    ]);
+    const { data, error } = entryResult;
     if (error) throw error;
+    if (seasonResult.error) throw seasonResult.error;
+    setTargetSeasons((seasonResult.data ?? []).map((season: any) => ({
+      id: Number(season.id),
+      seasonNumber: Number(season.season_number),
+      name: season.name || `Season ${season.season_number}`,
+      episodes: [...(season.episodes ?? [])].map((episode: any) => ({
+        id: Number(episode.id),
+        episodeNumber: Number(episode.episode_number),
+        name: episode.name || `Episode ${episode.episode_number}`
+      })).sort((a, b) => a.episodeNumber - b.episodeNumber)
+    })).filter(season => season.seasonNumber > 0));
     const hydrated = await Promise.all(((data ?? []) as MobileJournalEntry[]).map(async entry => {
-      if (!entry.image_paths.length) return entry;
+      if (!entry.image_paths?.length) return { ...entry, image_paths: [] };
       const { data: signed } = await client.storage.from("journal-media").createSignedUrls(entry.image_paths, 3600);
       return { ...entry, image_urls: (signed ?? []).flatMap(image => image.signedUrl ? [image.signedUrl] : []) };
     }));
     setEntries(hydrated);
-  }, [episodeId, mediaId, seasonId, userId]);
+  }, [mediaId, userId]);
 
   useEffect(() => {
-    if (visible) void load().catch(reason => Alert.alert("Journal unavailable", reason instanceof Error ? reason.message : "Try again."));
-  }, [load, visible]);
+    if (!visible) return;
+    setEntryTitle("");
+    setSections([createJournalSection(seasonId, episodeId)]);
+    setOpenTargetSection(null);
+    setExpandedSeasonKeys(new Set());
+    setMood("");
+    setAssets([]);
+    void load().catch(reason => Alert.alert("Journal unavailable", reason instanceof Error ? reason.message : "Try again."));
+  }, [episodeId, load, seasonId, visible]);
 
   async function pickImages() {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -1659,9 +1704,12 @@ export function JournalSheet({ visible, userId, mediaId, seasonId, episodeId, ti
   }
 
   async function save() {
-    if (!supabase || !body.trim()) return;
+    if (!supabase) return;
+    const filledSections = sections.filter(section => section.body.trim());
+    if (!filledSections.length) return;
     setBusy(true);
     const paths: string[] = [];
+    let createdEntryId: string | null = null;
     try {
       for (const asset of assets) {
         const extension = (asset.fileName?.split(".").pop() || "jpg").replace(/[^a-z0-9]/gi, "").toLowerCase();
@@ -1671,14 +1719,84 @@ export function JournalSheet({ visible, userId, mediaId, seasonId, episodeId, ti
         if (error) throw error;
         paths.push(path);
       }
-      const { error } = await supabase.from("journal_entries").insert({ user_id: userId, media_id: mediaId, season_id: seasonId ?? null, episode_id: episodeId ?? null, title: entryTitle.trim() || null, body: body.trim(), mood: mood || null, image_paths: paths, entry_date: new Date().toISOString().slice(0, 10) });
+      const { data: createdEntry, error } = await supabase.from("journal_entries").insert({
+        user_id: userId,
+        media_id: mediaId,
+        season_id: seasonId ?? null,
+        episode_id: episodeId ?? null,
+        title: entryTitle.trim() || null,
+        body: filledSections.map(section => section.body.trim()).join("\n\n"),
+        mood: mood || null,
+        image_paths: paths,
+        entry_date: new Date().toISOString().slice(0, 10)
+      }).select("id").single();
       if (error) throw error;
-      setEntryTitle(""); setBody(""); setMood(""); setAssets([]);
+      createdEntryId = createdEntry.id;
+      const blockRows = filledSections.map((section, position) => ({
+        entry_id: createdEntry.id,
+        position,
+        body: section.body.trim(),
+        season_ids: section.seasonIds,
+        episode_ids: section.episodeIds,
+        target_labels: journalSectionLabels(section)
+      }));
+      const { error: blockError } = await supabase.from("journal_entry_blocks").insert(blockRows);
+      if (blockError) throw blockError;
+      setEntryTitle(""); setSections([createJournalSection(seasonId, episodeId)]); setOpenTargetSection(null); setExpandedSeasonKeys(new Set()); setMood(""); setAssets([]);
       await load();
     } catch (reason) {
+      if (createdEntryId) await supabase.from("journal_entries").delete().eq("id", createdEntryId).eq("user_id", userId);
       if (paths.length) await supabase.storage.from("journal-media").remove(paths);
       Alert.alert("Could not save entry", reason instanceof Error ? reason.message : "Try again.");
     } finally { setBusy(false); }
+  }
+
+  function updateSection(key: string, change: (section: MobileJournalSection) => MobileJournalSection) {
+    setSections(current => current.map(section => section.key === key ? change(section) : section));
+  }
+
+  function journalSectionLabels(section: MobileJournalSection) {
+    const seasonLabels = section.seasonIds.flatMap(id => {
+      const season = targetSeasons.find(candidate => candidate.id === id);
+      return season ? [`Season ${season.seasonNumber}`] : [];
+    });
+    const episodeLabels = section.episodeIds.flatMap(id => {
+      for (const season of targetSeasons) {
+        const episode = season.episodes.find(candidate => candidate.id === id);
+        if (episode) return [`S${season.seasonNumber} E${episode.episodeNumber} · ${episode.name}`];
+      }
+      return [];
+    });
+    return [...seasonLabels, ...episodeLabels];
+  }
+
+  function toggleSeason(sectionKey: string, target: MobileJournalSeason) {
+    updateSection(sectionKey, section => {
+      const selected = section.seasonIds.includes(target.id);
+      return {
+        ...section,
+        seasonIds: selected ? section.seasonIds.filter(id => id !== target.id) : [...section.seasonIds, target.id],
+        episodeIds: selected ? section.episodeIds : section.episodeIds.filter(id => !target.episodes.some(episode => episode.id === id))
+      };
+    });
+  }
+
+  function toggleEpisode(sectionKey: string, target: MobileJournalSeason, targetEpisodeId: number) {
+    updateSection(sectionKey, section => ({
+      ...section,
+      seasonIds: section.seasonIds.filter(id => id !== target.id),
+      episodeIds: section.episodeIds.includes(targetEpisodeId) ? section.episodeIds.filter(id => id !== targetEpisodeId) : [...section.episodeIds, targetEpisodeId]
+    }));
+  }
+
+  function toggleSeasonExpanded(sectionKey: string, targetSeasonId: number) {
+    const compositeKey = `${sectionKey}:${targetSeasonId}`;
+    setExpandedSeasonKeys(current => {
+      const next = new Set(current);
+      if (next.has(compositeKey)) next.delete(compositeKey);
+      else next.add(compositeKey);
+      return next;
+    });
   }
 
   async function remove(entry: MobileJournalEntry) {
@@ -1696,9 +1814,49 @@ export function JournalSheet({ visible, userId, mediaId, seasonId, episodeId, ti
         <View style={styles.journalPrivacyCard}><Ionicons name="lock-closed" size={17} color={colors.accent} /><Text style={styles.journalPrivacyText}><Text style={styles.journalPrivacyStrong}>Only you can see this.</Text> Keep the thoughts you will want to rediscover years from now.</Text></View>
         <View style={styles.journalComposerMobile}>
           <TextInput value={entryTitle} onChangeText={setEntryTitle} maxLength={120} placeholder="Give this memory a title (optional)" placeholderTextColor={colors.muted} style={styles.journalTitleInputMobile} />
-          <TextInput value={body} onChangeText={setBody} maxLength={20000} multiline placeholder="What stayed with you? A scene, a feeling, a theory..." placeholderTextColor={colors.muted} style={styles.journalBodyInputMobile} />
+          {sections.map((section, sectionIndex) => {
+            const labels = journalSectionLabels(section);
+            const pickerOpen = openTargetSection === section.key;
+            return <View key={section.key} style={[styles.journalDraftSection, sectionIndex > 0 && styles.journalDraftSectionLater]}>
+              {sectionIndex > 0 ? <View style={styles.journalDraftSectionHeader}><Text style={styles.journalDraftSectionLabel}>THOUGHT {sectionIndex + 1}</Text><Pressable onPress={() => setSections(current => current.filter(candidate => candidate.key !== section.key))} hitSlop={8}><Ionicons name="close" size={18} color={colors.muted} /></Pressable></View> : null}
+              <TextInput value={section.body} onChangeText={value => updateSection(section.key, current => ({ ...current, body: value }))} maxLength={20000} multiline placeholder={sectionIndex ? "Continue with another season, episode, or idea..." : "What stayed with you? A scene, a feeling, a theory..."} placeholderTextColor={colors.muted} style={styles.journalBodyInputMobile} />
+              {targetSeasons.length ? <>
+                <Pressable onPress={() => setOpenTargetSection(current => current === section.key ? null : section.key)} style={styles.journalTargetButton}>
+                  <View style={styles.journalTargetButtonCopy}><Ionicons name="pricetags-outline" size={15} color={labels.length ? colors.accent : colors.muted} /><Text style={[styles.journalTargetButtonText, Boolean(labels.length) && styles.journalTargetButtonTextActive]} numberOfLines={1}>{labels.length ? `${labels.length} ${labels.length === 1 ? "part" : "parts"} tagged` : "Tag seasons or episodes"}</Text></View>
+                  <Ionicons name={pickerOpen ? "chevron-up" : "chevron-down"} size={15} color={colors.muted} />
+                </Pressable>
+                {labels.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.journalDraftTags}>{labels.map(label => <Text key={label} style={styles.journalEntryBlockTag}>{label}</Text>)}</ScrollView> : null}
+                {pickerOpen ? <View style={styles.journalTargetPicker}>
+                  {targetSeasons.map(targetSeason => {
+                    const wholeSeason = section.seasonIds.includes(targetSeason.id);
+                    const chosenEpisodes = targetSeason.episodes.filter(targetEpisode => section.episodeIds.includes(targetEpisode.id)).length;
+                    const expandedKey = `${section.key}:${targetSeason.id}`;
+                    const expanded = expandedSeasonKeys.has(expandedKey);
+                    return <View key={targetSeason.id} style={styles.journalTargetSeason}>
+                      <View style={[styles.journalTargetSeasonRow, (wholeSeason || chosenEpisodes > 0) && styles.journalTargetSeasonRowActive]}>
+                        <Pressable onPress={() => toggleSeason(section.key, targetSeason)} style={styles.journalTargetSeasonSelect}>
+                          <View style={[styles.journalTargetCheck, wholeSeason && styles.journalTargetCheckActive]}>{wholeSeason ? <Ionicons name="checkmark" size={13} color="#101010" /> : null}</View>
+                          <View style={styles.journalTargetSeasonCopy}><Text style={styles.journalTargetSeasonName}>Season {targetSeason.seasonNumber}</Text>{chosenEpisodes ? <Text style={styles.journalTargetSeasonCount}>{chosenEpisodes} {chosenEpisodes === 1 ? "episode" : "episodes"} selected</Text> : null}</View>
+                        </Pressable>
+                        {targetSeason.episodes.length ? <Pressable onPress={() => toggleSeasonExpanded(section.key, targetSeason.id)} style={styles.journalTargetExpand}><Text style={styles.journalTargetExpandText}>{expanded ? "Hide" : "Episodes"}</Text><Ionicons name={expanded ? "chevron-up" : "chevron-down"} size={14} color={colors.muted} /></Pressable> : null}
+                      </View>
+                      {expanded ? <View style={styles.journalEpisodePicker}>{targetSeason.episodes.map(targetEpisode => {
+                        const selected = section.episodeIds.includes(targetEpisode.id);
+                        return <Pressable key={targetEpisode.id} onPress={() => toggleEpisode(section.key, targetSeason, targetEpisode.id)} style={[styles.journalEpisodeOption, selected && styles.journalEpisodeOptionActive]}>
+                          <View style={[styles.journalTargetCheck, selected && styles.journalTargetCheckActive]}>{selected ? <Ionicons name="checkmark" size={13} color="#101010" /> : null}</View>
+                          <Text style={styles.journalEpisodeOptionText} numberOfLines={1}><Text style={styles.journalEpisodeCode}>E{targetEpisode.episodeNumber}</Text> · {targetEpisode.name}</Text>
+                        </Pressable>;
+                      })}</View> : null}
+                    </View>;
+                  })}
+                  {labels.length ? <Pressable onPress={() => updateSection(section.key, current => ({ ...current, seasonIds: [], episodeIds: [] }))} style={styles.journalTargetClear}><Text style={styles.journalTargetClearText}>Clear tags</Text></Pressable> : null}
+                </View> : null}
+              </> : null}
+            </View>;
+          })}
+          <Pressable onPress={() => setSections(current => [...current, createJournalSection()])} style={styles.journalAddSection}><Ionicons name="add" size={17} color={colors.accent} /><Text style={styles.journalAddSectionText}>Add another section</Text></Pressable>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.journalMoodRow}>{["Moved","Delighted","Shocked","Thoughtful","Heartbroken","Confused","Obsessed"].map(value => <Pressable key={value} onPress={() => setMood(current => current === value ? "" : value)} style={[styles.journalMoodChip, mood === value && styles.journalMoodChipActive]}><Text style={[styles.journalMoodChipText, mood === value && styles.journalMoodChipTextActive]}>{value}</Text></Pressable>)}</ScrollView>
-          <View style={styles.journalComposerActions}><Pressable onPress={pickImages} style={styles.journalPhotoButton}><Ionicons name="images-outline" size={18} color={colors.text} /><Text style={styles.journalPhotoButtonText}>{assets.length ? `${assets.length} selected` : "Add images"}</Text></Pressable><Pressable disabled={busy || !body.trim()} onPress={save} style={[styles.journalSaveButton, (!body.trim() || busy) && { opacity: .45 }]}>{busy ? <ActivityIndicator color="#101010" /> : <Text style={styles.journalSaveButtonText}>Keep memory</Text>}</Pressable></View>
+          <View style={styles.journalComposerActions}><Pressable onPress={pickImages} style={styles.journalPhotoButton}><Ionicons name="images-outline" size={18} color={colors.text} /><Text style={styles.journalPhotoButtonText}>{assets.length ? `${assets.length} selected` : "Add images"}</Text></Pressable><Pressable disabled={busy || !sections.some(section => section.body.trim())} onPress={save} style={[styles.journalSaveButton, (!sections.some(section => section.body.trim()) || busy) && { opacity: .45 }]}>{busy ? <ActivityIndicator color="#101010" /> : <Text style={styles.journalSaveButtonText}>Keep memory</Text>}</Pressable></View>
         </View>
         <Text style={styles.journalTimelineTitle}>{entries.length ? "Your memories" : "The first page is yours"}</Text>
         {entries.map(entry => <View key={entry.id} style={styles.journalEntryMobile}><View style={styles.journalEntryMobileHeader}><Text style={styles.journalEntryDate}>{new Date(`${entry.entry_date}T12:00:00`).toLocaleDateString(undefined, { dateStyle: "long" })}</Text>{entry.mood ? <Text style={styles.journalEntryMood}>{entry.mood}</Text> : null}</View>{entry.title ? <Text style={styles.journalEntryTitle}>{entry.title}</Text> : null}{entry.journal_entry_blocks?.length ? [...entry.journal_entry_blocks].sort((a, b) => a.position - b.position).map(block => <View key={block.id} style={styles.journalEntryBlockMobile}>{block.target_labels.length ? <View style={styles.journalEntryBlockTags}>{block.target_labels.map(label => <Text key={label} style={styles.journalEntryBlockTag}>{label}</Text>)}</View> : null}<Text style={styles.journalEntryBody}>{block.body}</Text></View>) : <Text style={styles.journalEntryBody}>{entry.body}</Text>}{entry.image_urls?.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.journalEntryImages}>{entry.image_urls.map(url => <RemoteImage key={url} uri={url} style={styles.journalEntryImage} resizeMode="cover" />)}</ScrollView> : null}<Pressable onPress={() => Alert.alert("Delete this memory?", "This cannot be undone.", [{ text: "Cancel", style: "cancel" }, { text: "Delete", style: "destructive", onPress: () => void remove(entry) }])} style={styles.journalDeleteButton}><Ionicons name="trash-outline" size={15} color={colors.muted} /><Text style={styles.journalDeleteText}>Delete</Text></Pressable></View>)}

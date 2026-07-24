@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Image, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 
 import { formatHistoryTime, formatLastWatched, formatShortDate, normalizeHistoryItemTime } from "../../app/date-utils";
+import { firstRow, fromDbMedia } from "../../app/media-model";
 import { styles } from "../../app/styles";
 import type { HistoryFilter, HistoryItem, ProfileData, ProfilePanel, ReviewItem } from "../../app/types";
 import { fetchMobileHistory, fetchMobileReviews } from "../../api";
@@ -10,6 +11,7 @@ import { EmptyPanel } from "../../components/EmptyPanel";
 import { RemoteImage, SectionTitle } from "../../components";
 import { tmdbImage } from "../../config";
 import { compactProfileStatValue } from "../../profile-stats";
+import { supabase } from "../../supabase";
 import { colors } from "../../theme";
 import type { MediaSummary } from "../../types";
 import { CardGrid } from "../library/LibraryComponents";
@@ -41,6 +43,7 @@ export function ProfileStatBand({ data, onNavigate }: { data: ProfileData; onNav
 
 export function ProfileNav({ onChange }: { onChange: (value: ProfilePanel) => void }) {
   const tabs: Array<{ value: ProfilePanel; label: string }> = [
+    { value: "journal", label: "Journal" },
     { value: "reviews", label: "Reviews" },
     { value: "history", label: "Full history" },
     { value: "statistics", label: "Statistics" }
@@ -54,6 +57,106 @@ export function ProfileNav({ onChange }: { onChange: (value: ProfilePanel) => vo
           </Pressable>
         ))}
       </ScrollView>
+    </View>
+  );
+}
+
+type ProfileJournalEntry = {
+  id: string;
+  title: string | null;
+  body: string;
+  mood: string | null;
+  entry_date: string;
+  created_at: string;
+  media: unknown;
+  journal_entry_blocks?: Array<{ id: string; position: number; body: string; target_labels: string[] }>;
+};
+
+export function FullJournalPage({ userId, onBack, onOpen }: { userId: string; onBack: () => void; onOpen: (item: MediaSummary) => void }) {
+  const [entries, setEntries] = useState<ProfileJournalEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [query, setQuery] = useState("");
+
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    setError("");
+    if (!supabase) {
+      setError("Your private journal is unavailable right now.");
+      setLoading(false);
+      return () => { alive = false; };
+    }
+    const client = supabase;
+    void (async () => {
+      try {
+        const { data, error: loadError } = await client
+          .from("journal_entries")
+          .select("id,title,body,mood,entry_date,created_at,media(*),journal_entry_blocks(id,position,body,target_labels)")
+          .eq("user_id", userId)
+          .order("entry_date", { ascending: false })
+          .order("created_at", { ascending: false });
+        if (!alive) return;
+        if (loadError) setError(loadError.message);
+        else setEntries((data ?? []) as ProfileJournalEntry[]);
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, [userId]);
+
+  const filtered = useMemo(() => {
+    const needle = query.trim().toLocaleLowerCase();
+    if (!needle) return entries;
+    return entries.filter(entry => {
+      const media = firstRow(entry.media) as any;
+      const blocks = entry.journal_entry_blocks ?? [];
+      return [entry.title, entry.body, entry.mood, media?.title, ...blocks.flatMap(block => [block.body, ...block.target_labels])]
+        .some(value => String(value ?? "").toLocaleLowerCase().includes(needle));
+    });
+  }, [entries, query]);
+
+  return (
+    <View style={styles.profileSection}>
+      <SectionTitle kicker="Private, personal, always yours" title="Your journal" action="Back to profile ->" onAction={onBack} />
+      <View style={styles.profileJournalIntro}>
+        <View style={styles.profileJournalIntroIcon}><Ionicons name="lock-closed" size={18} color={colors.accent} /></View>
+        <View style={styles.profileJournalIntroCopy}>
+          <Text style={styles.profileJournalIntroTitle}>{entries.length} {entries.length === 1 ? "memory" : "memories"} kept</Text>
+          <Text style={styles.profileJournalIntroText}>Your thoughts and images are visible only to you.</Text>
+        </View>
+      </View>
+      <View style={styles.profileJournalSearch}>
+        <Ionicons name="search-outline" size={18} color={colors.muted} />
+        <TextInput value={query} onChangeText={setQuery} placeholder="Search titles, thoughts, seasons or episodes" placeholderTextColor={colors.muted} style={styles.profileJournalSearchInput} />
+        {query ? <Pressable onPress={() => setQuery("")} hitSlop={8}><Ionicons name="close-circle" size={19} color={colors.muted} /></Pressable> : null}
+      </View>
+      {filtered.map(entry => {
+        const mediaRow = firstRow(entry.media) as any;
+        const item = mediaRow ? fromDbMedia(mediaRow) : null;
+        const artwork = item ? tmdbImage(item.posterPath || item.backdropPath, "w342") : null;
+        const blocks = [...(entry.journal_entry_blocks ?? [])].sort((a, b) => a.position - b.position);
+        return (
+          <Pressable key={entry.id} disabled={!item} onPress={() => item && onOpen(item)} style={styles.profileJournalEntry}>
+            {artwork ? <RemoteImage uri={artwork} style={styles.profileJournalPoster} resizeMode="cover" /> : <View style={styles.profileJournalPosterFallback}><Ionicons name="book-outline" size={22} color={colors.muted} /></View>}
+            <View style={styles.profileJournalEntryCopy}>
+              <View style={styles.profileJournalMetaRow}>
+                <Text style={styles.profileJournalDate}>{new Date(`${entry.entry_date}T12:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}</Text>
+                {entry.mood ? <Text style={styles.profileJournalMood}>{entry.mood}</Text> : null}
+              </View>
+              <Text style={styles.profileJournalEntryTitle} numberOfLines={1}>{entry.title || mediaRow?.title || "Untitled memory"}</Text>
+              {entry.title && mediaRow?.title ? <Text style={styles.profileJournalMedia} numberOfLines={1}>{mediaRow.title}</Text> : null}
+              {blocks.flatMap(block => block.target_labels).length ? <View style={styles.profileJournalTags}>{blocks.flatMap(block => block.target_labels).slice(0, 3).map((label, index) => <Text key={`${label}-${index}`} style={styles.profileJournalTag}>{label}</Text>)}</View> : null}
+              <Text style={styles.profileJournalExcerpt} numberOfLines={3}>{blocks[0]?.body || entry.body}</Text>
+            </View>
+            {item ? <Ionicons name="chevron-forward" size={17} color={colors.muted} /> : null}
+          </Pressable>
+        );
+      })}
+      {!loading && !filtered.length ? <EmptyPanel title={query ? "No matching memories" : "Your first page is waiting"} body={query ? "Try another title, thought, season or episode." : "Open a movie or series and tap My journal to keep a private thought."} /> : null}
+      {loading ? <View style={styles.historyInlineLoading}><ActivityIndicator color={colors.accent} /><Text style={styles.historyInlineLoadingText}>Opening your journal...</Text></View> : null}
+      {error ? <Text style={styles.errorText}>{error}</Text> : null}
     </View>
   );
 }

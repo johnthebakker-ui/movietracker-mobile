@@ -57,7 +57,7 @@ import { loadUserLists } from "../features/library/service";
 import { RatingLegend, ratingCellStyle } from "../features/ratings/RatingTable";
 import { StatisticsPage, TonightScreen, UpNextScreen, WrappedScreen } from "../features/discovery/DiscoveryScreens";
 import { GroupedListContent, ListGrid, MfaPanel, PosterStack, ProfileHero, ProfileListsSection, ProfileMediaSection, ProfileShortcuts, ReviewRow } from "../features/profile/ProfileComponents";
-import { ChoiceChips, FullHistoryPage, FullReviewsPage, ProfileDestinationTotal, ProfileHistorySection, ProfileNav, ProfileProgressSection, ProfileStatBand, ReviewSection } from "../features/profile/ProfileSections";
+import { ChoiceChips, FullHistoryPage, FullJournalPage, FullReviewsPage, ProfileDestinationTotal, ProfileHistorySection, ProfileNav, ProfileProgressSection, ProfileStatBand, ReviewSection } from "../features/profile/ProfileSections";
 import { colors } from "../theme";
 import type { AppTab, DiscoverFilters, FeedResult, MediaKind, MediaSummary, RecommendationFilters } from "../types";
 import { episodeTargetForUpNext, type UpNextEntry } from "../up-next-navigation";
@@ -1569,6 +1569,8 @@ export default function App() {
               </>
             ) : usableSession && profileView === "notifications" ? (
               <NotificationScreen session={usableSession} onBack={() => openProfileView("profile")} onOpenHref={openNotificationHref} />
+            ) : usableSession && profileView === "journal" ? (
+              <FullJournalPage userId={usableSession.user.id} onBack={() => openProfileView("profile")} onOpen={openItem} />
             ) : usableSession && profileView === "history" ? (
               <FullHistoryPage data={profileData} token={usableSession.access_token} onOpen={openHistoryItem} onMenu={setActionItem} onBack={() => openProfileView("profile")} onRemove={removeHistoryEvent} onScrollTop={scrollToTop} />
             ) : usableSession && profileView === "reviews" ? (
@@ -1581,10 +1583,10 @@ export default function App() {
               <>
                 <ProfileHero profile={profile} session={usableSession} data={profileData} fallbackName={profileTitle} onSettings={() => { setSettingsTab("profile"); openProfileView("settings"); }} />
                 <ProfileNav onChange={next => {
-                  if (next === "history") openProfileView("history");
+                  if (next === "journal") openProfileView("journal");
+                  else if (next === "history") openProfileView("history");
                   else if (next === "reviews") openProfileView("reviews");
                   else if (next === "statistics") openProfileView("statistics");
-                  else if (next === "lists") { setLibraryFilter("lists"); goTab("library"); }
                 }} />
                 <ProfileStatBand data={profileData} onNavigate={target => {
                   if (target === "library") { setLibraryFilter("all"); goTab("library"); }
